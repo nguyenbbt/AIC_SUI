@@ -1,0 +1,77 @@
+# AI Challenge 2026 - Nova Project (Video Retrieval System)
+
+This repository contains the full pipeline for the AI Challenge 2026 Video Retrieval System. The system is architected as a set of independent microservices/modules, each containerized via Docker.
+
+## Directory Architecture
+
+```text
+<project-root>/
+├── logs/                              # Contains all execution logs (e.g., preprocessing.log)
+├── weights/                           # Model weights cache for offline operation
+├── scripts/                           # Shared utility scripts (downloads, etc.)
+├── notebooks/                         # Experimental notebooks
+├── data/                              # Data directory (ignored by git)
+│   ├── raw_videos/
+│   └── processed/
+│       ├── metadata/
+│       ├── keyframes/
+│       ├── audio/
+│       ├── transcripts/
+│       ├── summaries/
+│       ├── ocr/
+│       ├── embeddings/
+│       └── metadata_index.parquet
+│
+├── data_pipeline/
+│   └── shot_keyframe/                 # Module 1: Shot detection & keyframe extraction
+│       ├── Dockerfile
+│       ├── requirements.txt
+│       ├── src/
+│       └── tests/
+│
+├── feature_extraction/
+│   ├── visual_embedding/              # Module 2: Visual feature embedding extraction
+│   │   ├── Dockerfile
+│   │   ├── requirements.txt
+│   │   ├── src/
+│   │   └── tests/
+│   ├── asr_transcript/                # Module 3: Audio extraction, ASR, and summarization
+│   │   ├── Dockerfile
+│   │   ├── requirements.txt
+│   │   ├── src/
+│   │   └── tests/
+│   └── ocr/                           # Module 4: On-screen text extraction
+│       ├── Dockerfile
+│       ├── requirements.txt
+│       ├── src/
+│       └── tests/
+│
+├── indexing/                          # Module 5: Vector DB and metadata indexing (scaffolded)
+├── query_understanding/               # Module 6: Query expansion & intent (scaffolded)
+├── retrieval_api/                     # Module 7: Core retrieval engine (scaffolded)
+└── ui/                                # Module 8: Frontend User Interface (scaffolded)
+```
+
+## Running the Pipeline
+
+Each module is self-contained. To build a specific module's Docker image, you must run the build command from the **project root** to ensure shared directories (like `scripts/`) are available in the context.
+
+Example for Visual Embedding:
+```bash
+docker build -f feature_extraction/visual_embedding/Dockerfile -t visual_embedding .
+```
+
+Example for Data Pipeline:
+```bash
+docker build -f data_pipeline/shot_keyframe/Dockerfile -t shot_keyframe .
+```
+
+## Testing
+
+Each module contains its own self-contained test suite located in its `tests/` subdirectory.
+To run all tests from the root:
+```bash
+# Add current directory to PYTHONPATH so packages can be resolved locally
+$env:PYTHONPATH="."
+pytest data_pipeline/shot_keyframe/tests feature_extraction/visual_embedding/tests feature_extraction/asr_transcript/tests feature_extraction/ocr/tests
+```

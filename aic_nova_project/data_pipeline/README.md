@@ -24,6 +24,8 @@ Nhiệm vụ chính: Tách video thành các shots bằng TransNetV2, trích xu�
 2. Chạy pipeline:
    ```bash
    python -m data_pipeline.shot_keyframe.cli --input /path/to/raw_videos --output /path/to/output --workers 4
+   python -m data_pipeline.shot_keyframe.cli --input "data\raw_videos" --output "data\processed" --workers 1
+
    ```
    **Các tham số:**
    - `--input`: Thư mục chứa video gốc (tìm đệ quy các file `.mp4`, `.mkv`, `.avi`, `.webm`).

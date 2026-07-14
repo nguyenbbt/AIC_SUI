@@ -1,0 +1,8 @@
+easyocr==1.7.1
+vietocr==0.3.12
+opencv-python-headless==4.9.0.80
+pydantic==2.6.4
+tqdm==4.66.2
+numpy<2.0.0
+torch>=2.0.0
+torchvision>=0.15.0

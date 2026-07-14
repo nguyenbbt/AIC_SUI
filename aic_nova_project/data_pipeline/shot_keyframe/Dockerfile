@@ -15,14 +15,14 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy source code
-COPY src/ /app/src/
+COPY . /app/data_pipeline/shot_keyframe/
 
 # Copy weights (assuming they are downloaded locally before docker build)
 # If the directory doesn't exist, it won't fail if we just copy the whole weights dir
 COPY weights/ /app/weights/
 
-# Set Python path so `shot_keyframe` package is importable
-ENV PYTHONPATH=/app/src
+# Set Python path so `data_pipeline.shot_keyframe` package is importable
+ENV PYTHONPATH=/app
 
 # Set the entrypoint to the CLI
-ENTRYPOINT ["python", "-m", "shot_keyframe.cli"]
+ENTRYPOINT ["python", "-m", "data_pipeline.shot_keyframe.cli"]

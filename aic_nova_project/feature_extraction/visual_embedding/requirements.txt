@@ -7,4 +7,4 @@ pyarrow>=14.0.0
 pandas>=2.0.0
 tqdm>=4.65.0
 pytest>=7.0.0
-transnetv2-pytorch>=1.0.5
+open_clip_torch>=2.20.0
