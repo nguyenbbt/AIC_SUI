@@ -1,0 +1,8 @@
+torch>=2.0.0
+torchvision
+ultralytics>=8.1.0
+openmim
+Pillow>=9.0.0
+pydantic>=2.0.0
+tqdm>=4.65.0
+pytest>=7.0.0

@@ -20,6 +20,7 @@ This repository contains the full pipeline for the AI Challenge 2026 Video Retri
 │       ├── summaries/
 │       ├── ocr/
 │       ├── embeddings/
+│       ├── objects/
 │       └── metadata_index.parquet
 │
 ├── data_pipeline/
@@ -40,16 +41,21 @@ This repository contains the full pipeline for the AI Challenge 2026 Video Retri
 │   │   ├── requirements.txt
 │   │   ├── src/
 │   │   └── tests/
-│   └── ocr/                           # Module 4: On-screen text extraction
+│   ├── ocr/                           # Module 4: On-screen text extraction
+│   │   ├── Dockerfile
+│   │   ├── requirements.txt
+│   │   ├── src/
+│   │   └── tests/
+│   └── object_detection/              # Module 5: Object detection (YOLO-World, Co-DETR)
 │       ├── Dockerfile
 │       ├── requirements.txt
 │       ├── src/
 │       └── tests/
 │
-├── indexing/                          # Module 5: Vector DB and metadata indexing (scaffolded)
-├── query_understanding/               # Module 6: Query expansion & intent (scaffolded)
-├── retrieval_api/                     # Module 7: Core retrieval engine (scaffolded)
-└── ui/                                # Module 8: Frontend User Interface (scaffolded)
+├── indexing/                          # Module 6: Vector DB and metadata indexing (scaffolded)
+├── query_understanding/               # Module 7: Query expansion & intent (scaffolded)
+├── retrieval_api/                     # Module 8: Core retrieval engine (scaffolded)
+└── ui/                                # Module 9: Frontend User Interface (scaffolded)
 ```
 
 ## Running the Pipeline
@@ -73,5 +79,10 @@ To run all tests from the root:
 ```bash
 # Add current directory to PYTHONPATH so packages can be resolved locally
 $env:PYTHONPATH="."
-pytest data_pipeline/shot_keyframe/tests feature_extraction/visual_embedding/tests feature_extraction/asr_transcript/tests feature_extraction/ocr/tests
+pytest data_pipeline/shot_keyframe/tests feature_extraction/visual_embedding/tests feature_extraction/asr_transcript/tests feature_extraction/ocr/tests feature_extraction/object_detection/tests
 ```
+
+* `feature_extraction/visual_embedding`: Generates feature vectors from keyframes.
+* `feature_extraction/ocr`: Extracts and recognizes text overlay (subtitles, banners) in keyframes.
+* `feature_extraction/asr_transcript`: Extracts audio, generates transcripts via PhoWhisper, and cleans transcripts with LLM.
+* `feature_extraction/object_detection`: Detects objects using YOLO-World (open-vocabulary) and Co-DETR (COCO), with Box Fusion (NMS) support.

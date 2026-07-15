@@ -18,8 +18,22 @@ def get_keyframes_from_metadata(metadata_path: Path) -> List[Dict[str, Any]]:
     with open(metadata_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
         
-    # According to Module 1 schema, metadata usually contains 'frames' or similar list
-    # Assuming standard schema based on AI Challenge metadata
+    frames = []
+    if 'shots' in data:
+        for shot in data['shots']:
+            shot_id = shot.get('shot_id', 0)
+            for kf in shot.get('keyframes', []):
+                file_path = kf.get('file_path', '')
+                if not file_path:
+                    continue
+                frame_id = Path(file_path).stem
+                frames.append({
+                    "frame_id": frame_id,
+                    "shot_id": shot_id,
+                    "position": kf.get('position', 0.0)
+                })
+        return frames
+
     if 'frames' in data:
         return data['frames']
         
