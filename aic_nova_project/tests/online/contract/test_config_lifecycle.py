@@ -1,0 +1,64 @@
+from __future__ import annotations
+
+import os
+import unittest
+from unittest.mock import patch
+
+from pydantic import ValidationError
+
+from online.config import OnlineDataConfig, SQLiteResourceConfig
+from online.lifecycle import HealthStatus, InfrastructureLifecycle
+
+
+class Resource:
+    def __init__(self, *, fail=False):
+        self.fail = fail
+        self.connected = False
+
+    def connect(self):
+        if self.fail:
+            raise ConnectionError("down")
+        self.connected = True
+
+    def health_check(self):
+        if not self.connected:
+            raise ConnectionError("down")
+
+    def close(self):
+        self.connected = False
+
+
+class ConfigLifecycleTests(unittest.TestCase):
+    def test_config_loads_environment_and_rejects_sql_identifier_injection(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AIC_ONLINE_MILVUS_SEARCH_EF": "64",
+                "AIC_ONLINE_ES_FUZZY_ENABLED": "true",
+                "AIC_ONLINE_SQLITE_BATCH_SIZE": "100",
+            },
+            clear=False,
+        ):
+            config = OnlineDataConfig.from_env()
+        self.assertEqual(config.milvus.search_ef, 64)
+        self.assertTrue(config.elasticsearch.fuzzy_enabled)
+        self.assertEqual(config.sqlite.batch_size, 100)
+        with self.assertRaises(ValidationError):
+            SQLiteResourceConfig(metadata_table="metadata; DROP TABLE objects")
+
+    def test_health_distinguishes_required_and_optional_failures(self) -> None:
+        lifecycle = InfrastructureLifecycle()
+        required = Resource()
+        optional = Resource(fail=True)
+        lifecycle.register("required", required, required=True)
+        lifecycle.register("optional", optional, required=False)
+        self.assertEqual(lifecycle.start().status, HealthStatus.DEGRADED)
+        lifecycle.close()
+
+        lifecycle = InfrastructureLifecycle()
+        lifecycle.register("required", Resource(fail=True), required=True)
+        self.assertEqual(lifecycle.start().status, HealthStatus.UNHEALTHY)
+
+
+if __name__ == "__main__":
+    unittest.main()

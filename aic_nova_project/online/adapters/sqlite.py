@@ -1,0 +1,227 @@
+"""Read-only SQLite metadata and object adapter."""
+
+from __future__ import annotations
+
+import math
+import sqlite3
+import threading
+from collections.abc import Iterator, Mapping, Sequence
+from pathlib import Path
+
+from online.config import SQLiteResourceConfig
+from online.domain.candidates import ObjectDetection
+from online.domain.errors import ContractMismatchError, InvalidQueryError, ResourceUnavailableError
+from online.ports.records import FrameMetadata
+
+from ._errors import call_backend
+
+
+class SQLiteReadAdapter:
+    def __init__(
+        self,
+        config: SQLiteResourceConfig,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> None:
+        self.config = config
+        self._connection = connection
+        self._owns_connection = connection is None
+        self._lock = threading.RLock()
+        if connection is not None:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA query_only=ON")
+
+    @property
+    def connected(self) -> bool:
+        return self._connection is not None
+
+    @staticmethod
+    def _quote_identifier(identifier: str) -> str:
+        return f'"{identifier}"'
+
+    def connect(self) -> None:
+        if self._connection is not None:
+            return
+        path = Path(self.config.path).expanduser().resolve()
+        if not path.is_file():
+            raise ResourceUnavailableError(
+                "SQLite metadata database does not exist",
+                details={"resource": "sqlite"},
+            )
+        uri = f"file:{path.as_posix()}?mode=ro"
+        try:
+            connection = sqlite3.connect(
+                uri,
+                uri=True,
+                timeout=self.config.timeout_sec,
+                check_same_thread=False,
+            )
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA query_only=ON")
+        except sqlite3.Error as exc:
+            raise ResourceUnavailableError(
+                "Unable to open SQLite metadata database read-only",
+                details={"resource": "sqlite"},
+            ) from exc
+        self._connection = connection
+
+    def close(self) -> None:
+        if self._connection is not None and self._owns_connection:
+            self._connection.close()
+        self._connection = None
+
+    def _conn(self) -> sqlite3.Connection:
+        if self._connection is None:
+            raise ResourceUnavailableError("SQLite adapter is not connected")
+        return self._connection
+
+    def health_check(self) -> None:
+        call_backend("health_check", "sqlite", lambda: self._conn().execute("SELECT 1").fetchone())
+
+    def _chunks(self, values: Sequence[str]) -> Iterator[tuple[str, ...]]:
+        for start in range(0, len(values), self.config.batch_size):
+            yield tuple(values[start : start + self.config.batch_size])
+
+    @staticmethod
+    def _validate_ids(values: Sequence[str], name: str) -> tuple[str, ...]:
+        result = tuple(dict.fromkeys(values))
+        if any(not isinstance(value, str) or not value.strip() for value in result):
+            raise InvalidQueryError(f"{name} must contain non-empty strings")
+        return result
+
+    def get_frames_by_ids(self, frame_ids: Sequence[str]) -> Mapping[str, FrameMetadata]:
+        ids = self._validate_ids(frame_ids, "frame_ids")
+        if not ids:
+            return {}
+        table = self._quote_identifier(self.config.metadata_table)
+        output: dict[str, FrameMetadata] = {}
+        with self._lock:
+            for chunk in self._chunks(ids):
+                placeholders = ",".join("?" for _ in chunk)
+                sql = (
+                    f"SELECT frame_id, video_id, shot_id, timestamp FROM {table} "
+                    f"WHERE frame_id IN ({placeholders})"
+                )
+                rows = call_backend(
+                    "get_frames_by_ids", "sqlite", lambda sql=sql, chunk=chunk: self._conn().execute(sql, chunk).fetchall()
+                )
+                for row in rows:
+                    metadata = self._frame_from_row(row)
+                    output[metadata.frame_id] = metadata
+        return output
+
+    def get_ordered_frames_by_video(self, video_id: str) -> Sequence[FrameMetadata]:
+        if not isinstance(video_id, str) or not video_id.strip():
+            raise InvalidQueryError("video_id must not be empty")
+        table = self._quote_identifier(self.config.metadata_table)
+        sql = (
+            f"SELECT frame_id, video_id, shot_id, timestamp FROM {table} "
+            "WHERE video_id = ? ORDER BY timestamp ASC, frame_id ASC"
+        )
+        with self._lock:
+            rows = call_backend(
+                "get_ordered_frames_by_video",
+                "sqlite",
+                lambda: self._conn().execute(sql, (video_id,)).fetchall(),
+            )
+        return tuple(self._frame_from_row(row) for row in rows)
+
+    def get_objects_by_frame_ids(
+        self,
+        frame_ids: Sequence[str],
+        *,
+        label: str | None = None,
+        min_confidence: float = 0.0,
+    ) -> Mapping[str, Sequence[ObjectDetection]]:
+        ids = self._validate_ids(frame_ids, "frame_ids")
+        if not ids:
+            return {}
+        if label is not None and not label.strip():
+            raise InvalidQueryError("label must not be empty")
+        if not math.isfinite(min_confidence) or not 0.0 <= min_confidence <= 1.0:
+            raise InvalidQueryError("min_confidence must be within [0, 1]")
+
+        table = self._quote_identifier(self.config.objects_table)
+        output: dict[str, list[ObjectDetection]] = {frame_id: [] for frame_id in ids}
+        with self._lock:
+            for chunk in self._chunks(ids):
+                placeholders = ",".join("?" for _ in chunk)
+                predicates = [f"frame_id IN ({placeholders})", "confidence >= ?"]
+                parameters: list[object] = [*chunk, min_confidence]
+                if label is not None:
+                    predicates.append("label = ?")
+                    parameters.append(label)
+                sql = (
+                    "SELECT frame_id, label, confidence, x_min, y_min, x_max, y_max, model_source "
+                    f"FROM {table} WHERE {' AND '.join(predicates)} "
+                    "ORDER BY frame_id ASC, confidence DESC, label ASC, id ASC"
+                )
+                rows = call_backend(
+                    "get_objects_by_frame_ids",
+                    "sqlite",
+                    lambda sql=sql, parameters=parameters: self._conn().execute(sql, parameters).fetchall(),
+                )
+                for row in rows:
+                    output[str(row["frame_id"])].append(
+                        ObjectDetection(
+                            label=str(row["label"]),
+                            confidence=float(row["confidence"]),
+                            x_min=float(row["x_min"]),
+                            y_min=float(row["y_min"]),
+                            x_max=float(row["x_max"]),
+                            y_max=float(row["y_max"]),
+                            model_source=(
+                                None if row["model_source"] is None else str(row["model_source"])
+                            ),
+                        )
+                    )
+        return {frame_id: tuple(objects) for frame_id, objects in output.items()}
+
+    @staticmethod
+    def _frame_from_row(row: sqlite3.Row) -> FrameMetadata:
+        try:
+            return FrameMetadata(
+                frame_id=str(row["frame_id"]),
+                video_id=str(row["video_id"]),
+                shot_id=int(row["shot_id"]),
+                timestamp_sec=float(row["timestamp"]),
+            )
+        except Exception as exc:
+            raise ContractMismatchError("Invalid metadata row returned by SQLite") from exc
+
+    def table_columns(self, table_name: str) -> Mapping[str, str]:
+        if table_name not in {self.config.metadata_table, self.config.objects_table}:
+            raise InvalidQueryError("table is not managed by the Online adapter")
+        table = self._quote_identifier(table_name)
+        with self._lock:
+            rows = call_backend(
+                "table_columns",
+                "sqlite",
+                lambda: self._conn().execute(f"PRAGMA table_info({table})").fetchall(),
+            )
+        return {str(row["name"]): str(row["type"]).upper() for row in rows}
+
+    def sample_records(
+        self,
+        table_name: str,
+        fields: Sequence[str],
+        limit: int,
+    ) -> Sequence[Mapping[str, object]]:
+        if table_name not in {self.config.metadata_table, self.config.objects_table}:
+            raise InvalidQueryError("table is not managed by the Online adapter")
+        if limit < 1:
+            raise InvalidQueryError("limit must be >= 1")
+        columns = self.table_columns(table_name)
+        if any(field not in columns for field in fields):
+            raise ContractMismatchError("Requested sample field is missing from SQLite table")
+        selected = ", ".join(self._quote_identifier(field) for field in fields)
+        table = self._quote_identifier(table_name)
+        with self._lock:
+            rows = call_backend(
+                "sample_records",
+                "sqlite",
+                lambda: self._conn().execute(
+                    f"SELECT {selected} FROM {table} ORDER BY rowid ASC LIMIT ?", (limit,)
+                ).fetchall(),
+            )
+        return tuple({field: row[field] for field in fields} for row in rows)
