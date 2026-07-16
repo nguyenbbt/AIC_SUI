@@ -1,0 +1,5 @@
+[33mf25900f[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mfeature/online-phase-Knguyen[m[33m, [m[1;31morigin/fix_module_7[m[33m, [m[1;31morigin/develop_mixi[m[33m)[m fix: resolve Module 7 data integrity and missing OCR features
+[33m14033b9[m[33m ([m[1;31morigin/feature/online-phase-Knguyen[m[33m, [m[1;31morigin/feature/Object_detection_text_embedding[m[33m, [m[1;32mdevelop_mixi[m[33m)[m feat: implement Object Detection, Text Embedding and Multi-DB Indexing modules
+[33md2e706e[m[33m ([m[1;31morigin/feature/OCR-ASR[m[33m)[m feat: ASR and OCR module mixi gaming
+[33m93b0724[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmain[m[33m)[m feat: integrate shot detection and keyframe extraction module
+[33m8b62a04[m folder tree
