@@ -19,6 +19,7 @@ from .clients.milvus_client import (
     VISUAL_COLLECTION,
     ASR_COLLECTION,
     SUMMARY_COLLECTION,
+    OCR_COLLECTION,
 )
 from .clients.es_client import ESClient, OCR_INDEX, ASR_INDEX, SUMMARY_INDEX
 from .clients.tabular_client import TabularClient
@@ -28,6 +29,7 @@ from .data_loader import (
     load_visual_embeddings,
     load_text_asr_embeddings,
     load_text_summary_embeddings,
+    load_text_ocr_embeddings,
     load_ocr_texts,
     load_asr_transcripts,
     load_video_summary,
@@ -61,6 +63,7 @@ class IndexingOrchestrator:
         self.milvus.delete_by_video_id(VISUAL_COLLECTION, video_id)
         self.milvus.delete_by_video_id(ASR_COLLECTION, video_id)
         self.milvus.delete_by_video_id(SUMMARY_COLLECTION, video_id)
+        self.milvus.delete_by_video_id(OCR_COLLECTION, video_id)
 
         # Elasticsearch
         self.es.delete_by_video_id(OCR_INDEX, video_id)
@@ -76,6 +79,7 @@ class IndexingOrchestrator:
             self.milvus.delete_by_video_id(VISUAL_COLLECTION, video_id)
             self.milvus.delete_by_video_id(ASR_COLLECTION, video_id)
             self.milvus.delete_by_video_id(SUMMARY_COLLECTION, video_id)
+            self.milvus.delete_by_video_id(OCR_COLLECTION, video_id)
         except Exception as e:
             logger.error(f"Failed to rollback Milvus for {video_id}: {e}")
 
@@ -100,6 +104,7 @@ class IndexingOrchestrator:
         data_dir: Path,
         visual_dim: Optional[int],
         text_dim: Optional[int],
+        ocr_dim: Optional[int] = None,
     ) -> bool:
         """
         Process a single video: load data → delete old → insert Milvus →
@@ -113,6 +118,7 @@ class IndexingOrchestrator:
         visual_records = load_visual_embeddings(data_dir, video_id)
         asr_emb_records = load_text_asr_embeddings(data_dir, video_id)
         summary_emb_records = load_text_summary_embeddings(data_dir, video_id)
+        ocr_emb_records = load_text_ocr_embeddings(data_dir, video_id)
         ocr_text_records = load_ocr_texts(data_dir, video_id)
         asr_text_records = load_asr_transcripts(data_dir, video_id)
         summary_text_records = load_video_summary(data_dir, video_id)
@@ -141,6 +147,15 @@ class IndexingOrchestrator:
                 self._insert_batched(
                     summary_emb_records,
                     lambda batch: self.milvus.insert_batch(SUMMARY_COLLECTION, batch, text_dim),
+                    self.batch_size,
+                )
+
+            # OCR embeddings — use ocr_dim if detected, fallback to text_dim
+            effective_ocr_dim = ocr_dim or text_dim
+            if ocr_emb_records and effective_ocr_dim:
+                self._insert_batched(
+                    ocr_emb_records,
+                    lambda batch: self.milvus.insert_batch(OCR_COLLECTION, batch, effective_ocr_dim),
                     self.batch_size,
                 )
 
@@ -255,6 +270,16 @@ class IndexingOrchestrator:
 
         logger.info(f"Detected dimensions — Visual: {visual_dim}, Text: {text_dim}")
 
+        # Try OCR text embeddings (may differ from ASR text dim)
+        ocr_dim = None
+        text_ocr_dir = data_dir / "embeddings" / "text_ocr"
+        if text_ocr_dir.exists():
+            ocr_dim = detect_embedding_dim(text_ocr_dir)
+        # Fallback: assume same dim as other text embeddings
+        if ocr_dim is None:
+            ocr_dim = text_dim
+        logger.info(f"Detected OCR embedding dim: {ocr_dim}")
+
         # Discover and process videos
         video_ids = discover_video_ids(data_dir)
 
@@ -262,7 +287,7 @@ class IndexingOrchestrator:
         failed = []
 
         for video_id in tqdm(video_ids, desc="Indexing videos"):
-            ok = self.process_video(video_id, data_dir, visual_dim, text_dim)
+            ok = self.process_video(video_id, data_dir, visual_dim, text_dim, ocr_dim)
             if ok:
                 succeeded.append(video_id)
             else:

@@ -22,6 +22,37 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
+def normalize_frame_id(raw_frame_id: str, video_id: str) -> str:
+    """
+    Normalize frame_id to the canonical Global ID format: {video_id}_{shot_id}_{position}.
+
+    Handles multiple input formats:
+      - 'shot_00000_pos_015' → '{video_id}_00000_015'
+      - Already normalized (contains video_id) → returned as-is
+
+    This ensures all 3 databases (Milvus, ES, SQLite) store exactly the same
+    frame_id format, enabling JOIN operations across DBs.
+    """
+    # Already in global ID format (contains video_id prefix)
+    if raw_frame_id.startswith(video_id + "_"):
+        return raw_frame_id
+
+    # Parse 'shot_NNNNN_pos_PPP' format
+    import re
+    match = re.match(r"shot_(\d+)_pos_(\d+)", raw_frame_id)
+    if match:
+        shot_str = match.group(1)   # e.g. '00000'
+        pos_str = match.group(2)    # e.g. '015'
+        return f"{video_id}_{shot_str}_{pos_str}"
+
+    # Fallback: prepend video_id if not already present
+    logger.warning(
+        f"Unrecognized frame_id format: '{raw_frame_id}'. "
+        f"Prepending video_id='{video_id}'."
+    )
+    return f"{video_id}_{raw_frame_id}"
+
+
 def read_json_safe(file_path: Path) -> Optional[Any]:
     """Safely read and parse a JSON file."""
     try:
@@ -162,6 +193,38 @@ def load_text_summary_embeddings(
     return records
 
 
+def load_text_ocr_embeddings(
+    data_dir: Path, video_id: str
+) -> List[Dict[str, Any]]:
+    """Load OCR text embedding records for a video from Parquet.
+
+    These embeddings are produced by Module 6 and stored in
+    data/embeddings/text_ocr/{video_id}.parquet.
+    """
+    path = data_dir / "embeddings" / "text_ocr" / f"{video_id}.parquet"
+    if not path.exists():
+        return []
+
+    df = pd.read_parquet(path)
+    records = []
+    for _, row in df.iterrows():
+        embedding = row.get("embedding")
+        if embedding is None:
+            continue
+        if hasattr(embedding, "tolist"):
+            embedding = embedding.tolist()
+
+        raw_frame_id = str(row.get("frame_id", ""))
+        vid = str(row.get("video_id", video_id))
+
+        records.append({
+            "frame_id": normalize_frame_id(raw_frame_id, vid),
+            "video_id": vid,
+            "embedding": embedding,
+        })
+    return records
+
+
 def load_ocr_texts(data_dir: Path, video_id: str) -> List[Dict[str, Any]]:
     """Load raw OCR text records for Elasticsearch indexing."""
     path = data_dir / "ocr" / f"{video_id}.json"
@@ -175,8 +238,9 @@ def load_ocr_texts(data_dir: Path, video_id: str) -> List[Dict[str, Any]]:
         if not text:
             continue  # Graceful degradation: skip frames without OCR text
 
+        raw_fid = str(frame.get("frame_id", ""))
         records.append({
-            "frame_id": str(frame.get("frame_id", "")),
+            "frame_id": normalize_frame_id(raw_fid, video_id),
             "video_id": video_id,
             "shot_id": str(frame.get("shot_id", "")),
             "ocr_text_concat": text,
@@ -249,10 +313,13 @@ def load_metadata_and_objects(
         for shot in meta_data.get("shots", []):
             shot_id = shot.get("shot_id", 0)
             for kf in shot.get("keyframes", []):
-                frame_id = kf.get("file_path", "")
-                # Extract frame_id from file_path: "keyframes/VIDEO_ID/shot_00000_pos_015.webp"
-                if "/" in frame_id:
-                    frame_id = Path(frame_id).stem
+                raw_frame_id = kf.get("file_path", "")
+                # Extract stem from file_path: "keyframes/VIDEO_ID/shot_00000_pos_015.webp"
+                if "/" in raw_frame_id:
+                    raw_frame_id = Path(raw_frame_id).stem
+
+                # Normalize to Global ID: V001_00000_015
+                frame_id = normalize_frame_id(raw_frame_id, video_id)
 
                 metadata_records.append({
                     "frame_id": frame_id,
@@ -270,7 +337,8 @@ def load_metadata_and_objects(
     object_records = []
     if isinstance(obj_data, dict):
         for frame in obj_data.get("frames", []):
-            frame_id = str(frame.get("frame_id", ""))
+            raw_fid = str(frame.get("frame_id", ""))
+            frame_id = normalize_frame_id(raw_fid, video_id)
             for obj in frame.get("objects", []):
                 bbox = obj.get("bbox", obj.get("box", [0, 0, 0, 0]))
                 object_records.append({

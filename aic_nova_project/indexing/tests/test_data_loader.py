@@ -15,12 +15,14 @@ import pandas as pd
 from src.indexing.data_loader import (
     detect_embedding_dim,
     discover_video_ids,
+    normalize_frame_id,
     load_ocr_texts,
     load_asr_transcripts,
     load_video_summary,
     load_metadata_and_objects,
     load_visual_embeddings,
     load_text_asr_embeddings,
+    load_text_ocr_embeddings,
 )
 
 
@@ -178,6 +180,20 @@ def data_dir():
         )
         asr_df.to_parquet(text_asr_dir / f"{video_id}.parquet", index=False)
 
+        # --- Text OCR Embedding Parquet (Module 6) ---
+        text_ocr_dir = root / "embeddings" / "text_ocr"
+        text_ocr_dir.mkdir(parents=True)
+        ocr_emb_df = pd.DataFrame(
+            [
+                {
+                    "frame_id": "shot_00000_pos_050",
+                    "video_id": video_id,
+                    "embedding": np.random.rand(768).tolist(),
+                }
+            ]
+        )
+        ocr_emb_df.to_parquet(text_ocr_dir / f"{video_id}.parquet", index=False)
+
         yield root, video_id
 
 
@@ -213,7 +229,8 @@ class TestLoadOcrTexts:
         root, video_id = data_dir
         records = load_ocr_texts(root, video_id)
         assert len(records) == 1  # second frame had empty text
-        assert records[0]["frame_id"] == "shot_00000_pos_050"
+        # frame_id should be in Global ID format (normalized)
+        assert records[0]["frame_id"] == f"{video_id}_00000_050"
         assert records[0]["ocr_text_concat"] == "Xin chào Việt Nam"
 
 
@@ -239,12 +256,15 @@ class TestLoadMetadataAndObjects:
         meta, objs = load_metadata_and_objects(root, video_id)
 
         assert len(meta) == 2  # 2 keyframes across 2 shots
-        assert meta[0]["frame_id"] == "shot_00000_pos_050"
+        # frame_id should be normalized to Global ID format
+        assert meta[0]["frame_id"] == f"{video_id}_00000_050"
         assert meta[0]["shot_id"] == 0
         assert meta[0]["timestamp"] == 2.5
 
         assert len(objs) == 2  # 2 objects in shot 0
         assert objs[0]["label"] == "person"
+        # Object records should also use normalized frame_id
+        assert objs[0]["frame_id"] == f"{video_id}_00000_050"
         assert objs[0]["x_min"] == 10.0
         assert objs[1]["label"] == "car"
 
@@ -263,3 +283,45 @@ class TestLoadTextAsrEmbeddings:
         records = load_text_asr_embeddings(root, video_id)
         assert len(records) == 1
         assert len(records[0]["embedding"]) == 768
+
+
+class TestLoadTextOcrEmbeddings:
+    def test_loads_from_parquet(self, data_dir):
+        root, video_id = data_dir
+        records = load_text_ocr_embeddings(root, video_id)
+        assert len(records) == 1
+        assert len(records[0]["embedding"]) == 768
+        # frame_id should be normalized
+        assert records[0]["frame_id"] == f"{video_id}_00000_050"
+
+    def test_returns_empty_for_missing(self, tmp_path):
+        records = load_text_ocr_embeddings(tmp_path, "NONEXISTENT")
+        assert records == []
+
+
+class TestNormalizeFrameId:
+    def test_shot_pos_format(self):
+        result = normalize_frame_id("shot_00000_pos_015", "V001")
+        assert result == "V001_00000_015"
+
+    def test_already_normalized(self):
+        result = normalize_frame_id("V001_00000_015", "V001")
+        assert result == "V001_00000_015"
+
+    def test_different_video_id(self):
+        result = normalize_frame_id("shot_00012_pos_050", "TEST_VIDEO_001")
+        assert result == "TEST_VIDEO_001_00012_050"
+
+    def test_consistency_across_loaders(self, data_dir):
+        """Verify that frame_id from metadata, OCR, and objects are identical."""
+        root, video_id = data_dir
+        meta, objs = load_metadata_and_objects(root, video_id)
+        ocr_records = load_ocr_texts(root, video_id)
+        ocr_emb_records = load_text_ocr_embeddings(root, video_id)
+
+        # All sources should produce the same normalized frame_id for frame 0
+        expected = f"{video_id}_00000_050"
+        assert meta[0]["frame_id"] == expected
+        assert objs[0]["frame_id"] == expected
+        assert ocr_records[0]["frame_id"] == expected
+        assert ocr_emb_records[0]["frame_id"] == expected

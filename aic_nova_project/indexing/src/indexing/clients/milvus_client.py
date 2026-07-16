@@ -1,10 +1,11 @@
 """
 Milvus Vector Database client for indexing dense embeddings.
 
-Manages 3 collections:
+Manages 4 collections:
 - visual_features: frame-level visual embeddings
 - asr_features: ASR interval-level text embeddings
 - summary_features: video-level summary embeddings
+- ocr_features: OCR text embeddings per keyframe
 
 Vector dimensions are detected dynamically at runtime from the data,
 NOT hard-coded.
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 VISUAL_COLLECTION = "visual_features"
 ASR_COLLECTION = "asr_features"
 SUMMARY_COLLECTION = "summary_features"
+OCR_COLLECTION = "ocr_features"
 
 # HNSW index params — Inner Product (IP) metric is equivalent to Cosine
 # when vectors are L2-normalized (which they are from Module 2 & 6).
@@ -75,6 +77,17 @@ def _build_summary_schema(dim: int) -> CollectionSchema:
     return CollectionSchema(fields, description="Video-level summary embeddings")
 
 
+def _build_ocr_schema(dim: int) -> CollectionSchema:
+    """Schema for ocr_features collection."""
+    fields = [
+        FieldSchema(name="pk", dtype=DataType.INT64, is_primary=True, auto_id=True),
+        FieldSchema(name="frame_id", dtype=DataType.VARCHAR, max_length=256),
+        FieldSchema(name="video_id", dtype=DataType.VARCHAR, max_length=512),
+        FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=dim),
+    ]
+    return CollectionSchema(fields, description="OCR text embeddings per keyframe")
+
+
 class MilvusVectorClient:
     """Client for managing Milvus vector collections."""
 
@@ -113,6 +126,7 @@ class MilvusVectorClient:
             VISUAL_COLLECTION: _build_visual_schema,
             ASR_COLLECTION: _build_asr_schema,
             SUMMARY_COLLECTION: _build_summary_schema,
+            OCR_COLLECTION: _build_ocr_schema,
         }
 
         builder = schema_builders.get(name)
@@ -167,7 +181,7 @@ class MilvusVectorClient:
 
     def reset(self):
         """Drop all managed collections."""
-        for name in [VISUAL_COLLECTION, ASR_COLLECTION, SUMMARY_COLLECTION]:
+        for name in [VISUAL_COLLECTION, ASR_COLLECTION, SUMMARY_COLLECTION, OCR_COLLECTION]:
             if utility.has_collection(name, using=self.alias):
                 utility.drop_collection(name, using=self.alias)
                 logger.info(f"Dropped collection '{name}'.")
