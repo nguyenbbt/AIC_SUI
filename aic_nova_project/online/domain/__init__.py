@@ -22,7 +22,13 @@ from .enums import (
     RetrievalBranch,
 )
 from .errors import ErrorCode
-from .query import NormalizedRegion, ObjectConstraint
+from .query import (
+    NormalizedRegion,
+    ObjectConstraint,
+    QueryBundle,
+    QueryOptions,
+    TextQueryVariant,
+)
 
 __all__ = [
     "ASRIntervalCandidate",
@@ -42,8 +48,11 @@ __all__ = [
     "NormalizedRegion",
     "ObjectConstraint",
     "ObjectDetection",
+    "QueryBundle",
     "QueryDiagnostics",
     "QueryMode",
+    "QueryOptions",
     "RetrievalBranch",
+    "TextQueryVariant",
     "VideoCandidate",
 ]

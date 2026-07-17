@@ -2,11 +2,46 @@
 
 from __future__ import annotations
 
+import hashlib
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from online.domain.candidates import ObjectDetection
 from online.ports.records import ASRSearchHit, FrameMetadata, FrameSearchHit, VideoSearchHit
+
+
+class FakeTextEncoder:
+    """Deterministic, normalized TextEncoderPort fake for B/C integration tests."""
+
+    def __init__(self, dimension: int = 4) -> None:
+        if isinstance(dimension, bool) or not isinstance(dimension, int) or dimension < 1:
+            raise ValueError("dimension must be a positive integer")
+        self._dimension = dimension
+        self.calls: list[tuple[str, ...]] = []
+
+    @property
+    def dimension(self) -> int:
+        return self._dimension
+
+    def encode_texts(self, texts: Sequence[str]) -> tuple[tuple[float, ...], ...]:
+        if isinstance(texts, (str, bytes)):
+            raise ValueError("texts must be a sequence")
+        values = tuple(texts)
+        if any(not isinstance(text, str) or not text.strip() for text in values):
+            raise ValueError("texts must contain non-empty strings")
+        self.calls.append(values)
+
+        vectors: list[tuple[float, ...]] = []
+        for text in values:
+            digest = hashlib.sha256(text.encode("utf-8")).digest()
+            raw = tuple(
+                (digest[index % len(digest)] - 127.5) / 127.5
+                for index in range(self._dimension)
+            )
+            norm = math.sqrt(sum(value * value for value in raw))
+            vectors.append(tuple(value / norm for value in raw))
+        return tuple(vectors)
 
 
 class FakeMilvusSearchPort:
@@ -22,6 +57,10 @@ class FakeMilvusSearchPort:
         self.ocr = tuple(ocr)
         self.asr = tuple(asr)
         self.summary = tuple(summary)
+        self.visual_calls: list[tuple[tuple[float, ...], int]] = []
+        self.ocr_calls: list[tuple[tuple[float, ...], int]] = []
+        self.asr_calls: list[tuple[tuple[float, ...], int]] = []
+        self.summary_calls: list[tuple[tuple[float, ...], int]] = []
 
     @staticmethod
     def _take(values: Sequence[object], top_k: int) -> Sequence[object]:
@@ -30,15 +69,19 @@ class FakeMilvusSearchPort:
         return tuple(values[:top_k])
 
     def search_visual(self, vector: Sequence[float], top_k: int) -> Sequence[FrameSearchHit]:
+        self.visual_calls.append((tuple(float(value) for value in vector), top_k))
         return self._take(self.visual, top_k)  # type: ignore[return-value]
 
     def search_ocr(self, vector: Sequence[float], top_k: int) -> Sequence[FrameSearchHit]:
+        self.ocr_calls.append((tuple(float(value) for value in vector), top_k))
         return self._take(self.ocr, top_k)  # type: ignore[return-value]
 
     def search_asr(self, vector: Sequence[float], top_k: int) -> Sequence[ASRSearchHit]:
+        self.asr_calls.append((tuple(float(value) for value in vector), top_k))
         return self._take(self.asr, top_k)  # type: ignore[return-value]
 
     def search_summary(self, vector: Sequence[float], top_k: int) -> Sequence[VideoSearchHit]:
+        self.summary_calls.append((tuple(float(value) for value in vector), top_k))
         return self._take(self.summary, top_k)  # type: ignore[return-value]
 
 
@@ -53,6 +96,9 @@ class FakeElasticsearchSearchPort:
         self.ocr = tuple(ocr)
         self.asr = tuple(asr)
         self.summary = tuple(summary)
+        self.ocr_calls: list[tuple[str, int, bool | None]] = []
+        self.asr_calls: list[tuple[str, int, bool | None]] = []
+        self.summary_calls: list[tuple[str, int, bool | None]] = []
 
     @staticmethod
     def _validate(query: str, top_k: int) -> None:
@@ -63,14 +109,17 @@ class FakeElasticsearchSearchPort:
 
     def search_ocr(self, query: str, top_k: int, *, fuzzy: bool | None = None) -> Sequence[FrameSearchHit]:
         self._validate(query, top_k)
+        self.ocr_calls.append((query, top_k, fuzzy))
         return self.ocr[:top_k]
 
     def search_asr(self, query: str, top_k: int, *, fuzzy: bool | None = None) -> Sequence[ASRSearchHit]:
         self._validate(query, top_k)
+        self.asr_calls.append((query, top_k, fuzzy))
         return self.asr[:top_k]
 
     def search_summary(self, query: str, top_k: int, *, fuzzy: bool | None = None) -> Sequence[VideoSearchHit]:
         self._validate(query, top_k)
+        self.summary_calls.append((query, top_k, fuzzy))
         return self.summary[:top_k]
 
 

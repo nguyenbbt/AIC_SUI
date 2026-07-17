@@ -5,6 +5,7 @@ from .fakes import (
     FakeMetadataReaderPort,
     FakeMilvusSearchPort,
     FakeObjectReaderPort,
+    FakeTextEncoder,
     IntegrationFixture,
     build_integration_fixture,
 )
@@ -14,6 +15,7 @@ __all__ = [
     "FakeMetadataReaderPort",
     "FakeMilvusSearchPort",
     "FakeObjectReaderPort",
+    "FakeTextEncoder",
     "IntegrationFixture",
     "build_integration_fixture",
 ]
