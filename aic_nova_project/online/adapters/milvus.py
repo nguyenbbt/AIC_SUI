@@ -234,7 +234,13 @@ class MilvusSearchAdapter:
         if isinstance(vector, (str, bytes)):
             raise InvalidQueryError("query vector must be a numeric sequence")
         try:
-            values = tuple(float(value) for value in vector)
+            raw_values = tuple(vector)
+        except (TypeError, ValueError) as exc:
+            raise InvalidQueryError("query vector must contain numeric values") from exc
+        if any(isinstance(value, bool) for value in raw_values):
+            raise InvalidQueryError("query vector must contain numeric values")
+        try:
+            values = tuple(float(value) for value in raw_values)
         except (TypeError, ValueError) as exc:
             raise InvalidQueryError("query vector must contain numeric values") from exc
         expected = self._dimension(name)
@@ -301,6 +307,8 @@ class MilvusSearchAdapter:
             entity = _GetterMapping(getter)
         if score is None:
             raise ContractMismatchError("Milvus hit is missing similarity score")
+        if isinstance(score, bool) or not isinstance(score, (int, float)):
+            raise ContractMismatchError("Milvus hit has invalid similarity score")
         try:
             numeric_score = float(score)
         except (TypeError, ValueError) as exc:
@@ -318,6 +326,52 @@ class MilvusSearchAdapter:
             )
         return value
 
+    @classmethod
+    def _required_str(cls, entity: Mapping[str, Any], field: str) -> str:
+        value = cls._required(entity, field)
+        if not isinstance(value, str) or value != value.strip():
+            raise ContractMismatchError(
+                "Milvus output field must be a canonical string",
+                details={"field": field},
+            )
+        return value
+
+    @classmethod
+    def _required_int(cls, entity: Mapping[str, Any], field: str) -> int:
+        value = cls._required(entity, field)
+        if isinstance(value, bool):
+            raise ContractMismatchError(
+                "Milvus output field must be an integer", details={"field": field}
+            )
+        try:
+            result = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ContractMismatchError(
+                "Milvus output field must be an integer", details={"field": field}
+            ) from exc
+        try:
+            if float(value) != result:
+                raise ValueError
+        except (TypeError, ValueError) as exc:
+            raise ContractMismatchError(
+                "Milvus output field must be an integer", details={"field": field}
+            ) from exc
+        return result
+
+    @classmethod
+    def _required_float(cls, entity: Mapping[str, Any], field: str) -> float:
+        value = cls._required(entity, field)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ContractMismatchError(
+                "Milvus output field must be numeric", details={"field": field}
+            )
+        result = float(value)
+        if not math.isfinite(result):
+            raise ContractMismatchError(
+                "Milvus output field must be finite", details={"field": field}
+            )
+        return result
+
     def search_visual(self, vector: Sequence[float], top_k: int) -> Sequence[FrameSearchHit]:
         hits = self._search(
             self.config.visual_collection,
@@ -331,9 +385,9 @@ class MilvusSearchAdapter:
             try:
                 output.append(
                     FrameSearchHit(
-                        frame_id=str(self._required(entity, "frame_id")),
-                        video_id=str(self._required(entity, "video_id")),
-                        shot_id=int(self._required(entity, "shot_id")),
+                        frame_id=self._required_str(entity, "frame_id"),
+                        video_id=self._required_str(entity, "video_id"),
+                        shot_id=self._required_int(entity, "shot_id"),
                         raw_score=score,
                     )
                 )
@@ -351,8 +405,8 @@ class MilvusSearchAdapter:
             try:
                 output.append(
                     FrameSearchHit(
-                        frame_id=str(self._required(entity, "frame_id")),
-                        video_id=str(self._required(entity, "video_id")),
+                        frame_id=self._required_str(entity, "frame_id"),
+                        video_id=self._required_str(entity, "video_id"),
                         shot_id=None,
                         raw_score=score,
                     )
@@ -372,10 +426,10 @@ class MilvusSearchAdapter:
             try:
                 output.append(
                     ASRSearchHit(
-                        video_id=str(self._required(entity, "video_id")),
-                        interval_id=str(self._required(entity, "interval_id")),
-                        start_time_sec=float(self._required(entity, "start_time_sec")),
-                        end_time_sec=float(self._required(entity, "end_time_sec")),
+                        video_id=self._required_str(entity, "video_id"),
+                        interval_id=self._required_str(entity, "interval_id"),
+                        start_time_sec=self._required_float(entity, "start_time_sec"),
+                        end_time_sec=self._required_float(entity, "end_time_sec"),
                         raw_score=score,
                     )
                 )
@@ -391,7 +445,7 @@ class MilvusSearchAdapter:
             try:
                 output.append(
                     VideoSearchHit(
-                        video_id=str(self._required(entity, "video_id")),
+                        video_id=self._required_str(entity, "video_id"),
                         raw_score=score,
                     )
                 )
@@ -406,8 +460,11 @@ class MilvusSearchAdapter:
     ) -> Sequence[Mapping[str, Any]]:
         if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
             raise InvalidQueryError("limit must be >= 1")
-        if not output_fields or any(
-            not isinstance(field, str) or not field.strip() for field in output_fields
+        if isinstance(output_fields, (str, bytes)) or not output_fields or any(
+            not isinstance(field, str)
+            or not field.strip()
+            or field != field.strip()
+            for field in output_fields
         ):
             raise InvalidQueryError("output_fields must contain non-empty field names")
         with self._read_guard.read():

@@ -79,6 +79,10 @@ class MilvusAdapterTests(unittest.TestCase):
             self.adapter.search_visual((float("nan"), 0.0), 1)
         with self.assertRaises(InvalidQueryError):
             self.adapter.search_visual((1.0, 1.0), 1)
+        with self.assertRaises(InvalidQueryError):
+            self.adapter.search_visual((True, 0.0), 1)
+        with self.assertRaises(InvalidQueryError):
+            self.adapter.sample_records("visual_features", "embedding", 1)  # type: ignore[arg-type]
 
     def test_empty_result_differs_from_backend_failure(self) -> None:
         self.assertEqual(self.adapter.search_visual(self.vector, 1), ())

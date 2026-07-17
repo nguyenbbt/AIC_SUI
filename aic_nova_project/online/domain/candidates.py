@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Annotated, Generic, Literal, TypeVar
 
-from pydantic import AfterValidator, Field, model_validator
+from pydantic import AfterValidator, Field, PlainSerializer, model_validator
 
 from .base import (
     FiniteFloat,
     NonEmptyStr,
+    StrictIntValue,
     StrictFrozenModel,
     ensure_bbox_order,
     freeze_mapping,
+    serialize_mapping,
 )
 from .enums import BranchStatus, CandidateLevel, RetrievalBranch
 
@@ -30,9 +33,9 @@ class CandidateProvenance(StrictFrozenModel):
 class FrameCandidate(StrictFrozenModel):
     frame_id: NonEmptyStr
     video_id: NonEmptyStr
-    shot_id: int = Field(ge=0)
+    shot_id: StrictIntValue = Field(ge=0)
     timestamp_sec: Annotated[FiniteFloat, Field(ge=0.0)]
-    rank: int = Field(ge=1)
+    rank: StrictIntValue = Field(ge=1)
     raw_score: FiniteFloat
     normalized_score: NormalizedScore | None = None
     provenance: CandidateProvenance
@@ -43,7 +46,7 @@ class ASRIntervalCandidate(StrictFrozenModel):
     interval_id: NonEmptyStr
     start_time_sec: Annotated[FiniteFloat, Field(ge=0.0)]
     end_time_sec: Annotated[FiniteFloat, Field(ge=0.0)]
-    rank: int = Field(ge=1)
+    rank: StrictIntValue = Field(ge=1)
     raw_score: FiniteFloat
     normalized_score: NormalizedScore | None = None
     text: str | None = None
@@ -58,7 +61,7 @@ class ASRIntervalCandidate(StrictFrozenModel):
 
 class VideoCandidate(StrictFrozenModel):
     video_id: NonEmptyStr
-    rank: int = Field(ge=1)
+    rank: StrictIntValue = Field(ge=1)
     raw_score: FiniteFloat
     normalized_score: NormalizedScore | None = None
     summary: str | None = None
@@ -74,7 +77,7 @@ class BranchResult(StrictFrozenModel, Generic[CandidateT]):
     candidate_level: CandidateLevel
     query_variant_id: NonEmptyStr
     candidates: tuple[CandidateT, ...]
-    requested_top_k: int = Field(ge=1)
+    requested_top_k: StrictIntValue = Field(ge=1)
     latency_ms: Annotated[FiniteFloat, Field(ge=0.0)]
     status: BranchStatus
     warnings: tuple[NonEmptyStr, ...] = ()
@@ -134,17 +137,19 @@ class CandidateEvidence(StrictFrozenModel):
 class CandidateDiagnostics(StrictFrozenModel):
     summary_boost: FiniteFloat = 0.0
     object_boost: FiniteFloat = 0.0
-    object_constraints_satisfied: int = Field(default=0, ge=0)
+    object_constraints_satisfied: StrictIntValue = Field(default=0, ge=0)
 
 
 class FusedFrameCandidate(StrictFrozenModel):
     frame_id: NonEmptyStr
     video_id: NonEmptyStr
-    shot_id: int = Field(ge=0)
+    shot_id: StrictIntValue = Field(ge=0)
     timestamp_sec: Annotated[FiniteFloat, Field(ge=0.0)]
     final_score: FiniteFloat
     branch_scores: Annotated[
-        dict[RetrievalBranch, NormalizedScore], AfterValidator(freeze_mapping)
+        Mapping[RetrievalBranch, NormalizedScore],
+        AfterValidator(freeze_mapping),
+        PlainSerializer(serialize_mapping, return_type=dict),
     ]
     evidence: tuple[CandidateEvidence, ...]
     near_frames: tuple[NearFrameRef, ...] = ()

@@ -82,7 +82,13 @@ def _validate_vector(
     if isinstance(vector, (str, bytes)):
         raise InvalidQueryError("query vector must be a numeric sequence")
     try:
-        values = tuple(float(value) for value in vector)
+        raw_values = tuple(vector)
+    except (TypeError, ValueError) as exc:
+        raise InvalidQueryError("query vector must contain numeric values") from exc
+    if any(isinstance(value, bool) for value in raw_values):
+        raise InvalidQueryError("query vector must contain numeric values")
+    try:
+        values = tuple(float(value) for value in raw_values)
     except (TypeError, ValueError) as exc:
         raise InvalidQueryError("query vector must contain numeric values") from exc
     if not values or not all(math.isfinite(value) for value in values):
@@ -121,6 +127,7 @@ class FakeTextEncoder:
             raise ValueError("dimension must be a positive integer")
         self._dimension = dimension
         self.calls: list[tuple[str, ...]] = []
+        self._lock = threading.Lock()
 
     @property
     def dimension(self) -> int:
@@ -128,14 +135,16 @@ class FakeTextEncoder:
 
     def encode_texts(self, texts: Sequence[str]) -> tuple[tuple[float, ...], ...]:
         if isinstance(texts, (str, bytes)):
-            raise ValueError("texts must be a sequence")
+            raise InvalidQueryError("texts must be a sequence")
         values = tuple(texts)
         if any(not isinstance(text, str) or not text.strip() for text in values):
-            raise ValueError("texts must contain non-empty strings")
-        self.calls.append(values)
+            raise InvalidQueryError("texts must contain non-empty strings")
+        cleaned = tuple(text.strip() for text in values)
+        with self._lock:
+            self.calls.append(cleaned)
 
         vectors: list[tuple[float, ...]] = []
-        for text in values:
+        for text in cleaned:
             digest = hashlib.sha256(text.encode("utf-8")).digest()
             raw = tuple(
                 (digest[index % len(digest)] - 127.5) / 127.5
@@ -283,7 +292,11 @@ class FakeElasticsearchSearchPort:
         top_k: int,
         fuzzy: bool | None,
     ) -> None:
-        if not isinstance(query, str) or not query.strip():
+        if (
+            not isinstance(query, str)
+            or not query.strip()
+            or query != query.strip()
+        ):
             raise InvalidQueryError("lexical query must not be empty")
         _validate_top_k(top_k)
         if fuzzy is not None and not isinstance(fuzzy, bool):
@@ -326,8 +339,18 @@ class FakeMetadataReaderPort:
 
     @staticmethod
     def _validate_ids(frame_ids: Sequence[str]) -> tuple[str, ...]:
-        ids = tuple(dict.fromkeys(frame_ids))
-        if any(not isinstance(value, str) or not value.strip() for value in ids):
+        if isinstance(frame_ids, (str, bytes)):
+            raise InvalidQueryError("frame_ids must be a sequence of strings")
+        try:
+            ids = tuple(dict.fromkeys(frame_ids))
+        except (TypeError, ValueError) as exc:
+            raise InvalidQueryError("frame_ids must be a sequence of strings") from exc
+        if any(
+            not isinstance(value, str)
+            or not value.strip()
+            or value != value.strip()
+            for value in ids
+        ):
             raise InvalidQueryError("frame_ids must contain non-empty strings")
         return ids
 
@@ -342,7 +365,11 @@ class FakeMetadataReaderPort:
         }
 
     def get_ordered_frames_by_video(self, video_id: str) -> Sequence[FrameMetadata]:
-        if not isinstance(video_id, str) or not video_id.strip():
+        if (
+            not isinstance(video_id, str)
+            or not video_id.strip()
+            or video_id != video_id.strip()
+        ):
             raise InvalidQueryError("video_id must not be empty")
         return tuple(
             sorted(
@@ -370,12 +397,19 @@ class FakeObjectReaderPort:
         label: str | None = None,
         min_confidence: float = 0.0,
     ) -> Mapping[str, Sequence[ObjectDetection]]:
-        ids = tuple(dict.fromkeys(frame_ids))
-        if any(not isinstance(value, str) or not value.strip() for value in ids):
-            raise InvalidQueryError("frame_ids must contain non-empty strings")
-        if label is not None and (not isinstance(label, str) or not label.strip()):
+        ids = FakeMetadataReaderPort._validate_ids(frame_ids)
+        if label is not None and (
+            not isinstance(label, str)
+            or not label.strip()
+            or label != label.strip()
+        ):
             raise InvalidQueryError("label must not be empty")
-        if not math.isfinite(min_confidence) or not 0.0 <= min_confidence <= 1.0:
+        if (
+            isinstance(min_confidence, bool)
+            or not isinstance(min_confidence, (int, float))
+            or not math.isfinite(min_confidence)
+            or not 0.0 <= min_confidence <= 1.0
+        ):
             raise InvalidQueryError("min_confidence must be within [0, 1]")
         with self._lock:
             self._calls.append(ObjectCall(ids, label, min_confidence))

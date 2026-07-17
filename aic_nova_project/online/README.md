@@ -5,14 +5,27 @@ verified in the target deployment image before runtime integration is claimed.
 The contract and adapter unit tests do not require Milvus, Elasticsearch,
 encoder checkpoints, GPU packages, or running services.
 
-From the repository root in PowerShell:
+Run these commands from the application root: the directory that directly
+contains `online/`, `query_understanding/` and `tests/`. In the current Git
+layout, first enter the nested project directory:
 
 ```powershell
-py -3.11 -m venv .venv
+cd aic_nova_project
+python --version
+python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r online\requirements-runtime.txt
 python -m pip install -r online\requirements-test.txt
+```
+
+The supported interpreter is Python 3.11 or newer. Using `python -m venv`
+avoids depending on the optional Windows `py` launcher.
+
+Install the model stack only on machines that will run the real B2 encoders:
+
+```powershell
+python -m pip install -r online\requirements-encoders.txt
 ```
 
 Run the SDK-free tests:
@@ -41,6 +54,10 @@ loaded implicitly by the CLI.
 Runtime status remains `NEED_RUNTIME_VERIFICATION` until Milvus,
 Elasticsearch, SQLite, encoder dimensions/norms, canonical JOIN samples, and a
 real visual-to-frame vertical slice have all been checked.
+
+Unit tests intentionally do not prove SDK/service/model compatibility. Runtime
+validation must be performed against a disposable or read-only environment;
+production indexes are never used as test fixtures.
 
 Concurrency contract: search ports are synchronous. SQLite serializes each
 connection's calls with a re-entrant lock and uses one read-only connection per

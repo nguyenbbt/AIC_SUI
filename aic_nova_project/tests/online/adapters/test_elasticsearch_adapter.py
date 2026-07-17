@@ -83,6 +83,29 @@ class ElasticsearchAdapterTests(unittest.TestCase):
         with self.assertRaises(ContractMismatchError):
             self.adapter.search_summary("hello", 1)
 
+    def test_lookup_fields_and_backend_scalar_types_are_strict(self) -> None:
+        with self.assertRaises(InvalidQueryError):
+            self.adapter.sample_documents("video_summaries", "video_id", 1)  # type: ignore[arg-type]
+        with self.assertRaises(InvalidQueryError):
+            self.adapter.search_summary(" padded ", 1)
+        self.client.response = {
+            "hits": {"hits": [{"_score": True, "_source": {"video_id": "V1"}}]}
+        }
+        with self.assertRaises(ContractMismatchError):
+            self.adapter.search_summary("hello", 1)
+        self.client.response = {
+            "hits": {
+                "hits": [
+                    {
+                        "_score": 1,
+                        "_source": {"video_id": 123, "summary": "text"},
+                    }
+                ]
+            }
+        }
+        with self.assertRaises(ContractMismatchError):
+            self.adapter.search_summary("hello", 1)
+
 
 if __name__ == "__main__":
     unittest.main()

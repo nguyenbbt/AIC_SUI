@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from online.adapters.sqlite import SQLiteReadAdapter
 from online.config import SQLiteResourceConfig
-from online.domain.errors import ContractMismatchError
+from online.domain.errors import ContractMismatchError, InvalidQueryError
 from online.testing import create_sqlite_fixture
 
 
@@ -81,6 +81,22 @@ class SQLiteAdapterTests(unittest.TestCase):
     def test_empty_input_does_not_query_full_table(self) -> None:
         self.assertEqual(self.adapter.get_frames_by_ids([]), {})
         self.assertEqual(self.adapter.get_objects_by_frame_ids([]), {})
+
+    def test_invalid_caller_inputs_are_domain_errors(self) -> None:
+        for value in ("V001_00000_015", b"id"):
+            with self.assertRaises(InvalidQueryError):
+                self.adapter.get_frames_by_ids(value)  # type: ignore[arg-type]
+        with self.assertRaises(InvalidQueryError):
+            self.adapter.get_objects_by_frame_ids(["V001_00000_015"], label=123)  # type: ignore[arg-type]
+        for value in ("bad", True):
+            with self.assertRaises(InvalidQueryError):
+                self.adapter.get_objects_by_frame_ids(
+                    ["V001_00000_015"], min_confidence=value  # type: ignore[arg-type]
+                )
+        with self.assertRaises(InvalidQueryError):
+            self.adapter.sample_records("metadata", "frame_id", 1)  # type: ignore[arg-type]
+        with self.assertRaises(InvalidQueryError):
+            self.adapter.sample_records("metadata", ("frame_id",), True)
 
     def test_ids_are_parameter_bound(self) -> None:
         malicious = "x') OR 1=1 --"

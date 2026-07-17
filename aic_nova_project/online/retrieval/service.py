@@ -7,12 +7,13 @@ import math
 from collections.abc import Mapping, Sequence
 from concurrent.futures import Executor, ThreadPoolExecutor
 from functools import partial
+from threading import Lock
 from time import perf_counter
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import Field, ValidationError
 
-from online.domain.base import FiniteFloat, NonEmptyStr, StrictFrozenModel
+from online.domain.base import FiniteFloat, NonEmptyStr, StrictFrozenModel, StrictIntValue
 from online.domain.candidates import BranchResult
 from online.domain.diagnostics import BranchDiagnostics
 from online.domain.enums import BranchStatus, CandidateLevel, RetrievalBranch
@@ -64,7 +65,7 @@ class RetrievalServicePort(Protocol):
 class RetrievalInvocationConfig(StrictFrozenModel):
     """Required tuning for one exact branch/query-variant invocation."""
 
-    top_k: int = Field(ge=1)
+    top_k: StrictIntValue = Field(ge=1)
     timeout_sec: FiniteFloat = Field(gt=0.0)
 
 
@@ -125,8 +126,10 @@ class RetrievalService:
             max_workers=max_workers,
             thread_name_prefix="aic-retrieval",
         )
-        self._concurrency_limit = asyncio.Semaphore(max_workers)
+        self._max_workers = max_workers
         self._owns_executor = executor is None
+        self._state_lock = Lock()
+        self._active_executions = 0
         self._closed = False
 
     async def retrieve(self, bundle: QueryBundle) -> tuple[BranchResult[Any], ...]:
@@ -137,29 +140,45 @@ class RetrievalService:
     async def execute(self, bundle: QueryBundle) -> RetrievalExecution:
         """Retrieve plus per-invocation diagnostics for integration/debugging."""
 
-        if self._closed:
-            raise RuntimeError("RetrievalService is closed")
-        if not isinstance(bundle, QueryBundle):
-            raise ContractMismatchError("bundle must be a validated QueryBundle")
-        invocations = self._plan(bundle)
-        started_at = perf_counter()
-        outcomes = await asyncio.gather(
-            *(self._run_invocation(invocation) for invocation in invocations)
-        )
-        total_latency_ms = self._elapsed_ms(started_at)
-        return RetrievalExecution(
-            query_id=bundle.query_id,
-            total_latency_ms=total_latency_ms,
-            results=tuple(result for result, _ in outcomes),
-            invocations=tuple(diagnostics for _, diagnostics in outcomes),
-        )
+        with self._state_lock:
+            if self._closed:
+                raise RuntimeError("RetrievalService is closed")
+            self._active_executions += 1
+        try:
+            if not isinstance(bundle, QueryBundle):
+                raise ContractMismatchError("bundle must be a validated QueryBundle")
+            invocations = self._plan(bundle)
+            started_at = perf_counter()
+            # asyncio synchronization primitives are event-loop scoped. Keep
+            # the limiter local so one service can safely be called from a new
+            # loop in a later CLI/test invocation.
+            concurrency_limit = asyncio.Semaphore(self._max_workers)
+            outcomes = await asyncio.gather(
+                *(
+                    self._run_invocation(invocation, concurrency_limit)
+                    for invocation in invocations
+                )
+            )
+            total_latency_ms = self._elapsed_ms(started_at)
+            return RetrievalExecution(
+                query_id=bundle.query_id,
+                total_latency_ms=total_latency_ms,
+                results=tuple(result for result, _ in outcomes),
+                invocations=tuple(diagnostics for _, diagnostics in outcomes),
+            )
+        finally:
+            with self._state_lock:
+                self._active_executions -= 1
 
-    def close(self, *, wait: bool = False) -> None:
+    def close(self, *, wait: bool = True) -> None:
         """Release an owned executor; running SDK calls cannot be force-killed."""
 
-        if self._closed:
-            return
-        self._closed = True
+        with self._state_lock:
+            if self._closed:
+                return
+            if self._active_executions:
+                raise RuntimeError("RetrievalService cannot close during active execution")
+            self._closed = True
         if self._owns_executor:
             self._executor.shutdown(wait=wait, cancel_futures=True)
 
@@ -210,6 +229,7 @@ class RetrievalService:
     async def _run_invocation(
         self,
         invocation: _Invocation,
+        concurrency_limit: asyncio.Semaphore,
     ) -> tuple[BranchResult[Any], BranchInvocationDiagnostics]:
         started_at = perf_counter()
         loop = asyncio.get_running_loop()
@@ -219,7 +239,7 @@ class RetrievalService:
             top_k=invocation.config.top_k,
         )
         try:
-            async with self._concurrency_limit:
+            async with concurrency_limit:
                 future = loop.run_in_executor(self._executor, call)
                 result = await asyncio.wait_for(
                     future,

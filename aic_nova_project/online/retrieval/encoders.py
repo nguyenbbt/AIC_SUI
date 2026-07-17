@@ -50,6 +50,10 @@ class _ValidatedTextEncoder:
         self._backend: _TextEmbeddingBackend | None = None
         self._dimension: int | None = None
         self._load_lock = Lock()
+        # Torch/SentenceTransformer backends are shared by all semantic
+        # branches. Serialize inference per model instance to avoid concurrent
+        # mutation/CUDA execution assumptions inside third-party model code.
+        self._inference_lock = Lock()
 
     @property
     def dimension(self) -> int:
@@ -64,7 +68,8 @@ class _ValidatedTextEncoder:
 
         backend = self._ensure_backend()
         try:
-            raw_vectors = backend.encode_texts(cleaned)
+            with self._inference_lock:
+                raw_vectors = backend.encode_texts(cleaned)
         except DataInfrastructureError:
             raise
         except Exception as exc:

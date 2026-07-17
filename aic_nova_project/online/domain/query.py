@@ -6,7 +6,13 @@ from typing import Annotated
 
 from pydantic import Field, model_validator
 
-from .base import FiniteFloat, NonEmptyStr, StrictFrozenModel, ensure_bbox_order
+from .base import (
+    FiniteFloat,
+    NonEmptyStr,
+    StrictFrozenModel,
+    StrictIntValue,
+    ensure_bbox_order,
+)
 from .enums import CountOperator, FilterMode, QueryMode, RetrievalBranch
 
 
@@ -22,7 +28,7 @@ class NormalizedRegion(StrictFrozenModel):
 class ObjectConstraint(StrictFrozenModel):
     label: NonEmptyStr
     count_operator: CountOperator
-    count: int = Field(ge=0)
+    count: StrictIntValue = Field(ge=0)
     min_confidence: Annotated[FiniteFloat, Field(ge=0.0, le=1.0)] = 0.5
     position: NormalizedRegion | None = None
     filter_mode: FilterMode = FilterMode.SOFT

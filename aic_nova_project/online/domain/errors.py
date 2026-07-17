@@ -57,12 +57,21 @@ def _redact_uri(value: str) -> str:
         parsed = urlsplit(value)
     except ValueError:
         return "[redacted]"
-    if not parsed.scheme or parsed.hostname is None:
-        return value
-    host = parsed.hostname
-    if parsed.port is not None:
-        host = f"{host}:{parsed.port}"
-    return urlunsplit((parsed.scheme, host, parsed.path, parsed.query, parsed.fragment))
+    try:
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        return "[redacted-uri]"
+    if not parsed.scheme or hostname is None:
+        return "[redacted-uri]"
+    host = hostname
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    if port is not None:
+        host = f"{host}:{port}"
+    # Paths, queries and fragments may all carry bearer tokens or signed URLs.
+    # Public diagnostics only need the backend origin to identify the resource.
+    return urlunsplit((parsed.scheme, host, "", "", ""))
 
 
 def _sanitize_details(details: Mapping[str, Any]) -> dict[str, Any]:

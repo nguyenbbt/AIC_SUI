@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+import threading
+import time
 import unittest
 
 from online.domain.errors import (
@@ -43,6 +45,25 @@ class StaticBackend:
         if self.rows is not None:
             return self.rows
         return [[3.0, 4.0, 0.0] for _ in texts]
+
+
+class ConcurrentBackend(StaticBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self._state_lock = threading.Lock()
+        self.active = 0
+        self.max_active = 0
+
+    def encode_texts(self, texts: tuple[str, ...]) -> list[list[float]]:
+        with self._state_lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            time.sleep(0.02)
+            return super().encode_texts(texts)
+        finally:
+            with self._state_lock:
+                self.active -= 1
 
 
 class TextEncoderTests(unittest.TestCase):
@@ -166,6 +187,30 @@ class TextEncoderTests(unittest.TestCase):
         self.assertNotEqual(first, encoder.encode_texts(("different query",)))
         self.assertAlmostEqual(math.sqrt(sum(value * value for value in first[0])), 1.0)
         self.assertEqual(encoder.calls[0], ("same query",))
+        self.assertEqual(
+            encoder.encode_texts(("  same query  ",)),
+            encoder.encode_texts(("same query",)),
+        )
+
+    def test_shared_model_inference_is_serialized_across_branch_threads(self) -> None:
+        backend = ConcurrentBackend()
+        encoder = VietnameseTextEncoder(backend_factory=lambda: backend)
+        errors: list[BaseException] = []
+
+        def encode(text: str) -> None:
+            try:
+                encoder.encode_texts((text,))
+            except BaseException as exc:  # pragma: no cover - assertion below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=encode, args=(f"query-{i}",)) for i in range(3)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=1.0)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(backend.max_active, 1)
 
 
 if __name__ == "__main__":

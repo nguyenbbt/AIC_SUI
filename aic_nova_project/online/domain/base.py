@@ -4,14 +4,23 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from typing import Annotated, Any, TypeVar
+from types import MappingProxyType
+from typing import Annotated, Any, Generic, Iterator, TypeVar
 
-from pydantic import AfterValidator, BaseModel, ConfigDict
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict
 
 
 def _non_empty(value: str) -> str:
     if not value.strip():
         raise ValueError("value must not be empty or whitespace")
+    if value != value.strip():
+        raise ValueError("value must not contain leading or trailing whitespace")
+    return value
+
+
+def _reject_bool(value: object) -> object:
+    if isinstance(value, bool):
+        raise ValueError("boolean is not a numeric value")
     return value
 
 
@@ -22,7 +31,12 @@ def _finite(value: float) -> float:
 
 
 NonEmptyStr = Annotated[str, AfterValidator(_non_empty)]
-FiniteFloat = Annotated[float, AfterValidator(_finite)]
+StrictIntValue = Annotated[int, BeforeValidator(_reject_bool)]
+FiniteFloat = Annotated[
+    float,
+    BeforeValidator(_reject_bool),
+    AfterValidator(_finite),
+]
 
 
 class StrictFrozenModel(BaseModel):
@@ -39,28 +53,46 @@ _K = TypeVar("_K")
 _V = TypeVar("_V")
 
 
-class FrozenDict(dict[_K, _V]):
-    """A JSON-serializable dictionary snapshot that cannot be mutated."""
+class FrozenDict(Mapping[_K, _V], Generic[_K, _V]):
+    """A read-only mapping snapshot with no mutable ``dict`` base to bypass.
 
-    _IMMUTABLE_MESSAGE = "FrozenDict is immutable"
+    Subclassing ``dict`` and overriding ``__setitem__`` is insufficient because
+    callers can still invoke ``dict.__setitem__`` directly.  Composition around
+    ``MappingProxyType`` closes that escape hatch while remaining serializable
+    through Pydantic's ``Mapping`` support.
+    """
 
-    def _immutable(self, *args: object, **kwargs: object) -> None:
-        raise TypeError(self._IMMUTABLE_MESSAGE)
+    __slots__ = ("_data",)
 
-    __setitem__ = _immutable
-    __delitem__ = _immutable
-    clear = _immutable
-    pop = _immutable
-    popitem = _immutable
-    setdefault = _immutable
-    update = _immutable
-    __ior__ = _immutable
+    def __init__(self, value: Mapping[_K, _V]) -> None:
+        object.__setattr__(self, "_data", MappingProxyType(dict(value)))
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise TypeError("FrozenDict is immutable")
+
+    def __getitem__(self, key: _K) -> _V:
+        return self._data[key]
+
+    def __iter__(self) -> Iterator[_K]:
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __repr__(self) -> str:
+        return f"FrozenDict({dict(self._data)!r})"
 
 
 def freeze_mapping(value: Mapping[_K, _V] | dict[_K, _V]) -> FrozenDict[_K, _V]:
     """Copy a mapping at the model boundary and freeze the resulting snapshot."""
 
     return FrozenDict(value)
+
+
+def serialize_mapping(value: Mapping[_K, _V]) -> dict[_K, _V]:
+    """Convert an immutable mapping snapshot to a normal JSON object."""
+
+    return dict(value)
 
 
 def ensure_bbox_order(model: Any) -> Any:

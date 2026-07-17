@@ -92,6 +92,23 @@ class PortConformanceTests(unittest.TestCase):
         with self.assertRaises(ResourceUnavailableError):
             es.search_ocr("query", 1, fuzzy=False)
 
+    def test_fake_metadata_and_objects_match_adapter_input_validation(self) -> None:
+        fixture = build_integration_fixture()
+        metadata = fixture.metadata()
+        objects = fixture.object_reader()
+        with self.assertRaises(InvalidQueryError):
+            metadata.get_frames_by_ids("V001_00000_015")  # type: ignore[arg-type]
+        with self.assertRaises(InvalidQueryError):
+            objects.get_objects_by_frame_ids(
+                ["V001_00000_015"], label=123  # type: ignore[arg-type]
+            )
+        with self.assertRaises(InvalidQueryError):
+            objects.get_objects_by_frame_ids(
+                ["V001_00000_015"], min_confidence="bad"  # type: ignore[arg-type]
+            )
+        with self.assertRaises(InvalidQueryError):
+            fixture.milvus().search_visual((True, 0.0), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

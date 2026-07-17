@@ -607,20 +607,24 @@ do not determine these algorithms or production parameters.
 
 ## 13. Current verified readiness gates
 
-The following issues were verified after Person A's merge and must not be hidden
-by downstream code:
+The Person A boundary and Person B B1-B9 implementation are code-ready against
+the SDK-free Online suite:
 
-1. Pytest collection currently has a package-name collision because
-   `tests/online` can shadow source package `online`.
-2. The contract validator checks cross-database equality but currently allows a
-   consistently malformed `frame_id` to pass.
-3. The validator can report `PASS` without an encoder smoke vector when no
-   encoder factory is supplied.
-4. Real Milvus/Elasticsearch adapter behavior still requires installed SDKs,
-   running services and runtime schema checks.
+1. Standard pytest collection imports the source `online` package without test
+   package shadowing.
+2. Canonical `frame_id` syntax and semantic fields are validated without
+   rewriting IDs, including rejection of surrounding whitespace.
+3. Missing encoder smoke checks are explicit `NOT_RUN` values and prevent a
+   false integration `PASS`.
+4. Adapter caller errors, backend contract errors and safe diagnostics use the
+   shared domain error boundary; fakes cover the same caller validation cases.
+5. Retrieval branches preserve candidate level, raw score and provenance, and
+   the async service bounds synchronous work with deterministic ordering,
+   timeouts and lifecycle guards.
 
-Persons B and C may develop against protocol-conformant fakes while these
-integration gates are addressed. Do not claim real-database readiness until:
+`NEED_RUNTIME_VERIFICATION` still applies to installed encoder/database SDKs,
+running services, actual schemas, stored vectors and Offline-produced records.
+Do not claim real-database readiness until:
 
 - The standard test command collects and passes.
 - Canonical ID validation passes.
@@ -655,9 +659,9 @@ Preferred test target:
 python -m pytest -p no:cacheprovider --import-mode=importlib tests/online -q
 ```
 
-Until the verified pytest package collision is fixed, `unittest discovery` may
-be used only as an additional diagnostic. It does not make the pytest/CI failure
-disappear.
+Run this command from the application root containing `online/` and `tests/`
+(`aic_nova_project/` in the current nested Git checkout). `unittest discovery`
+may be used only as an additional diagnostic; pytest remains the required gate.
 
 Do not install missing dependencies merely to make a test run unless the user
 authorizes installation.

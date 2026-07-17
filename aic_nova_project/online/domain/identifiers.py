@@ -28,8 +28,14 @@ def parse_canonical_frame_id(frame_id: str) -> CanonicalFrameId:
 
     if not isinstance(frame_id, str) or not frame_id.strip():
         raise ContractMismatchError("frame_id must not be empty or whitespace")
+    if frame_id != frame_id.strip():
+        raise ContractMismatchError("frame_id must not contain surrounding whitespace")
     match = _FRAME_ID_PATTERN.fullmatch(frame_id)
-    if match is None or not match.group("video_id").strip():
+    if (
+        match is None
+        or not match.group("video_id").strip()
+        or match.group("video_id") != match.group("video_id").strip()
+    ):
         raise ContractMismatchError(
             "frame_id is not canonical",
             details={"expected_format": "{video_id}_{shot_id:05d}_{position:03d}"},

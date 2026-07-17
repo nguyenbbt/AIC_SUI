@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from online.adapters.contract_validator import OfflineContractValidator, ValidationStatus
+from online.adapters.contract_validator import (
+    CheckStatus,
+    OfflineContractValidator,
+    ValidationStatus,
+)
 from online.config import OnlineDataConfig
 from online.ports.records import FrameMetadata
 
@@ -176,6 +180,39 @@ class ContractValidatorTests(unittest.TestCase):
         del self.milvus.records["ocr_features"]
         report = self.validator().validate()
         self.assertEqual(report.status, ValidationStatus.PARTIAL)
+        smoke = next(
+            check for check in report.checks if check.name == "encoder.ocr_features"
+        )
+        self.assertEqual(smoke.status, CheckStatus.NOT_RUN)
+
+    def test_backend_exception_still_lists_every_resource_subcheck(self) -> None:
+        def fail_exists(name):
+            if name == "visual_features":
+                raise ConnectionError("backend unavailable")
+            return name in self.milvus.records
+
+        self.milvus.collection_exists = fail_exists
+        report = self.validator().validate()
+        self.assertEqual(report.status, ValidationStatus.FAIL)
+        checks = {check.name: check for check in report.checks}
+        self.assertEqual(checks["milvus.visual_features"].status, CheckStatus.FAIL)
+        for suffix in (
+            "exists",
+            "fields",
+            "types",
+            "dimension",
+            "index",
+            "non_empty",
+            "vector_norm",
+        ):
+            self.assertEqual(
+                checks[f"milvus.visual_features.{suffix}"].status,
+                CheckStatus.NOT_RUN,
+            )
+        self.assertEqual(
+            checks["encoder.visual_features"].status,
+            CheckStatus.NOT_RUN,
+        )
 
 
 if __name__ == "__main__":

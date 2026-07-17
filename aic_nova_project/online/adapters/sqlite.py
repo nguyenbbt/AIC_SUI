@@ -91,8 +91,18 @@ class SQLiteReadAdapter:
 
     @staticmethod
     def _validate_ids(values: Sequence[str], name: str) -> tuple[str, ...]:
-        result = tuple(dict.fromkeys(values))
-        if any(not isinstance(value, str) or not value.strip() for value in result):
+        if isinstance(values, (str, bytes)):
+            raise InvalidQueryError(f"{name} must be a sequence of strings")
+        try:
+            result = tuple(dict.fromkeys(values))
+        except (TypeError, ValueError) as exc:
+            raise InvalidQueryError(f"{name} must be a sequence of strings") from exc
+        if any(
+            not isinstance(value, str)
+            or not value.strip()
+            or value != value.strip()
+            for value in result
+        ):
             raise InvalidQueryError(f"{name} must contain non-empty strings")
         return result
 
@@ -118,7 +128,11 @@ class SQLiteReadAdapter:
         return output
 
     def get_ordered_frames_by_video(self, video_id: str) -> Sequence[FrameMetadata]:
-        if not isinstance(video_id, str) or not video_id.strip():
+        if (
+            not isinstance(video_id, str)
+            or not video_id.strip()
+            or video_id != video_id.strip()
+        ):
             raise InvalidQueryError("video_id must not be empty")
         table = self._quote_identifier(self.config.metadata_table)
         sql = (
@@ -143,9 +157,18 @@ class SQLiteReadAdapter:
         ids = self._validate_ids(frame_ids, "frame_ids")
         if not ids:
             return {}
-        if label is not None and not label.strip():
+        if label is not None and (
+            not isinstance(label, str)
+            or not label.strip()
+            or label != label.strip()
+        ):
             raise InvalidQueryError("label must not be empty")
-        if not math.isfinite(min_confidence) or not 0.0 <= min_confidence <= 1.0:
+        if (
+            isinstance(min_confidence, bool)
+            or not isinstance(min_confidence, (int, float))
+            or not math.isfinite(min_confidence)
+            or not 0.0 <= min_confidence <= 1.0
+        ):
             raise InvalidQueryError("min_confidence must be within [0, 1]")
 
         table = self._quote_identifier(self.config.objects_table)
@@ -182,15 +205,15 @@ class SQLiteReadAdapter:
                         output[frame_id].append(
                             ObjectDetection(
                                 label=label_value,
-                                confidence=float(row["confidence"]),
-                                x_min=float(row["x_min"]),
-                                y_min=float(row["y_min"]),
-                                x_max=float(row["x_max"]),
-                                y_max=float(row["y_max"]),
+                                confidence=self._row_float(row, "confidence"),
+                                x_min=self._row_float(row, "x_min"),
+                                y_min=self._row_float(row, "y_min"),
+                                x_max=self._row_float(row, "x_max"),
+                                y_max=self._row_float(row, "y_max"),
                                 model_source=(
                                     None
                                     if row["model_source"] is None
-                                    else str(row["model_source"])
+                                    else self._row_text(row, "model_source")
                                 ),
                             )
                         )
@@ -219,11 +242,39 @@ class SQLiteReadAdapter:
             return FrameMetadata(
                 frame_id=frame_id,
                 video_id=video_id,
-                shot_id=int(row["shot_id"]),
-                timestamp_sec=float(row["timestamp"]),
+                shot_id=SQLiteReadAdapter._row_int(row, "shot_id"),
+                timestamp_sec=SQLiteReadAdapter._row_float(row, "timestamp"),
             )
         except Exception as exc:
             raise ContractMismatchError("Invalid metadata row returned by SQLite") from exc
+
+    @staticmethod
+    def _row_text(row: sqlite3.Row, field: str) -> str:
+        value = row[field]
+        if (
+            not isinstance(value, str)
+            or not value.strip()
+            or value != value.strip()
+        ):
+            raise ValueError(f"{field} must be canonical text")
+        return value
+
+    @staticmethod
+    def _row_float(row: sqlite3.Row, field: str) -> float:
+        value = row[field]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{field} must be numeric")
+        result = float(value)
+        if not math.isfinite(result):
+            raise ValueError(f"{field} must be finite")
+        return result
+
+    @staticmethod
+    def _row_int(row: sqlite3.Row, field: str) -> int:
+        value = row[field]
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{field} must be an integer")
+        return value
 
     def table_columns(self, table_name: str) -> Mapping[str, str]:
         if table_name not in {self.config.metadata_table, self.config.objects_table}:
@@ -245,8 +296,15 @@ class SQLiteReadAdapter:
     ) -> Sequence[Mapping[str, object]]:
         if table_name not in {self.config.metadata_table, self.config.objects_table}:
             raise InvalidQueryError("table is not managed by the Online adapter")
-        if limit < 1:
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
             raise InvalidQueryError("limit must be >= 1")
+        if isinstance(fields, (str, bytes)) or not fields or any(
+            not isinstance(field, str)
+            or not field.strip()
+            or field != field.strip()
+            for field in fields
+        ):
+            raise InvalidQueryError("fields must contain non-empty field names")
         columns = self.table_columns(table_name)
         if any(field not in columns for field in fields):
             raise ContractMismatchError("Requested sample field is missing from SQLite table")

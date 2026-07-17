@@ -12,7 +12,7 @@ from online.domain.candidates import (
     FrameCandidate,
     VideoCandidate,
 )
-from online.domain.enums import BranchStatus, CandidateLevel, RetrievalBranch
+from online.domain.enums import BranchStatus, CandidateLevel, QueryMode, RetrievalBranch
 from online.domain.identifiers import parse_canonical_frame_id
 from online.domain.errors import ResourceUnavailableError
 from online.domain.query import ObjectConstraint
@@ -80,6 +80,15 @@ class DomainContractTests(unittest.TestCase):
         self.assertNotIn("secret-token", str(safe))
         self.assertEqual(safe["details"]["operation"], "search")
 
+        signed = ResourceUnavailableError(
+            "backend unavailable",
+            details={
+                "uri": "https://example.test/private/path?token=secret-value#fragment"
+            },
+        ).to_safe_dict()
+        self.assertEqual(signed["details"]["uri"], "https://example.test")
+        self.assertNotIn("secret-value", str(signed))
+
     def test_models_are_frozen(self) -> None:
         candidate = FrameCandidate.model_validate(self.fixture["frame"])
         with self.assertRaises(ValidationError):
@@ -118,7 +127,49 @@ class DomainContractTests(unittest.TestCase):
         )
         with self.assertRaises(TypeError):
             result.branch_scores[RetrievalBranch.VISUAL_DENSE] = 0.2  # type: ignore[index]
+        with self.assertRaises(TypeError):
+            dict.__setitem__(result.branch_scores, RetrievalBranch.VISUAL_DENSE, 0.2)  # type: ignore[arg-type]
+        with self.assertRaises(TypeError):
+            result.branch_scores._data = {}  # type: ignore[attr-defined]
         self.assertIn('"branch_scores"', result.model_dump_json())
+
+    def test_strict_strings_canonical_ids_and_numeric_scores_reject_ambiguous_input(self) -> None:
+        with self.assertRaises(Exception):
+            parse_canonical_frame_id(" V001_00000_015")
+        with self.assertRaises(Exception):
+            parse_canonical_frame_id("V001_00000_015 ")
+        with self.assertRaises(ValidationError):
+            FrameCandidate.model_validate({**self.fixture["frame"], "raw_score": True})
+        with self.assertRaises(ValidationError):
+            FrameCandidate.model_validate({**self.fixture["frame"], "rank": True})
+        with self.assertRaises(ValidationError):
+            FrameCandidate.model_validate({**self.fixture["frame"], "shot_id": True})
+        with self.assertRaises(ValidationError):
+            FrameCandidate.model_validate({**self.fixture["frame"], "video_id": " V001"})
+        with self.assertRaises(ValidationError):
+            ObjectConstraint(
+                label="person",
+                count_operator="gte",
+                count=True,
+            )
+
+    def test_all_shared_enum_values_are_stable(self) -> None:
+        self.assertEqual(
+            tuple(mode.value for mode in QueryMode),
+            ("kis_text", "kis_video", "trake", "vqa"),
+        )
+        self.assertEqual(
+            tuple(branch.value for branch in RetrievalBranch),
+            (
+                "visual_dense",
+                "ocr_dense",
+                "ocr_bm25",
+                "asr_dense",
+                "asr_bm25",
+                "summary_dense",
+                "summary_bm25",
+            ),
+        )
 
     def test_non_success_statuses_require_reason_and_no_candidates(self) -> None:
         with self.assertRaises(ValidationError):
@@ -178,6 +229,65 @@ class DomainContractTests(unittest.TestCase):
                 latency_ms=1,
                 status=BranchStatus.FAILED,
             )
+
+    def test_branch_result_rejects_provenance_mismatch_and_whitespace_warning(self) -> None:
+        candidate = FrameCandidate.model_validate(self.fixture["frame"])
+        base = {
+            "candidate_level": CandidateLevel.FRAME,
+            "candidates": (candidate,),
+            "requested_top_k": 10,
+            "latency_ms": 1,
+            "status": BranchStatus.SUCCESS,
+        }
+        with self.assertRaises(ValidationError):
+            BranchResult[FrameCandidate](
+                branch=RetrievalBranch.OCR_DENSE,
+                query_variant_id="q0",
+                **base,
+            )
+        with self.assertRaises(ValidationError):
+            BranchResult[FrameCandidate](
+                branch=RetrievalBranch.VISUAL_DENSE,
+                query_variant_id="q1",
+                **base,
+            )
+        with self.assertRaises(ValidationError):
+            BranchResult[FrameCandidate](
+                branch=RetrievalBranch.VISUAL_DENSE,
+                candidate_level=CandidateLevel.FRAME,
+                query_variant_id="q0",
+                candidates=(),
+                requested_top_k=10,
+                latency_ms=1,
+                status=BranchStatus.FAILED,
+                warnings=("   ",),
+            )
+
+        degraded = BranchResult[FrameCandidate](
+            branch=RetrievalBranch.VISUAL_DENSE,
+            candidate_level=CandidateLevel.FRAME,
+            query_variant_id="q0",
+            candidates=(candidate,),
+            requested_top_k=10,
+            latency_ms=1,
+            status=BranchStatus.DEGRADED,
+            warnings=("partial backend result",),
+        )
+        self.assertEqual(degraded.candidates, (candidate,))
+
+    def test_typed_branch_result_rejects_wrong_candidate_after_json_input(self) -> None:
+        payload = {
+            "branch": "asr_bm25",
+            "candidate_level": "frame",
+            "query_variant_id": "q0",
+            "candidates": [self.fixture["asr_interval"]],
+            "requested_top_k": 10,
+            "latency_ms": 1,
+            "status": "success",
+            "warnings": [],
+        }
+        with self.assertRaises(ValidationError):
+            BranchResult[FrameCandidate].model_validate(payload)
 
 
 if __name__ == "__main__":

@@ -103,7 +103,11 @@ class ElasticsearchSearchAdapter:
 
     @staticmethod
     def _validate_query(query: str, top_k: int) -> str:
-        if not isinstance(query, str) or not query.strip():
+        if (
+            not isinstance(query, str)
+            or not query.strip()
+            or query != query.strip()
+        ):
             raise InvalidQueryError("lexical query must not be empty")
         if not isinstance(top_k, int) or isinstance(top_k, bool) or top_k < 1:
             raise InvalidQueryError("top_k must be >= 1")
@@ -170,6 +174,11 @@ class ElasticsearchSearchAdapter:
             raise ContractMismatchError(
                 "Elasticsearch hit is missing _source", details={"resource": index}
             )
+        if isinstance(score, bool) or not isinstance(score, (int, float)):
+            raise ContractMismatchError(
+                "Elasticsearch hit is missing a numeric _score",
+                details={"resource": index},
+            )
         try:
             numeric_score = float(score)
         except (TypeError, ValueError) as exc:
@@ -187,6 +196,61 @@ class ElasticsearchSearchAdapter:
         if value is None or (isinstance(value, str) and not value.strip()):
             raise ContractMismatchError(
                 "Elasticsearch hit is missing a required source field",
+                details={"field": field},
+            )
+        return value
+
+    @classmethod
+    def _required_str(cls, source: Mapping[str, Any], field: str) -> str:
+        value = cls._required(source, field)
+        if not isinstance(value, str) or value != value.strip():
+            raise ContractMismatchError(
+                "Elasticsearch source field must be a canonical string",
+                details={"field": field},
+            )
+        return value
+
+    @classmethod
+    def _required_float(cls, source: Mapping[str, Any], field: str) -> float:
+        value = cls._required(source, field)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ContractMismatchError(
+                "Elasticsearch source field must be numeric",
+                details={"field": field},
+            )
+        result = float(value)
+        if not math.isfinite(result):
+            raise ContractMismatchError(
+                "Elasticsearch source field must be finite",
+                details={"field": field},
+            )
+        return result
+
+    @classmethod
+    def _required_int(cls, source: Mapping[str, Any], field: str) -> int:
+        value = cls._required(source, field)
+        if isinstance(value, bool):
+            raise ContractMismatchError(
+                "Elasticsearch source field must be an integer",
+                details={"field": field},
+            )
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+        raise ContractMismatchError(
+            "Elasticsearch source field must be an integer",
+            details={"field": field},
+        )
+
+    @staticmethod
+    def _optional_str(source: Mapping[str, Any], field: str) -> str | None:
+        value = source.get(field)
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ContractMismatchError(
+                "Elasticsearch optional source field must be text",
                 details={"field": field},
             )
         return value
@@ -209,9 +273,9 @@ class ElasticsearchSearchAdapter:
             try:
                 output.append(
                     FrameSearchHit(
-                        frame_id=str(self._required(source, "frame_id")),
-                        video_id=str(self._required(source, "video_id")),
-                        shot_id=int(self._required(source, "shot_id")),
+                        frame_id=self._required_str(source, "frame_id"),
+                        video_id=self._required_str(source, "video_id"),
+                        shot_id=self._required_int(source, "shot_id"),
                         raw_score=score,
                     )
                 )
@@ -237,11 +301,11 @@ class ElasticsearchSearchAdapter:
             try:
                 output.append(
                     ASRSearchHit(
-                        video_id=str(self._required(source, "video_id")),
-                        interval_id=str(self._required(source, "interval_id")),
-                        start_time_sec=float(self._required(source, "start_time")),
-                        end_time_sec=float(self._required(source, "end_time")),
-                        text=(None if source.get("cleaned_text") is None else str(source["cleaned_text"])),
+                        video_id=self._required_str(source, "video_id"),
+                        interval_id=self._required_str(source, "interval_id"),
+                        start_time_sec=self._required_float(source, "start_time"),
+                        end_time_sec=self._required_float(source, "end_time"),
+                        text=self._optional_str(source, "cleaned_text"),
                         raw_score=score,
                     )
                 )
@@ -267,12 +331,8 @@ class ElasticsearchSearchAdapter:
             try:
                 output.append(
                     VideoSearchHit(
-                        video_id=str(self._required(source, "video_id")),
-                        summary=(
-                            None
-                            if source.get("summary") is None
-                            else str(source["summary"])
-                        ),
+                        video_id=self._required_str(source, "video_id"),
+                        summary=self._optional_str(source, "summary"),
                         raw_score=score,
                     )
                 )
@@ -346,6 +406,7 @@ class ElasticsearchSearchAdapter:
         if any(
             not isinstance(field, str)
             or not field.strip()
+            or field != field.strip()
             or value is None
             for field, value in filters.items()
         ):
@@ -377,8 +438,11 @@ class ElasticsearchSearchAdapter:
     def _validate_lookup(source_fields: Sequence[str], limit: int) -> None:
         if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
             raise InvalidQueryError("limit must be >= 1")
-        if not source_fields or any(
-            not isinstance(field, str) or not field.strip() for field in source_fields
+        if isinstance(source_fields, (str, bytes)) or not source_fields or any(
+            not isinstance(field, str)
+            or not field.strip()
+            or field != field.strip()
+            for field in source_fields
         ):
             raise InvalidQueryError(
                 "source_fields must contain non-empty field names"

@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import Field, field_validator
 
-from .domain.base import FiniteFloat, NonEmptyStr, StrictFrozenModel
+from .domain.base import FiniteFloat, NonEmptyStr, StrictFrozenModel, StrictIntValue
 
 
 _SQL_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -22,7 +22,7 @@ class MilvusResourceConfig(StrictFrozenModel):
     ocr_collection: NonEmptyStr = "ocr_features"
     asr_collection: NonEmptyStr = "asr_features"
     summary_collection: NonEmptyStr = "summary_features"
-    search_ef: int = Field(default=128, ge=1)
+    search_ef: StrictIntValue = Field(default=128, ge=1)
     timeout_sec: FiniteFloat = Field(default=5.0, gt=0.0)
     norm_tolerance: FiniteFloat = Field(default=1e-3, gt=0.0)
 
@@ -41,7 +41,7 @@ class SQLiteResourceConfig(StrictFrozenModel):
     path: Path = Path("data/metadata.db")
     metadata_table: NonEmptyStr = "metadata"
     objects_table: NonEmptyStr = "objects"
-    batch_size: int = Field(default=500, ge=1, le=900)
+    batch_size: StrictIntValue = Field(default=500, ge=1, le=900)
     timeout_sec: FiniteFloat = Field(default=5.0, gt=0.0)
 
     @field_validator("metadata_table", "objects_table")

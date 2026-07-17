@@ -6,14 +6,14 @@ from typing import Annotated
 
 from pydantic import Field, model_validator
 
-from online.domain.base import FiniteFloat, NonEmptyStr, StrictFrozenModel
+from online.domain.base import FiniteFloat, NonEmptyStr, StrictFrozenModel, StrictIntValue
 from online.domain.candidates import ObjectDetection
 
 
 class FrameSearchHit(StrictFrozenModel):
     frame_id: NonEmptyStr
     video_id: NonEmptyStr
-    shot_id: int | None = Field(default=None, ge=0)
+    shot_id: StrictIntValue | None = Field(default=None, ge=0)
     raw_score: FiniteFloat
 
 
@@ -41,7 +41,7 @@ class VideoSearchHit(StrictFrozenModel):
 class FrameMetadata(StrictFrozenModel):
     frame_id: NonEmptyStr
     video_id: NonEmptyStr
-    shot_id: int = Field(ge=0)
+    shot_id: StrictIntValue = Field(ge=0)
     timestamp_sec: Annotated[FiniteFloat, Field(ge=0.0)]
 
 

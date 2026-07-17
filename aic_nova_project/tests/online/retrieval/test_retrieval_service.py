@@ -131,6 +131,18 @@ class WrongResultRunner(ProbeRunner):
         )
 
 
+class BlockingRunner(ProbeRunner):
+    def __init__(self, branch: RetrievalBranch) -> None:
+        super().__init__(branch)
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def retrieve_variant(self, variant: TextQueryVariant, *, top_k: int):
+        self.entered.set()
+        self.release.wait(timeout=2.0)
+        return super().retrieve_variant(variant, top_k=top_k)
+
+
 class RetrievalServiceTests(unittest.TestCase):
     def test_all_seven_branches_return_canonical_results_and_diagnostics(self) -> None:
         fixture = build_integration_fixture()
@@ -455,6 +467,63 @@ class RetrievalServiceTests(unittest.TestCase):
             )
         with self.assertRaises(ValueError):
             RetrievalInvocationConfig(top_k=0, timeout_sec=1.0)
+        with self.assertRaises(ValueError):
+            RetrievalInvocationConfig(top_k=True, timeout_sec=1.0)
+
+    def test_service_is_reusable_across_separate_event_loops(self) -> None:
+        visual = ProbeRunner(RetrievalBranch.VISUAL_DENSE, delay_sec=0.02)
+        ocr = ProbeRunner(RetrievalBranch.OCR_BM25, delay_sec=0.02)
+        query = KISQueryBuilder().build(
+            "query",
+            mode=QueryMode.KIS_TEXT,
+            enabled_branches=(RetrievalBranch.VISUAL_DENSE, RetrievalBranch.OCR_BM25),
+        )
+        service = RetrievalService(
+            branches={
+                RetrievalBranch.VISUAL_DENSE: visual,
+                RetrievalBranch.OCR_BM25: ocr,
+            },
+            invocation_configs=make_configs(query),
+            max_workers=1,
+        )
+        try:
+            first = asyncio.run(service.retrieve(query))
+            second = asyncio.run(service.retrieve(query))
+        finally:
+            service.close(wait=True)
+        self.assertTrue(all(result.status is BranchStatus.SUCCESS for result in first))
+        self.assertTrue(all(result.status is BranchStatus.SUCCESS for result in second))
+
+    def test_close_is_rejected_during_active_execution(self) -> None:
+        visual = BlockingRunner(RetrievalBranch.VISUAL_DENSE)
+        query = KISQueryBuilder().build(
+            "query",
+            mode=QueryMode.KIS_TEXT,
+            enabled_branches=(RetrievalBranch.VISUAL_DENSE,),
+        )
+        service = RetrievalService(
+            branches={RetrievalBranch.VISUAL_DENSE: visual},
+            invocation_configs=make_configs(query),
+            max_workers=1,
+        )
+        errors: list[BaseException] = []
+
+        def execute() -> None:
+            try:
+                asyncio.run(service.retrieve(query))
+            except BaseException as exc:  # pragma: no cover - assertion below
+                errors.append(exc)
+
+        thread = threading.Thread(target=execute)
+        thread.start()
+        self.assertTrue(visual.entered.wait(timeout=1.0))
+        with self.assertRaises(RuntimeError):
+            service.close()
+        visual.release.set()
+        thread.join(timeout=2.0)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        service.close(wait=True)
 
 
 if __name__ == "__main__":

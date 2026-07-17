@@ -8,15 +8,21 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Annotated, Any
 
-from pydantic import AfterValidator, Field
+from pydantic import AfterValidator, Field, PlainSerializer
 
 from online.config import OnlineDataConfig
-from online.domain.base import NonEmptyStr, StrictFrozenModel, freeze_mapping
+from online.domain.base import (
+    NonEmptyStr,
+    StrictFrozenModel,
+    StrictIntValue,
+    freeze_mapping,
+    serialize_mapping,
+)
 from online.domain.errors import DataInfrastructureError, ErrorCode
 from online.domain.identifiers import validate_canonical_frame_id
 
 
-VALIDATOR_VERSION = "2"
+VALIDATOR_VERSION = "3"
 
 
 class ValidationStatus(str, Enum):
@@ -43,13 +49,19 @@ class ContractCheck(StrictFrozenModel):
 class ContractValidationReport(StrictFrozenModel):
     status: ValidationStatus
     checks: tuple[ContractCheck, ...]
-    dimensions: Annotated[dict[str, int], AfterValidator(freeze_mapping)] = Field(
+    dimensions: Annotated[
+        Mapping[str, int],
+        AfterValidator(freeze_mapping),
+        PlainSerializer(serialize_mapping, return_type=dict),
+    ] = Field(
         default_factory=dict
     )
     resources_checked: tuple[NonEmptyStr, ...] = ()
     checks_skipped: tuple[NonEmptyStr, ...] = ()
     sample_counts: Annotated[
-        dict[str, Annotated[int, Field(ge=0)]], AfterValidator(freeze_mapping)
+        Mapping[str, Annotated[StrictIntValue, Field(ge=0)]],
+        AfterValidator(freeze_mapping),
+        PlainSerializer(serialize_mapping, return_type=dict),
     ] = Field(default_factory=dict)
     generated_at_utc: NonEmptyStr = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
@@ -248,6 +260,48 @@ class OfflineContractValidator:
                 code=getattr(exc, "code", ErrorCode.RESOURCE_UNAVAILABLE),
             )
 
+    def _guard_resource(
+        self,
+        *,
+        prefix: str,
+        availability_key: str,
+        required: bool,
+        child_checks: Sequence[str],
+        function: Callable[[], None],
+    ) -> None:
+        """Run one resource audit and explicitly account for unfinished checks."""
+
+        try:
+            function()
+        except Exception as exc:
+            self._available[availability_key] = False
+            self._record(
+                prefix,
+                ok=False,
+                required=required,
+                success="resource validation passed",
+                failure=self._safe_exception(exc),
+                code=getattr(exc, "code", ErrorCode.RESOURCE_UNAVAILABLE),
+            )
+            self._skip_resource_checks(
+                prefix,
+                child_checks,
+                required=required,
+                reason="resource validation stopped before this check could run",
+            )
+
+    def _ensure_check_names(
+        self,
+        checks: Sequence[tuple[str, bool]],
+        *,
+        reason: str,
+    ) -> None:
+        existing = {check.name for check in self._checks}
+        for name, required in checks:
+            if name not in existing:
+                self._not_run(name, required=required, reason=reason)
+                existing.add(name)
+
     @staticmethod
     def _mapping_properties(mapping: Mapping[str, Any]) -> Mapping[str, Any]:
         properties = mapping.get("properties", {})
@@ -269,8 +323,12 @@ class OfflineContractValidator:
         required: bool,
         reason: str,
     ) -> None:
+        existing = {check.name for check in self._checks}
         for name in names:
-            self._not_run(f"{prefix}.{name}", required=required, reason=reason)
+            full_name = f"{prefix}.{name}"
+            if full_name not in existing:
+                self._not_run(full_name, required=required, reason=reason)
+                existing.add(full_name)
 
     def _validate_milvus_resource(
         self,
@@ -832,6 +890,11 @@ class OfflineContractValidator:
         for logical_name, resource, required in resources:
             name = f"encoder.{resource}"
             if not self._available.get(f"milvus:{logical_name}"):
+                self._not_run(
+                    name,
+                    required=required,
+                    reason="collection is unavailable",
+                )
                 continue
             if resource not in self._dimensions:
                 self._not_run(
@@ -896,10 +959,20 @@ class OfflineContractValidator:
         for logical_name, (fields, required) in self.MILVUS_REQUIREMENTS.items():
             resource = milvus_resources[logical_name]
             self._resources_checked.append(f"milvus:{resource}")
-            self._guard(
-                f"milvus.{resource}",
-                required,
-                lambda logical_name=logical_name, resource=resource, fields=fields, required=required: self._validate_milvus_resource(
+            self._guard_resource(
+                prefix=f"milvus.{resource}",
+                availability_key=f"milvus:{logical_name}",
+                required=required,
+                child_checks=(
+                    "exists",
+                    "fields",
+                    "types",
+                    "dimension",
+                    "index",
+                    "non_empty",
+                    "vector_norm",
+                ),
+                function=lambda logical_name=logical_name, resource=resource, fields=fields, required=required: self._validate_milvus_resource(
                     logical_name, resource, fields, required
                 ),
             )
@@ -912,10 +985,12 @@ class OfflineContractValidator:
         for logical_name, (fields, required) in self.ES_REQUIREMENTS.items():
             resource = es_resources[logical_name]
             self._resources_checked.append(f"elasticsearch:{resource}")
-            self._guard(
-                f"elasticsearch.{resource}",
-                required,
-                lambda logical_name=logical_name, resource=resource, fields=fields, required=required: self._validate_es_resource(
+            self._guard_resource(
+                prefix=f"elasticsearch.{resource}",
+                availability_key=f"es:{logical_name}",
+                required=required,
+                child_checks=("exists", "fields", "types", "analyzer", "non_empty"),
+                function=lambda logical_name=logical_name, resource=resource, fields=fields, required=required: self._validate_es_resource(
                     logical_name, resource, fields, required
                 ),
             )
@@ -928,19 +1003,48 @@ class OfflineContractValidator:
         for logical_name, (fields, required) in self.SQLITE_REQUIREMENTS.items():
             table = sqlite_resources[logical_name]
             self._resources_checked.append(f"sqlite:{table}")
-            self._guard(
-                f"sqlite.{table}",
-                required,
-                lambda logical_name=logical_name, table=table, fields=fields, required=required: self._validate_sqlite_resource(
+            self._guard_resource(
+                prefix=f"sqlite.{table}",
+                availability_key=f"sqlite:{logical_name}",
+                required=required,
+                child_checks=("exists", "fields", "types", "non_empty"),
+                function=lambda logical_name=logical_name, table=table, fields=fields, required=required: self._validate_sqlite_resource(
                     logical_name, table, fields, required
                 ),
             )
 
         self._guard("canonical_id", True, self._validate_canonical_ids)
+        self._ensure_check_names(
+            (
+                ("canonical_id.milvus.visual", True),
+                ("canonical_id.milvus.ocr", False),
+                ("canonical_id.elasticsearch.ocr", False),
+                ("canonical_id.sqlite.metadata", True),
+                ("canonical_id.sqlite.objects", False),
+            ),
+            reason="canonical identifier validation did not complete",
+        )
         self._guard("join.frame", True, self._validate_frame_joins)
+        self._ensure_check_names(
+            (
+                ("join.visual_to_metadata", True),
+                ("join.ocr_dense_to_metadata", False),
+                ("join.ocr_lexical_to_metadata", False),
+                ("join.ocr_dense_to_lexical", False),
+            ),
+            reason="frame JOIN validation did not complete",
+        )
         self._guard("join.asr", False, self._validate_asr_join)
         self._guard("join.summary", False, self._validate_summary_join)
         self._guard("join.objects", False, self._validate_object_join)
+        self._ensure_check_names(
+            (
+                ("join.asr_interval", False),
+                ("join.summary_video", False),
+                ("join.objects_to_metadata", False),
+            ),
+            reason="JOIN validation did not complete",
+        )
         self._validate_encoders()
 
         if any(
