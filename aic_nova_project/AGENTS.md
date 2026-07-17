@@ -1,47 +1,65 @@
 # AGENTS.md
 
-## 1. Project identity
+## 1. Project identity and current scope
 
 This repository contains the AIC Nova multimedia video retrieval system for the
 HCM AI Challenge.
 
-The system is divided into two major phases:
+The system has two phases:
 
 ```text
 OFFLINE PHASE
 Raw videos
-→ preprocessing
-→ feature extraction
-→ multi-database indexing
+→ shot/keyframe extraction
+→ visual, OCR, ASR, summary and object features
+→ Milvus + Elasticsearch + SQLite indexing
 
 ONLINE PHASE
 User query
 → query construction
-→ retrieval
-→ candidate conversion
-→ hydration
-→ normalization
-→ fusion/reranking
+→ retrieval branches
+→ candidate conversion/hydration
+→ mapping, normalization and fusion
+→ deduplication
 → mode-specific output
 ```
 
-The system supports four principal query modes:
+The repository currently contains both Offline source and the beginning of the
+Online source under `online/`.
 
-- Textual Known-Item Search (`KIS_TEXT`)
-- Video Known-Item Search (`v-KIS`; working/legacy enum `KIS_VISUAL`)
-- Temporal Retrieval and Alignment of Key Events (`TRAKE`)
-- Visual Question Answering (`VQA`)
+This file is shared by all three Online developers. The three roles from
+`docs/11-ONLINE-TEAM-TASK-ASSIGNMENT.md` are:
 
-The current development task focuses on the Online Phase, but every Online
-implementation decision must respect the actual outputs and contracts of the
-Offline Phase.
+- **Person A — Data & Infrastructure**.
+- **Person B — Query & Retrieval**.
+- **Person C — Ranking, Orchestration & API**.
+
+At the start of each task, identify which role owns the requested component.
+Work inside that boundary unless the user explicitly authorizes a cross-layer
+change. A defect in another layer must be reported with evidence and handled in
+a separate focused change rather than hidden by a downstream workaround.
+
+Supported modes:
+
+- Textual Known-Item Search (`KIS_TEXT`).
+- Video Known-Item Search (`v-KIS`; current internal enum `KIS_VIDEO`).
+- Temporal Retrieval and Alignment of Key Events (`TRAKE`).
+- Visual Question Answering (`VQA`).
+
+`v-KIS` is not image-to-image retrieval. The organizer displays a clip, the
+contestant watches it and manually writes a text description, then the system
+reuses the same text-to-keyframe pipeline as Textual KIS.
+
+Older documents may still contain the legacy working label `KIS_VISUAL`.
+New internal Online code must use the currently merged `QueryMode.KIS_VIDEO`
+until the team explicitly changes the internal contract. The exact public API
+mode names remain open under OQ-002.
 
 ---
 
 ## 2. Mandatory reading order
 
-Before analyzing, planning, or modifying source code, read the following files
-in this exact order:
+Before analyzing, planning or modifying source code, read these files in order:
 
 1. `AGENTS.md`
 2. `docs/00-READ-ME-FIRST.md`
@@ -54,134 +72,111 @@ in this exact order:
 9. `docs/07-OUT-OF-SCOPE.md`
 10. `docs/08-OPEN-QUESTIONS.md`
 11. `docs/09-IMPLEMENTATION-PLAN.md`
+12. `docs/10-OFFLINE-CODE-ISSUES.md`
+13. `docs/11-ONLINE-TEAM-TASK-ASSIGNMENT.md`
 
-Do not begin implementation before reading all of these files.
+`docs/10-OFFLINE-CODE-ISSUES.md` is an audit snapshot. Re-verify an issue against
+the checked-out code before claiming that it is still present.
+
+`docs/11-ONLINE-TEAM-TASK-ASSIGNMENT.md` defines team boundaries and the approved
+internal Online model/port conventions. It does not silently close algorithmic
+questions listed in `docs/08-OPEN-QUESTIONS.md`.
+
+Do not begin a coding milestone before reading the documents relevant to that
+milestone and inspecting its source dependencies.
 
 ---
 
 ## 3. Source-of-truth precedence
 
-When information differs between sources, use the following precedence:
+When information differs, use this precedence:
 
-1. The user’s latest explicit instruction.
-2. `docs/06-DESIGN-DECISIONS.md`.
-3. `docs/04-OFFLINE-ONLINE-CONTRACT.md`.
-4. `docs/03-DATABASE-SCHEMA-CURRENT.md`.
-5. Current source code on the checked-out branch.
-6. Module-level README files.
-7. Research papers.
-8. Historical discussions or old design notes.
+1. The user's latest explicit instruction.
+2. `docs/06-DESIGN-DECISIONS.md` for approved architecture/behavior.
+3. `docs/04-OFFLINE-ONLINE-CONTRACT.md` for the phase boundary.
+4. `docs/03-DATABASE-SCHEMA-CURRENT.md` for database resources and fields.
+5. `docs/11-ONLINE-TEAM-TASK-ASSIGNMENT.md` for approved team boundaries and
+   internal model/port conventions.
+6. `docs/05-ONLINE-PIPELINE-TARGET.md` for target Online data flow.
+7. Current source code for what is implemented now.
+8. `docs/09-IMPLEMENTATION-PLAN.md` for milestone order.
+9. Module-level README files.
+10. `docs/10-OFFLINE-CODE-ISSUES.md`, historical discussions and old notes.
 
-The source code describes what is currently implemented.
+The explicit internal enum clarification in Section 1 of this file supersedes
+legacy `KIS_VISUAL` wording in older documents; it does not finalize the public
+API schema.
 
-The design documents describe what the system is intended to implement.
+If source and intended design disagree:
 
-If source code and design documents disagree:
-
-- Do not silently choose one.
-- Do not immediately change the code.
-- Report the mismatch as `CONTRACT_MISMATCH`.
-- Identify the files, symbols, schemas, and affected components.
-- Wait for user approval before changing the contract or architecture.
+- Do not silently choose or add a compatibility workaround.
+- Report `CONTRACT_MISMATCH`.
+- Identify the files, symbols, schema and affected milestone.
+- Propose the smallest safe correction.
+- Do not change architecture or data contracts without user approval.
 
 ---
 
 ## 4. Required evidence labels
 
-Every technical conclusion in an analysis report must use one of these labels:
+Use these labels in technical analysis:
 
-- `CONFIRMED_CODE`
-  - Verified directly from current source code.
-- `CONFIRMED_DESIGN`
-  - Explicitly approved in the design documents.
-- `NEED_RUNTIME_VERIFICATION`
-  - Requires a running database, generated artifact, model, or external service.
-- `OPEN_QUESTION`
-  - Not decided yet.
-- `OPTIONAL`
-  - Supported or planned, but not required for the baseline.
-- `OUT_OF_SCOPE`
-  - Not part of the current implementation stage.
-- `CONTRACT_MISMATCH`
-  - Source code, schema, or documentation do not agree.
+- `CONFIRMED_CODE`: verified directly in current source or execution.
+- `CONFIRMED_DESIGN`: explicitly approved in design documents.
+- `NEED_RUNTIME_VERIFICATION`: needs a real database, model, artifact or service.
+- `OPEN_QUESTION`: not decided by the team yet.
+- `OPTIONAL`: planned but not required for baseline.
+- `OUT_OF_SCOPE`: outside the current milestone.
+- `CONTRACT_MISMATCH`: code/schema/documentation do not agree.
 
-Never present an assumption as a confirmed fact.
+Never present an assumption, mock-only result or unexecuted path as confirmed.
 
 ---
 
-## 5. Default operating mode: understanding only
+## 5. Authorization and safe working behavior
 
-Until the user explicitly states that implementation may begin, operate in
-read-only analysis mode.
+For analysis, review, diagnosis or status requests, remain read-only unless the
+user explicitly requests an implementation or file change.
 
-In this mode, do not:
+Read-only work may include:
 
-- Modify files.
-- Create source code.
-- Refactor.
-- Install dependencies.
-- Download model checkpoints.
-- Run GPU models.
-- Start or reset databases.
-- Execute destructive CLI flags.
-- Delete generated artifacts.
-- Change schemas.
-- Change models.
-- Rename collections, indexes, tables, or fields.
-- Run `git commit`, `git push`, `git reset`, `git rebase`, or branch deletion.
-- Apply formatting changes unrelated to the analysis.
+- Reading source, tests, docs and configuration.
+- Searching symbols and tracing data flow.
+- Running non-destructive tests.
+- Comparing adapters with Offline schemas.
+- Proposing runtime checks.
 
-You may:
+Do not without explicit authorization:
 
-- Read files.
-- Search symbols and references.
-- Inspect tests.
-- Inspect Docker and configuration files.
-- Trace data flow.
-- Compare code with documentation.
-- Propose non-destructive runtime checks.
-- Report missing or inconsistent components.
+- Change source or schemas.
+- Install dependencies or download checkpoints.
+- Start/reset databases or run destructive flags.
+- Delete artifacts.
+- Run `git commit`, `git push`, `git reset`, `git rebase` or delete branches.
+- Modify another person's owned layer as an unrelated refactor.
+
+When implementation is authorized, make the smallest focused change for one
+milestone, add tests and preserve unrelated user changes.
 
 ---
 
-## 6. Offline Pipeline that must be understood
+## 6. Offline Pipeline contract
 
-The logical Offline Pipeline contains:
+The logical Offline Pipeline is:
 
-1. Video processing, shot detection, and keyframe extraction.
+1. Shot detection and keyframe extraction.
 2. PE-Core visual embedding.
-3. ASR transcription, transcript cleaning, and video summarization.
+3. ASR transcription, cleaning and video summarization.
 4. OCR extraction.
 5. Object detection.
 6. Vietnamese semantic text embedding.
 7. Multi-database indexing.
 
-For every Offline module, identify and understand:
+Online business logic reads the databases, not intermediate Offline JSON or
+Parquet. Intermediate artifacts may only be read by approved validation,
+migration, test or debugging tools.
 
-- Directory.
-- Entry point.
-- Main classes and functions.
-- Configuration.
-- Input artifacts.
-- Output artifacts.
-- Output schema.
-- Models and libraries.
-- Downstream consumer.
-- Database destination.
-- Error handling.
-- Resume or overwrite behavior.
-- Existing tests.
-
-Do not rely only on README descriptions. Verify important behavior in source
-code.
-
----
-
-## 7. Current database contract
-
-The current architecture uses three database systems.
-
-### 7.1 Milvus
+### Milvus
 
 Expected collections:
 
@@ -192,28 +187,21 @@ asr_features
 summary_features
 ```
 
-Roles:
-
-- `visual_features`: frame-level visual embeddings.
-- `ocr_features`: frame-level OCR semantic embeddings.
-- `asr_features`: ASR interval-level semantic embeddings.
-- `summary_features`: video-level summary semantic embeddings.
-
-Expected vector behavior:
+Expected behavior:
 
 ```text
-index_type = HNSW
-metric_type = IP
+index = HNSW
+metric = IP
 search ef = 128
 stored vectors = L2-normalized
 query vectors = L2-normalized
 ```
 
-Do not hardcode visual embedding dimensions.
+Do not hardcode visual or Vietnamese text dimensions. Read the actual collection
+schema and verify the Online encoder output. A value such as 768 may be common
+for the current text model, but it is not a safe hardcoded contract.
 
-Do not expose or use Milvus internal `pk` as a cross-database identifier.
-
-### 7.2 Elasticsearch
+### Elasticsearch
 
 Expected indexes:
 
@@ -223,60 +211,36 @@ asr_transcripts
 video_summaries
 ```
 
-Roles:
+Text fields use `vietnamese_analyzer` with ICU tokenization/folding and lowercase.
 
-- `ocr_texts`: frame-level OCR lexical search.
-- `asr_transcripts`: ASR interval-level lexical search.
-- `video_summaries`: video-level lexical search.
+### SQLite
 
-Expected analyzer:
-
-```text
-vietnamese_analyzer
-├── icu_tokenizer
-├── icu_folding
-└── lowercase
-```
-
-### 7.3 SQLite
-
-Expected database:
+Expected database and tables:
 
 ```text
 data/metadata.db
-```
-
-Expected tables:
-
-```text
 metadata
 objects
 ```
 
-Roles:
+Online access must be read-only.
 
-- `metadata`: frame, video, shot, and timestamp mapping.
-- `objects`: object label, confidence, and bounding-box detections.
-
-The Online Pipeline should access this database as read-only.
+All URIs, paths and resource names must remain configurable.
 
 ---
 
-## 8. Identifier rules
+## 7. Identifier and JOIN rules
 
-### 8.1 Video key
-
-```text
-video_id
-```
-
-### 8.2 Keyframe key
+Canonical keys:
 
 ```text
-frame_id
+Video:        video_id
+Keyframe:     frame_id
+ASR interval: video_id + interval_id
+Summary:      video_id
 ```
 
-Target canonical format:
+Target `frame_id` format:
 
 ```text
 {video_id}_{shot_id:05d}_{position_3_digits}
@@ -288,7 +252,7 @@ Example:
 V001_00000_015
 ```
 
-`frame_id` must match across:
+The same `frame_id` must JOIN across:
 
 - Milvus `visual_features`.
 - Milvus `ocr_features`.
@@ -296,261 +260,40 @@ V001_00000_015
 - SQLite `metadata`.
 - SQLite `objects`.
 
-A local filename stem such as:
+Online must not rewrite or guess `frame_id`. A shared but malformed ID is still
+a contract violation even if equality JOIN succeeds.
 
-```text
-shot_00000_pos_015
-```
+Do not use Milvus internal `pk` as a domain or cross-database identifier.
 
-must not remain as the final cross-database key.
-
-Before Online integration is considered valid, inspect real records and verify
-the equality of `frame_id` across databases.
-
-### 8.3 ASR interval key
-
-```text
-video_id + interval_id
-```
-
-Used across:
-
-- Milvus `asr_features`.
-- Elasticsearch `asr_transcripts`.
-
-Do not treat an ASR interval as a keyframe.
-
-### 8.4 Summary key
-
-```text
-video_id
-```
-
-Used across:
-
-- Milvus `summary_features`.
-- Elasticsearch `video_summaries`.
+`interval_id` is only unique within `video_id`. Do not treat an ASR interval as
+a frame.
 
 ---
 
-## 9. Candidate levels
+## 8. Online domain and port boundary
 
-The Online Pipeline must preserve three result levels.
-
-### 9.1 Frame-level candidate
-
-Contains:
+Person A owns the merged infrastructure boundary under:
 
 ```text
-frame_id
-video_id
-shot_id
-score
+online/domain/
+online/ports/
+online/adapters/
+online/config.py
+online/lifecycle.py
+online/testing/
 ```
 
-Sources include:
+Persons B and C must consume ports rather than database SDKs directly.
 
-- Visual semantic search.
-- OCR semantic search.
-- OCR lexical search.
-- Video KIS visual-semantic text retrieval.
-- Stable Diffusion image search.
-- QUEST external image search.
+Three retrieval result levels must remain separate:
 
-### 9.2 ASR interval-level candidate
-
-Contains:
+### Frame level
 
 ```text
-video_id
-interval_id
-start_time_sec
-end_time_sec
-score
+FrameSearchHit
+→ SQLite hydration
+→ FrameCandidate
 ```
-
-Sources include:
-
-- ASR semantic search.
-- ASR lexical search.
-
-It must be mapped to keyframes using SQLite timestamps before frame-level
-fusion.
-
-### 9.3 Video-level candidate
-
-Contains:
-
-```text
-video_id
-score
-```
-
-Sources include:
-
-- Summary semantic search.
-- Summary lexical search.
-
-It is supporting evidence, not direct frame evidence.
-
----
-
-## 10. Online Pipeline decisions that must not be changed
-
-### 10.1 Textual KIS
-
-Baseline branches run in parallel:
-
-- Visual semantic search.
-- OCR lexical search.
-- OCR semantic search.
-- ASR lexical search.
-- ASR semantic search.
-- Summary lexical search.
-- Summary semantic search.
-
-Query expansion baseline:
-
-```text
-original query
-+ paraphrase 1
-+ paraphrase 2
-```
-
-Each query variant must be retrieved independently unless another strategy is
-explicitly approved.
-
-### 10.2 Summary behavior
-
-Summary search must not be used as a hard prefilter.
-
-A wrong or incomplete summary must never remove a potentially correct video
-before frame-level retrieval.
-
-Summary results are video-level support signals used during late fusion.
-
-Summary scores may boost existing frame candidates belonging to the same video.
-
-Summary search must not create arbitrary frame candidates by itself.
-
-### 10.3 Object constraints
-
-Baseline object constraints come from explicit UI controls.
-
-The user may select:
-
-- Object label.
-- Count.
-- Count operator.
-- Position.
-- Minimum confidence.
-- Hard filter or soft boost.
-
-Do not require an LLM to infer object constraints from the query in the
-baseline.
-
-Object filtering should be applied to the retrieved candidate set rather than
-performing an unnecessary full-database scan.
-
-### 10.4 Video KIS (`v-KIS`)
-
-Baseline:
-
-```text
-organizer plays a video clip on the shared screen
-→ contestant watches the clip
-→ contestant manually writes a textual description
-→ reuse the same text-to-keyframe retrieval pipeline as Textual KIS
-→ ranked keyframes
-```
-
-The baseline system does not receive a video file, frame, or query image from
-the organizer for `v-KIS`. The distinction from Textual KIS is the origin of
-the textual query, not the retrieval mechanism:
-
-- Textual KIS: use the textual description supplied by the task.
-- Video KIS: the contestant observes the displayed clip and authors the text.
-
-Keep `KIS_VISUAL` only as the current working/legacy enum until the public API
-schema is explicitly finalized. Do not interpret it as image-to-image search.
-
-### 10.5 TRAKE
-
-Baseline TRAKE uses DANTE with visual-semantic event scores only.
-
-```text
-ordered events
-→ PE-Core text encoder
-→ event-keyframe similarity
-→ DANTE per video
-→ backtracking
-→ ordered frame sequence
-```
-
-Do not automatically fuse OCR, ASR, summary, Stable Diffusion, or QUEST into
-the DANTE similarity matrix.
-
-DANTE must never transition between different videos.
-
-### 10.6 VQA
-
-Baseline:
-
-```text
-question
-→ retrieval-oriented rewrite
-→ multimodal retrieval
-→ evidence collection
-→ VLM
-→ text answer
-```
-
-The VLM must answer from retrieved evidence rather than processing the entire
-dataset.
-
-### 10.7 Optional branches
-
-The following are optional and must not block the baseline:
-
-- Stable Diffusion.
-- QUEST query rewrite.
-- QUEST external image retrieval.
-
----
-
-## 11. Score rules
-
-Raw scores from different branches are not directly comparable.
-
-Examples:
-
-- Milvus Inner Product.
-- Elasticsearch BM25.
-- Summary video score.
-- Object soft boost.
-- DANTE sequence score.
-
-Required order:
-
-```text
-retrieve
-→ normalize each branch independently
-→ fuse normalized scores
-```
-
-Do not directly add raw Milvus and Elasticsearch scores.
-
-The exact normalization method, fusion method, and weights remain open until
-explicitly approved.
-
-Every final candidate must retain branch provenance and individual branch
-scores for debugging and weight tuning.
-
----
-
-## 12. Hydration and grouping rules
-
-Frame candidates must be hydrated through SQLite `metadata`.
 
 Required hydrated fields:
 
@@ -561,152 +304,405 @@ shot_id
 timestamp_sec
 ```
 
-Baseline deduplication:
+### ASR interval level
 
-1. Group by `video_id + shot_id`.
-2. Keep the highest-scoring frame as representative.
-3. Store other frames in the same shot as `near_frames`.
-4. Use a temporal fallback only when shot information is unavailable.
+```text
+ASRSearchHit
+→ ASRIntervalCandidate
+```
 
-Do not assume `image_path` exists in SQLite. Verify or define a separate path
-resolver.
+Person B returns interval candidates. Person C owns interval-to-frame mapping
+after OQ-005 is approved.
 
----
+### Video level
 
-## 13. Required comprehension gates
+```text
+VideoSearchHit
+→ VideoCandidate
+```
 
-Before implementation, complete these gates.
+Summary results remain video-level support signals. They do not create frames or
+hard-prefilter videos.
 
-### Gate A — Documentation understanding
+Each retrieval branch/query variant returns a homogeneous `BranchResult` and
+preserves:
 
-Explain:
+- Branch.
+- Query variant ID and text.
+- Rank.
+- Raw score.
+- Backend/resource provenance.
+- Empty-success versus failure distinction.
 
-- Project purpose.
-- Offline and Online responsibilities.
-- Query modes.
-- Database roles.
-- Design invariants.
-- Optional and out-of-scope components.
-
-### Gate B — Repository mapping
-
-Identify:
-
-- Directories.
-- Entry points.
-- Classes and functions.
-- Config.
-- CLI.
-- Docker.
-- Tests.
-- Generated artifacts.
-- Implemented, partial, scaffolded, and missing modules.
-
-### Gate C — Offline trace
-
-Trace one video through all Offline modules and into all databases.
-
-### Gate D — Database contract audit
-
-Verify:
-
-- Four Milvus collections.
-- Three Elasticsearch indexes.
-- Two SQLite tables.
-- OCR semantic loader/indexing.
-- `frame_id` normalization.
-- Vector dimension and normalization.
-- Reset and rollback behavior.
-- Cross-database JOIN keys.
-
-### Gate E — Online understanding
-
-Explain input, processing, branch output, mapping, hydration, filtering,
-normalization, fusion, grouping, and final output for all four modes.
-
-Implementation may begin only after the user explicitly approves the
-comprehension reports.
+Database SDK objects must not escape adapters.
 
 ---
 
-## 14. Open-question policy
+## 9. Team roles and ownership
 
-Read `docs/08-OPEN-QUESTIONS.md`.
+The split is by stable system layer, not by query mode. Do not create separate
+database/retrieval/ranking stacks for t-KIS, v-KIS, TRAKE and VQA.
+
+### 9.1 Person A — Data & Infrastructure
+
+Person A owns:
+
+```text
+online/domain/
+online/ports/
+online/adapters/
+online/config.py
+online/lifecycle.py
+online/testing/ infrastructure fakes and fixtures
+online/validate_contract.py
+tests/online/contract/
+tests/online/adapters/
+```
+
+Milestones:
+
+1. `A0`: shared domain models, enums, errors and ports.
+2. `A1`: configurable resources and connection lifecycle.
+3. `A2`: read-only SQLite metadata/object adapter.
+4. `A3`: Milvus adapter for all four collections.
+5. `A4`: Elasticsearch adapter for all three indexes.
+6. `A5`: read-only Offline contract validator.
+7. `A6`: protocol-conformant fakes and integration fixture.
+8. `A7`: runtime integration, health and performance support.
+
+Person A must:
+
+- Keep domain/ports independent of database SDK objects.
+- Preserve canonical IDs and candidate levels.
+- Validate schema, dimension, vector norm and real cross-database JOINs.
+- Keep SQLite read-only.
+- Distinguish empty results, contract mismatches, timeouts and unavailable backends.
+- Make endpoints, paths, resource names and search parameters configurable.
+
+Person A does not own query expansion, encoders, retrieval orchestration,
+ASR mapping, fusion, deduplication or public API behavior.
+
+### 9.2 Person B — Query & Retrieval
+
+Person B primarily owns:
+
+```text
+query_understanding/
+online/retrieval/
+Online encoder implementations
+tests/online/retrieval/
+```
+
+Milestones:
+
+1. `B0`: confirm domain/port contract and create B-side fakes.
+2. `B1`: `QueryBundle`, validation and query parser/builder.
+3. `B2`: PE-Core text encoder and Vietnamese text encoder.
+4. `B3`: visual semantic branch.
+5. `B4`: OCR lexical and semantic branches.
+6. `B5`: ASR lexical and semantic branches.
+7. `B6`: summary lexical and semantic branches.
+8. `B7`: retrieval service, concurrency, timeout and branch diagnostics.
+9. `B8`: shared t-KIS/v-KIS behavior.
+10. `B9`: integration with Person A adapters and handoff to Person C.
+
+Person B may later own TRAKE event encoding/similarity/DANTE after the related
+open questions are approved, and supports VQA retrieval reuse after KIS baseline.
+
+Person B does not own:
+
+- SQL, Milvus or Elasticsearch SDK access.
+- ASR interval-to-frame mapping.
+- Branch normalization or final fusion.
+- Summary boost policy.
+- Object hard/soft ranking behavior.
+- Deduplication.
+- Final API response.
+
+#### Person B branch rules
+
+Baseline retrieval branches:
+
+```text
+visual_dense
+ocr_dense
+ocr_bm25
+asr_dense
+asr_bm25
+summary_dense
+summary_bm25
+```
+
+Query expansion baseline:
+
+```text
+q0 = original query
+q1 = paraphrase 1
+q2 = paraphrase 2
+```
+
+Retrieve query variants independently. Do not average embeddings before
+retrieval unless a later approved decision changes the baseline.
+
+Direct frame hits must be batch-hydrated through `MetadataReaderPort` before
+becoming `FrameCandidate` values.
+
+ASR branches return `BranchResult[ASRIntervalCandidate]`.
+
+Summary branches return `BranchResult[VideoCandidate]`.
+
+Person B must not normalize or fuse raw scores.
+
+The merged search ports are synchronous. If `RetrievalService` is asynchronous,
+do not call blocking SDK methods directly on the event loop. Use a controlled
+thread/executor strategy or another explicitly approved boundary, and test actual
+parallel behavior and timeout handling.
+
+### 9.3 Person C — Ranking, Orchestration & API
+
+Person C primarily owns:
+
+```text
+online/ranking/
+online/modes/
+retrieval_api/
+UI/backend request contract after approval
+tests/online/ranking/
+tests/online/integration/ orchestration cases
+```
+
+Milestones:
+
+1. `C0`: deterministic ASR interval-to-frame mapper after OQ-005.
+2. `C1`: query-variant aggregation after OQ-004.
+3. `C2`: branch normalization after OQ-006.
+4. `C3`: frame fusion and provenance after OQ-007.
+5. `C4`: controlled summary propagation after OQ-008.
+6. `C5`: structured object hard/soft processing.
+7. `C6`: deterministic deduplication and near-frame grouping.
+8. `C7`: shared search orchestrator.
+9. `C8`: API, mode routing, health and error mapping after OQ-002.
+10. `C9`: VQA evidence orchestration after OQ-012/OQ-017/OQ-018.
+11. `C10`: UI/backend object-constraint contract.
+
+Person C must consume `RetrievalService`/`BranchResult` instead of running new
+Milvus or Elasticsearch retrieval queries. Person C owns mapping and ranking,
+but does not silently change raw adapter records, encoder checkpoints or branch
+retrieval semantics.
+
+### 9.4 Required handoff interfaces
+
+```text
+Person A
+database SDKs → SDK-neutral hits/metadata through ports
+
+Person B
+QueryBundle + A ports → homogeneous BranchResult values
+
+Person C
+BranchResult values + metadata/object ports
+→ mapping/normalization/fusion/dedup/API response
+```
+
+Boundary rules:
+
+- B may mock A only with protocol-conformant fakes.
+- C may mock B only with valid `BranchResult` fixtures.
+- Shared domain/port changes require review from all affected roles.
+- A must not place ranking policy in adapters.
+- B must not place SQL or fusion logic in retrieval branches.
+- C must not bypass B by querying search backends directly.
+
+---
+
+## 10. Mode-specific invariants
+
+### Textual KIS and Video KIS
+
+```text
+Textual KIS:
+task-provided text
+→ shared text retrieval pipeline
+
+Video KIS:
+organizer-displayed clip
+→ contestant observes clip
+→ contestant manually writes text
+→ same shared text retrieval pipeline
+```
+
+Do not create separate retrieval algorithms for these two modes. `v-KIS` does
+not receive a video file, frame or image query from the organizer in baseline.
+
+### TRAKE
+
+Baseline TRAKE uses PE-Core visual-semantic event scores and DANTE per video.
+DANTE must never transition between videos. Do not add OCR, ASR, summary, Stable
+Diffusion or QUEST to the baseline DANTE matrix without approval.
+
+### VQA
+
+VQA retrieves evidence first and calls a VLM afterward. The VLM must answer from
+retrieved evidence rather than process the entire dataset.
+
+### Optional branches
+
+Stable Diffusion and QUEST are optional and must not block KIS baseline.
+
+---
+
+## 11. Score, hydration and failure rules
+
+Raw scores from different branches are not directly comparable.
+
+Required order:
+
+```text
+retrieve
+→ map/hydrate
+→ normalize each branch independently
+→ fuse
+→ deduplicate/group
+```
+
+Do not add raw Milvus IP and Elasticsearch BM25 scores.
+
+Every final candidate must retain branch/query provenance for debugging and
+tuning.
+
+Summary must not hard-prefilter videos and must not generate arbitrary frames.
+
+Optional OCR/ASR/summary branch failures may degrade the query and must appear
+in diagnostics. Core visual retrieval, vector compatibility and SQLite metadata
+failures must surface clearly.
+
+Empty successful results and backend failures are different states.
+
+---
+
+## 12. Open-question policy
+
+Read `docs/08-OPEN-QUESTIONS.md` before implementing a dependent milestone.
 
 Do not silently decide:
 
-- Branch top-k.
+- Public API request/response schema.
+- Per-branch top-k.
 - Query-variant aggregation.
 - ASR interval-to-frame mapping.
-- Normalization.
-- Fusion method.
-- Fusion weights.
-- Summary boost weight.
-- Object position calculation.
+- Normalization/fusion method and weights.
+- Summary boost.
+- Object hard/soft default and position calculation.
 - Image path resolution.
-- DANTE candidate scope.
-- DANTE distance unit.
-- DANTE lambda.
-- VQA evidence budget.
-- VQA model and prompt.
-- Stable Diffusion activation.
-- QUEST activation.
-- Final API request/response schema.
+- DANTE candidate scope, distance, lambda or output granularity.
+- VQA evidence budget/model/prompt.
+- Stable Diffusion or QUEST activation.
+- Database retry/pooling/circuit-breaker lifecycle.
+- Missing metadata policy.
 
-Report which open questions block the requested milestone.
+Internal model shapes already approved in `docs/11` may be implemented, but they
+do not determine these algorithms or production parameters.
 
 ---
 
-## 15. Rules after implementation is authorized
+## 13. Current verified readiness gates
 
-When the user explicitly authorizes a coding milestone:
+The following issues were verified after Person A's merge and must not be hidden
+by downstream code:
 
-1. Re-read the relevant documentation.
-2. Inspect all source dependencies.
-3. Summarize the task’s input, output, invariants, and open questions.
-4. List files expected to change.
-5. Make the smallest focused change.
-6. Preserve Offline contracts.
-7. Avoid unrelated refactoring.
-8. Add or update tests.
-9. Run the smallest relevant test set.
-10. Report exact test commands and results.
-11. Display the affected diff.
-12. Report remaining limitations honestly.
+1. Pytest collection currently has a package-name collision because
+   `tests/online` can shadow source package `online`.
+2. The contract validator checks cross-database equality but currently allows a
+   consistently malformed `frame_id` to pass.
+3. The validator can report `PASS` without an encoder smoke vector when no
+   encoder factory is supplied.
+4. Real Milvus/Elasticsearch adapter behavior still requires installed SDKs,
+   running services and runtime schema checks.
 
-Do not modify multiple large milestones in one task unless explicitly requested.
+Persons B and C may develop against protocol-conformant fakes while these
+integration gates are addressed. Do not claim real-database readiness until:
+
+- The standard test command collects and passes.
+- Canonical ID validation passes.
+- The relevant encoder smoke test passes dimension and norm checks.
+- Cross-database joins pass on real records.
+- One real vertical slice runs end-to-end.
 
 ---
 
-## 16. Reporting format
+## 14. Implementation procedure
 
-For system-analysis tasks, use:
+For each milestone:
+
+1. Identify the owning role and milestone.
+2. Read `AGENTS.md`, `docs/11` and relevant design/contract docs.
+3. Inspect current source dependencies and upstream/downstream interfaces.
+4. State input, output, invariants and open questions.
+5. List expected files, owner boundaries and tests.
+6. Make the smallest focused change.
+7. Do not modify another layer unnecessarily.
+8. Add success, empty, invalid and failure tests.
+9. Run the smallest relevant tests, then the Online suite when possible.
+10. Report exact commands/results and affected diff.
+11. Report contract impact and remaining runtime limitations honestly.
+
+Do not combine multiple major milestones into one implementation task unless the
+user explicitly requests it.
+
+Preferred test target:
+
+```text
+python -m pytest -p no:cacheprovider --import-mode=importlib tests/online -q
+```
+
+Until the verified pytest package collision is fixed, `unittest discovery` may
+be used only as an additional diagnostic. It does not make the pytest/CI failure
+disappear.
+
+Do not install missing dependencies merely to make a test run unless the user
+authorizes installation.
+
+### Team Git and review rules
+
+- Merge the shared contract before dependent implementation.
+- Use one focused branch/PR per milestone or small task.
+- Do not rename shared models/enums in an unrelated feature PR.
+- Update model, fixture and contract tests together when a shared field changes.
+- Assign one primary owner per file/component and at least one downstream reviewer.
+- Pull/fetch shared changes before integration; do not copy another person's code
+  manually between branches.
+- Resolve boundary disagreements at the port/model level, not with duplicate
+  implementations in downstream layers.
+- A task is not complete until its tests, contract handoff and limitations are
+  documented.
+
+---
+
+## 15. Reporting format
+
+For analysis/review:
 
 ```text
 1. Scope inspected
-2. Confirmed architecture
-3. Repository map
-4. Offline data flow
-5. Database contract
-6. Online target flow
-7. Code versus documentation mismatches
-8. Runtime verification still required
-9. Open questions
-10. Recommended next gate
+2. Confirmed architecture/code
+3. Findings ordered by severity
+4. Contract mismatches
+5. Tests executed and results
+6. Runtime verification still required
+7. Readiness decision and next gate
 ```
 
-For implementation tasks, use:
+For implementation:
 
 ```text
-1. Task scope
+1. Milestone scope
 2. Files changed
 3. Behavior implemented
 4. Tests added
-5. Tests executed
-6. Test results
-7. Contract impact
-8. Remaining limitations
+5. Tests executed/results
+6. Contract impact
+7. Remaining limitations
 ```
 
-Never claim that code or a database path works unless it was verified through
-source inspection or execution.
+Never claim that code, a database path, a model or an integration works unless it
+was verified through source inspection or execution.
