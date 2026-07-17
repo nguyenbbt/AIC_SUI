@@ -58,6 +58,8 @@ class ConfigLifecycleTests(unittest.TestCase):
         lifecycle = InfrastructureLifecycle()
         lifecycle.register("required", Resource(fail=True), required=True)
         self.assertEqual(lifecycle.start().status, HealthStatus.UNHEALTHY)
+        self.assertEqual(lifecycle.start().status, HealthStatus.UNHEALTHY)
+        lifecycle.close()
 
 
 if __name__ == "__main__":

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import math
-from typing import Annotated, Any
+from collections.abc import Mapping
+from typing import Annotated, Any, TypeVar
 
 from pydantic import AfterValidator, BaseModel, ConfigDict
 
@@ -25,9 +26,41 @@ FiniteFloat = Annotated[float, AfterValidator(_finite)]
 
 
 class StrictFrozenModel(BaseModel):
-    """Immutable boundary model that rejects misspelled/unknown fields."""
+    """Deeply immutable boundary model that rejects unknown fields.
+
+    Container fields still need to use :func:`freeze_mapping` (or tuples) because
+    Pydantic's ``frozen=True`` only prevents attribute reassignment.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+_K = TypeVar("_K")
+_V = TypeVar("_V")
+
+
+class FrozenDict(dict[_K, _V]):
+    """A JSON-serializable dictionary snapshot that cannot be mutated."""
+
+    _IMMUTABLE_MESSAGE = "FrozenDict is immutable"
+
+    def _immutable(self, *args: object, **kwargs: object) -> None:
+        raise TypeError(self._IMMUTABLE_MESSAGE)
+
+    __setitem__ = _immutable
+    __delitem__ = _immutable
+    clear = _immutable
+    pop = _immutable
+    popitem = _immutable
+    setdefault = _immutable
+    update = _immutable
+    __ior__ = _immutable
+
+
+def freeze_mapping(value: Mapping[_K, _V] | dict[_K, _V]) -> FrozenDict[_K, _V]:
+    """Copy a mapping at the model boundary and freeze the resulting snapshot."""
+
+    return FrozenDict(value)
 
 
 def ensure_bbox_order(model: Any) -> Any:

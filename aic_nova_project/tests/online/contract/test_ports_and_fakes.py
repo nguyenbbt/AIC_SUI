@@ -12,7 +12,13 @@ from online.adapters.elasticsearch import ElasticsearchSearchAdapter
 from online.adapters.milvus import MilvusSearchAdapter
 from online.adapters.sqlite import SQLiteReadAdapter
 from online.config import ElasticsearchResourceConfig, MilvusResourceConfig, SQLiteResourceConfig
-from online.testing import build_integration_fixture
+from online.domain.enums import RetrievalBranch
+from online.domain.errors import (
+    BranchTimeoutError,
+    InvalidQueryError,
+    ResourceUnavailableError,
+)
+from online.testing import FakeBranchBehavior, build_integration_fixture
 from online.testing import FakeElasticsearchSearchPort
 
 
@@ -55,6 +61,36 @@ class PortConformanceTests(unittest.TestCase):
             ["V001_00001_050"], label="person", min_confidence=0.5
         )
         self.assertEqual(len(filtered["V001_00001_050"]), 1)
+
+    def test_fakes_validate_inputs_record_calls_and_preserve_empty_success(self) -> None:
+        fixture = build_integration_fixture()
+        fake = fixture.milvus()
+        with self.assertRaises(InvalidQueryError):
+            fake.search_visual((1.0, 0.0), 0)
+        with self.assertRaises(InvalidQueryError):
+            fake.search_visual((float("nan"), 0.0), 2)
+        result = fake.search_visual((1.0, 0.0), 1)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(fake.calls[-1].branch, RetrievalBranch.VISUAL_DENSE)
+        self.assertEqual(fake.calls[-1].top_k, 1)
+        empty = fixture.milvus(
+            behaviors={
+                RetrievalBranch.SUMMARY_DENSE: FakeBranchBehavior(
+                    error=BranchTimeoutError("simulated timeout")
+                )
+            }
+        )
+        with self.assertRaises(BranchTimeoutError):
+            empty.search_summary((1.0, 0.0), 1)
+        es = fixture.elasticsearch(
+            behaviors={
+                RetrievalBranch.OCR_BM25: FakeBranchBehavior(
+                    error=ResourceUnavailableError("simulated unavailable")
+                )
+            }
+        )
+        with self.assertRaises(ResourceUnavailableError):
+            es.search_ocr("query", 1, fuzzy=False)
 
 
 if __name__ == "__main__":

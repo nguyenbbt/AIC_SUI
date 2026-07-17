@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import threading
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
@@ -11,6 +12,7 @@ from online.domain.errors import ContractMismatchError, DimensionMismatchError, 
 from online.ports.records import ASRSearchHit, FrameSearchHit, VideoSearchHit
 
 from ._errors import call_backend
+from ._concurrency import ConcurrentReadGuard
 
 
 class MilvusBackend(Protocol):
@@ -137,30 +139,42 @@ class MilvusSearchAdapter:
         self._backend = backend or _PymilvusBackend(config)
         self._connected = False
         self._dimensions: dict[str, int] = {}
+        self._state_lock = threading.RLock()
+        self._read_guard = ConcurrentReadGuard("milvus")
 
     def connect(self) -> None:
-        if self._connected:
-            return
-        call_backend("connect", "milvus", self._backend.connect)
-        self._connected = True
+        with self._state_lock:
+            if self._connected:
+                return
+            call_backend("connect", "milvus", self._backend.connect)
+            self._connected = True
 
     def close(self) -> None:
-        if self._connected:
-            call_backend("close", "milvus", self._backend.close)
-        self._connected = False
-        self._dimensions.clear()
+        self._read_guard.begin_close()
+        try:
+            with self._state_lock:
+                try:
+                    if self._connected:
+                        call_backend("close", "milvus", self._backend.close)
+                finally:
+                    self._connected = False
+                    self._dimensions.clear()
+        finally:
+            self._read_guard.end_close()
 
     def _ensure_connected(self) -> None:
-        if not self._connected:
-            raise ResourceUnavailableError("Milvus adapter is not connected")
+        with self._state_lock:
+            if not self._connected:
+                raise ResourceUnavailableError("Milvus adapter is not connected")
 
     def health_check(self) -> None:
-        self._ensure_connected()
-        exists = call_backend(
-            "health_check",
-            self.config.visual_collection,
-            lambda: self._backend.collection_exists(self.config.visual_collection),
-        )
+        with self._read_guard.read():
+            self._ensure_connected()
+            exists = call_backend(
+                "health_check",
+                self.config.visual_collection,
+                lambda: self._backend.collection_exists(self.config.visual_collection),
+            )
         if not exists:
             raise ResourceUnavailableError(
                 "Core Milvus visual collection is missing",
@@ -168,35 +182,53 @@ class MilvusSearchAdapter:
             )
 
     def describe_collection(self, name: str) -> Mapping[str, Any]:
-        self._ensure_connected()
-        exists = call_backend(
-            "collection_exists", name, lambda: self._backend.collection_exists(name)
-        )
-        if not exists:
-            raise ResourceUnavailableError(
-                "Milvus collection is missing", details={"resource": name}
+        with self._read_guard.read():
+            self._ensure_connected()
+            exists = call_backend(
+                "collection_exists", name, lambda: self._backend.collection_exists(name)
             )
-        return call_backend(
-            "describe_collection", name, lambda: self._backend.describe_collection(name)
-        )
-
-    def collection_exists(self, name: str) -> bool:
-        self._ensure_connected()
-        return call_backend(
-            "collection_exists", name, lambda: self._backend.collection_exists(name)
-        )
-
-    def _dimension(self, name: str) -> int:
-        if name not in self._dimensions:
-            description = self.describe_collection(name)
-            dimension = description.get("dimension")
-            if not isinstance(dimension, int) or dimension < 1:
+            if not exists:
+                raise ResourceUnavailableError(
+                    "Milvus collection is missing", details={"resource": name}
+                )
+            description = call_backend(
+                "describe_collection",
+                name,
+                lambda: self._backend.describe_collection(name),
+            )
+            if not isinstance(description, Mapping):
                 raise ContractMismatchError(
-                    "Milvus embedding dimension is missing or invalid",
+                    "Milvus collection description is invalid",
                     details={"resource": name},
                 )
+            return description
+
+    def collection_exists(self, name: str) -> bool:
+        with self._read_guard.read():
+            self._ensure_connected()
+            return call_backend(
+                "collection_exists", name, lambda: self._backend.collection_exists(name)
+            )
+
+    def _dimension(self, name: str) -> int:
+        with self._state_lock:
+            cached = self._dimensions.get(name)
+        if cached is not None:
+            return cached
+        description = self.describe_collection(name)
+        dimension = description.get("dimension")
+        if (
+            not isinstance(dimension, int)
+            or isinstance(dimension, bool)
+            or dimension < 1
+        ):
+            raise ContractMismatchError(
+                "Milvus embedding dimension is missing or invalid",
+                details={"resource": name},
+            )
+        with self._state_lock:
             self._dimensions[name] = dimension
-        return self._dimensions[name]
+        return dimension
 
     def _validate_vector(self, name: str, vector: Sequence[float]) -> tuple[float, ...]:
         if isinstance(vector, (str, bytes)):
@@ -228,23 +260,30 @@ class MilvusSearchAdapter:
         output_fields: Sequence[str],
         top_k: int,
     ) -> Sequence[Any]:
-        self._ensure_connected()
         if not isinstance(top_k, int) or isinstance(top_k, bool) or top_k < 1:
             raise InvalidQueryError("top_k must be >= 1")
-        values = self._validate_vector(name, vector)
-        params = {"metric_type": "IP", "params": {"ef": self.config.search_ef}}
-        return call_backend(
-            "search",
-            name,
-            lambda: self._backend.search(
+        with self._read_guard.read():
+            self._ensure_connected()
+            values = self._validate_vector(name, vector)
+            params = {"metric_type": "IP", "params": {"ef": self.config.search_ef}}
+            hits = call_backend(
+                "search",
                 name,
-                values,
-                output_fields,
-                top_k,
-                params,
-                self.config.timeout_sec,
-            ),
-        )
+                lambda: self._backend.search(
+                    name,
+                    values,
+                    output_fields,
+                    top_k,
+                    params,
+                    self.config.timeout_sec,
+                ),
+            )
+        if not isinstance(hits, Sequence) or isinstance(hits, (str, bytes)):
+            raise ContractMismatchError(
+                "Milvus search response is not a hit sequence",
+                details={"resource": name},
+            )
+        return tuple(hits)
 
     @staticmethod
     def _hit_values(hit: Any) -> tuple[Mapping[str, Any], float]:
@@ -309,14 +348,19 @@ class MilvusSearchAdapter:
         output = []
         for hit in hits:
             entity, score = self._hit_values(hit)
-            output.append(
-                FrameSearchHit(
-                    frame_id=str(self._required(entity, "frame_id")),
-                    video_id=str(self._required(entity, "video_id")),
-                    shot_id=None,
-                    raw_score=score,
+            try:
+                output.append(
+                    FrameSearchHit(
+                        frame_id=str(self._required(entity, "frame_id")),
+                        video_id=str(self._required(entity, "video_id")),
+                        shot_id=None,
+                        raw_score=score,
+                    )
                 )
-            )
+            except Exception as exc:
+                if isinstance(exc, ContractMismatchError):
+                    raise
+                raise ContractMismatchError("Invalid OCR Milvus hit") from exc
         return tuple(output)
 
     def search_asr(self, vector: Sequence[float], top_k: int) -> Sequence[ASRSearchHit]:
@@ -344,24 +388,40 @@ class MilvusSearchAdapter:
         output = []
         for hit in hits:
             entity, score = self._hit_values(hit)
-            output.append(
-                VideoSearchHit(
-                    video_id=str(self._required(entity, "video_id")), raw_score=score
+            try:
+                output.append(
+                    VideoSearchHit(
+                        video_id=str(self._required(entity, "video_id")),
+                        raw_score=score,
+                    )
                 )
-            )
+            except Exception as exc:
+                if isinstance(exc, ContractMismatchError):
+                    raise
+                raise ContractMismatchError("Invalid summary Milvus hit") from exc
         return tuple(output)
 
     def sample_records(
         self, name: str, output_fields: Sequence[str], limit: int
     ) -> Sequence[Mapping[str, Any]]:
-        self._ensure_connected()
-        if limit < 1:
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
             raise InvalidQueryError("limit must be >= 1")
-        return call_backend(
-            "sample_records",
-            name,
-            lambda: self._backend.sample_records(name, output_fields, limit),
-        )
+        if not output_fields or any(
+            not isinstance(field, str) or not field.strip() for field in output_fields
+        ):
+            raise InvalidQueryError("output_fields must contain non-empty field names")
+        with self._read_guard.read():
+            self._ensure_connected()
+            records = call_backend(
+                "sample_records",
+                name,
+                lambda: self._backend.sample_records(name, output_fields, limit),
+            )
+        if not isinstance(records, Sequence) or isinstance(records, (str, bytes)):
+            raise ContractMismatchError("Milvus sample response is invalid")
+        if any(not isinstance(record, Mapping) for record in records):
+            raise ContractMismatchError("Milvus sample record is invalid")
+        return tuple(records)
 
 
 class _GetterMapping(Mapping[str, Any]):

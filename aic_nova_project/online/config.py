@@ -53,9 +53,11 @@ class SQLiteResourceConfig(StrictFrozenModel):
 
 
 class OnlineDataConfig(StrictFrozenModel):
-    milvus: MilvusResourceConfig = MilvusResourceConfig()
-    elasticsearch: ElasticsearchResourceConfig = ElasticsearchResourceConfig()
-    sqlite: SQLiteResourceConfig = SQLiteResourceConfig()
+    milvus: MilvusResourceConfig = Field(default_factory=MilvusResourceConfig)
+    elasticsearch: ElasticsearchResourceConfig = Field(
+        default_factory=ElasticsearchResourceConfig
+    )
+    sqlite: SQLiteResourceConfig = Field(default_factory=SQLiteResourceConfig)
 
     @classmethod
     def from_env(cls, prefix: str = "AIC_ONLINE_") -> "OnlineDataConfig":

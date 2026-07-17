@@ -72,6 +72,13 @@ class ElasticsearchAdapterTests(unittest.TestCase):
         self.client.response = {"hits": {"hits": [{"_source": {"video_id": "V1"}}]}}
         with self.assertRaises(ContractMismatchError):
             self.adapter.search_summary("hello", 1)
+
+    def test_find_documents_validates_limit_and_malformed_hits(self) -> None:
+        with self.assertRaises(InvalidQueryError):
+            self.adapter.find_documents("video_summaries", {"video_id": "V1"}, ("video_id",), limit=0)
+        self.client.response = {"hits": {"hits": [{"_score": 1, "_source": None}]}}
+        with self.assertRaises(ContractMismatchError):
+            self.adapter.sample_documents("video_summaries", ("video_id",), 1)
         self.client.response = {"hits": {"hits": [{"_score": 1, "_source": {}}]}}
         with self.assertRaises(ContractMismatchError):
             self.adapter.search_summary("hello", 1)

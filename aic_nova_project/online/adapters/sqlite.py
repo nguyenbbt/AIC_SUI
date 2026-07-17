@@ -40,35 +40,37 @@ class SQLiteReadAdapter:
         return f'"{identifier}"'
 
     def connect(self) -> None:
-        if self._connection is not None:
-            return
-        path = Path(self.config.path).expanduser().resolve()
-        if not path.is_file():
-            raise ResourceUnavailableError(
-                "SQLite metadata database does not exist",
-                details={"resource": "sqlite"},
-            )
-        uri = f"file:{path.as_posix()}?mode=ro"
-        try:
-            connection = sqlite3.connect(
-                uri,
-                uri=True,
-                timeout=self.config.timeout_sec,
-                check_same_thread=False,
-            )
-            connection.row_factory = sqlite3.Row
-            connection.execute("PRAGMA query_only=ON")
-        except sqlite3.Error as exc:
-            raise ResourceUnavailableError(
-                "Unable to open SQLite metadata database read-only",
-                details={"resource": "sqlite"},
-            ) from exc
-        self._connection = connection
+        with self._lock:
+            if self._connection is not None:
+                return
+            path = Path(self.config.path).expanduser().resolve()
+            if not path.is_file():
+                raise ResourceUnavailableError(
+                    "SQLite metadata database does not exist",
+                    details={"resource": "sqlite"},
+                )
+            uri = f"file:{path.as_posix()}?mode=ro"
+            try:
+                connection = sqlite3.connect(
+                    uri,
+                    uri=True,
+                    timeout=self.config.timeout_sec,
+                    check_same_thread=False,
+                )
+                connection.row_factory = sqlite3.Row
+                connection.execute("PRAGMA query_only=ON")
+            except sqlite3.Error as exc:
+                raise ResourceUnavailableError(
+                    "Unable to open SQLite metadata database read-only",
+                    details={"resource": "sqlite"},
+                ) from exc
+            self._connection = connection
 
     def close(self) -> None:
-        if self._connection is not None and self._owns_connection:
-            self._connection.close()
-        self._connection = None
+        with self._lock:
+            if self._connection is not None and self._owns_connection:
+                self._connection.close()
+            self._connection = None
 
     def _conn(self) -> sqlite3.Connection:
         if self._connection is None:
@@ -76,7 +78,12 @@ class SQLiteReadAdapter:
         return self._connection
 
     def health_check(self) -> None:
-        call_backend("health_check", "sqlite", lambda: self._conn().execute("SELECT 1").fetchone())
+        with self._lock:
+            call_backend(
+                "health_check",
+                "sqlite",
+                lambda: self._conn().execute("SELECT 1").fetchone(),
+            )
 
     def _chunks(self, values: Sequence[str]) -> Iterator[tuple[str, ...]]:
         for start in range(0, len(values), self.config.batch_size):
@@ -162,27 +169,56 @@ class SQLiteReadAdapter:
                     lambda sql=sql, parameters=parameters: self._conn().execute(sql, parameters).fetchall(),
                 )
                 for row in rows:
-                    output[str(row["frame_id"])].append(
-                        ObjectDetection(
-                            label=str(row["label"]),
-                            confidence=float(row["confidence"]),
-                            x_min=float(row["x_min"]),
-                            y_min=float(row["y_min"]),
-                            x_max=float(row["x_max"]),
-                            y_max=float(row["y_max"]),
-                            model_source=(
-                                None if row["model_source"] is None else str(row["model_source"])
-                            ),
+                    try:
+                        frame_id = row["frame_id"]
+                        label_value = row["label"]
+                        if (
+                            not isinstance(frame_id, str)
+                            or not frame_id.strip()
+                            or not isinstance(label_value, str)
+                            or not label_value.strip()
+                        ):
+                            raise ValueError("invalid object identifier/label")
+                        output[frame_id].append(
+                            ObjectDetection(
+                                label=label_value,
+                                confidence=float(row["confidence"]),
+                                x_min=float(row["x_min"]),
+                                y_min=float(row["y_min"]),
+                                x_max=float(row["x_max"]),
+                                y_max=float(row["y_max"]),
+                                model_source=(
+                                    None
+                                    if row["model_source"] is None
+                                    else str(row["model_source"])
+                                ),
+                            )
                         )
-                    )
+                    except Exception as exc:
+                        if isinstance(exc, ContractMismatchError):
+                            raise
+                        raise ContractMismatchError(
+                            "Invalid object row returned by SQLite"
+                        ) from exc
         return {frame_id: tuple(objects) for frame_id, objects in output.items()}
 
     @staticmethod
     def _frame_from_row(row: sqlite3.Row) -> FrameMetadata:
         try:
+            frame_id = row["frame_id"]
+            video_id = row["video_id"]
+            if (
+                not isinstance(frame_id, str)
+                or not frame_id.strip()
+                or not isinstance(video_id, str)
+                or not video_id.strip()
+                or row["shot_id"] is None
+                or row["timestamp"] is None
+            ):
+                raise ValueError("missing metadata field")
             return FrameMetadata(
-                frame_id=str(row["frame_id"]),
-                video_id=str(row["video_id"]),
+                frame_id=frame_id,
+                video_id=video_id,
                 shot_id=int(row["shot_id"]),
                 timestamp_sec=float(row["timestamp"]),
             )

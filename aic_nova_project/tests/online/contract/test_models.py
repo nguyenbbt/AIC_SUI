@@ -13,6 +13,8 @@ from online.domain.candidates import (
     VideoCandidate,
 )
 from online.domain.enums import BranchStatus, CandidateLevel, RetrievalBranch
+from online.domain.identifiers import parse_canonical_frame_id
+from online.domain.errors import ResourceUnavailableError
 from online.domain.query import ObjectConstraint
 
 
@@ -63,10 +65,84 @@ class DomainContractTests(unittest.TestCase):
                 min_confidence=0.5,
             )
 
+    def test_error_diagnostics_redact_secrets_and_vectors(self) -> None:
+        error = ResourceUnavailableError(
+            "backend unavailable",
+            details={
+                "uri": "https://user:password@example.test:9200",
+                "token": "secret-token",
+                "vector": [1.0, 2.0],
+                "operation": "search",
+            },
+        )
+        safe = error.to_safe_dict()
+        self.assertNotIn("password", str(safe))
+        self.assertNotIn("secret-token", str(safe))
+        self.assertEqual(safe["details"]["operation"], "search")
+
     def test_models_are_frozen(self) -> None:
         candidate = FrameCandidate.model_validate(self.fixture["frame"])
         with self.assertRaises(ValidationError):
             candidate.rank = 2  # type: ignore[misc]
+
+    def test_canonical_id_parser_handles_underscored_video_id(self) -> None:
+        parsed = parse_canonical_frame_id("camera_north_V001_00012_105")
+        self.assertEqual(parsed.video_id, "camera_north_V001")
+        self.assertEqual(parsed.shot_id, 12)
+        self.assertEqual(parsed.position, 105)
+        with self.assertRaises(Exception):
+            parse_canonical_frame_id("shot_00012_pos_105")
+
+    def test_nested_result_mapping_is_immutable_and_serializable(self) -> None:
+        from online.domain.candidates import (
+            CandidateDiagnostics,
+            CandidateEvidence,
+            FusedFrameCandidate,
+        )
+
+        evidence = CandidateEvidence(
+            branch=RetrievalBranch.VISUAL_DENSE,
+            query_variant_id="q0",
+            raw_score=0.8,
+            normalized_score=0.8,
+        )
+        result = FusedFrameCandidate(
+            frame_id="V001_00000_015",
+            video_id="V001",
+            shot_id=0,
+            timestamp_sec=1.5,
+            final_score=0.8,
+            branch_scores={RetrievalBranch.VISUAL_DENSE: 0.8},
+            evidence=(evidence,),
+            diagnostics=CandidateDiagnostics(),
+        )
+        with self.assertRaises(TypeError):
+            result.branch_scores[RetrievalBranch.VISUAL_DENSE] = 0.2  # type: ignore[index]
+        self.assertIn('"branch_scores"', result.model_dump_json())
+
+    def test_non_success_statuses_require_reason_and_no_candidates(self) -> None:
+        with self.assertRaises(ValidationError):
+            BranchResult[FrameCandidate](
+                branch=RetrievalBranch.VISUAL_DENSE,
+                candidate_level=CandidateLevel.FRAME,
+                query_variant_id="q0",
+                candidates=(),
+                requested_top_k=10,
+                latency_ms=1,
+                status=BranchStatus.DEGRADED,
+            )
+        candidate = FrameCandidate.model_validate(self.fixture["frame"])
+        with self.assertRaises(ValidationError):
+            BranchResult[FrameCandidate](
+                branch=RetrievalBranch.VISUAL_DENSE,
+                candidate_level=CandidateLevel.FRAME,
+                query_variant_id="q0",
+                candidates=(candidate,),
+                requested_top_k=10,
+                latency_ms=1,
+                status=BranchStatus.DISABLED,
+                warnings=("disabled by config",),
+            )
 
     def test_branch_result_rejects_wrong_candidate_level(self) -> None:
         candidate = ASRIntervalCandidate.model_validate(self.fixture["asr_interval"])

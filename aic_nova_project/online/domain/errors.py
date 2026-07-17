@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from enum import Enum
+from types import MappingProxyType
 from typing import Any, Mapping
+from urllib.parse import urlsplit, urlunsplit
 
 
 class ErrorCode(str, Enum):
@@ -28,10 +30,63 @@ class DataInfrastructureError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.message = message
-        self.details = dict(details or {})
+        self.details = MappingProxyType(_sanitize_details(details or {}))
 
     def to_safe_dict(self) -> dict[str, Any]:
-        return {"code": self.code.value, "message": self.message, "details": self.details}
+        return {
+            "code": self.code.value,
+            "message": self.message,
+            "details": dict(self.details),
+        }
+
+
+_SENSITIVE_KEY_PARTS = (
+    "password",
+    "passwd",
+    "token",
+    "secret",
+    "authorization",
+    "credential",
+    "vector",
+    "embedding",
+)
+
+
+def _redact_uri(value: str) -> str:
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return "[redacted]"
+    if not parsed.scheme or parsed.hostname is None:
+        return value
+    host = parsed.hostname
+    if parsed.port is not None:
+        host = f"{host}:{parsed.port}"
+    return urlunsplit((parsed.scheme, host, parsed.path, parsed.query, parsed.fragment))
+
+
+def _sanitize_details(details: Mapping[str, Any]) -> dict[str, Any]:
+    """Return bounded, credential-free diagnostic details for public boundaries."""
+
+    output: dict[str, Any] = {}
+    for raw_key, value in details.items():
+        key = str(raw_key)
+        lowered = key.lower()
+        if any(part in lowered for part in _SENSITIVE_KEY_PARTS):
+            output[key] = "[redacted]"
+        elif "uri" in lowered and isinstance(value, str):
+            output[key] = _redact_uri(value)
+        elif isinstance(value, (str, int, float, bool)) or value is None:
+            output[key] = value if not isinstance(value, str) or len(value) <= 500 else value[:497] + "..."
+        elif isinstance(value, Enum):
+            output[key] = value.value
+        elif isinstance(value, (tuple, list, set)):
+            output[key] = f"[{type(value).__name__} length={len(value)}]"
+        elif isinstance(value, Mapping):
+            output[key] = f"[mapping keys={len(value)}]"
+        else:
+            output[key] = f"[{type(value).__name__}]"
+    return output
 
 
 class ContractMismatchError(DataInfrastructureError):

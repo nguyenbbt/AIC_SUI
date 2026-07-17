@@ -21,7 +21,21 @@ from .enums import (
     QueryMode,
     RetrievalBranch,
 )
-from .errors import ErrorCode
+from .errors import (
+    BranchTimeoutError,
+    ContractMismatchError,
+    DataInfrastructureError,
+    DimensionMismatchError,
+    ErrorCode,
+    InvalidQueryError,
+    MissingMetadataError,
+    ResourceUnavailableError,
+)
+from .identifiers import (
+    CanonicalFrameId,
+    parse_canonical_frame_id,
+    validate_canonical_frame_id,
+)
 from .query import NormalizedRegion, ObjectConstraint
 
 __all__ = [
@@ -29,15 +43,22 @@ __all__ = [
     "BranchDiagnostics",
     "BranchResult",
     "BranchStatus",
+    "BranchTimeoutError",
+    "CanonicalFrameId",
     "CandidateDiagnostics",
     "CandidateEvidence",
     "CandidateLevel",
     "CandidateProvenance",
+    "ContractMismatchError",
     "CountOperator",
+    "DataInfrastructureError",
+    "DimensionMismatchError",
     "ErrorCode",
     "FilterMode",
     "FrameCandidate",
     "FusedFrameCandidate",
+    "InvalidQueryError",
+    "MissingMetadataError",
     "NearFrameRef",
     "NormalizedRegion",
     "ObjectConstraint",
@@ -45,5 +66,8 @@ __all__ = [
     "QueryDiagnostics",
     "QueryMode",
     "RetrievalBranch",
+    "ResourceUnavailableError",
     "VideoCandidate",
+    "parse_canonical_frame_id",
+    "validate_canonical_frame_id",
 ]
