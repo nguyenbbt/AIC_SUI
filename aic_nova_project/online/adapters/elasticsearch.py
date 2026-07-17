@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import threading
 from collections.abc import Mapping, Sequence
 from typing import Any, Callable
 
@@ -11,6 +12,7 @@ from online.domain.errors import ContractMismatchError, InvalidQueryError, Resou
 from online.ports.records import ASRSearchHit, FrameSearchHit, VideoSearchHit
 
 from ._errors import call_backend
+from ._concurrency import ConcurrentReadGuard
 
 
 class ElasticsearchSearchAdapter:
@@ -25,46 +27,71 @@ class ElasticsearchSearchAdapter:
         self._client = client
         self._client_factory = client_factory
         self._owns_client = client is None
+        self._state_lock = threading.RLock()
+        self._read_guard = ConcurrentReadGuard("elasticsearch")
 
     def connect(self) -> None:
-        if self._client is not None:
-            return
-        factory = self._client_factory
-        if factory is None:
-            try:
-                from elasticsearch import Elasticsearch
-            except ImportError as exc:
-                raise ResourceUnavailableError(
-                    "elasticsearch client is not installed",
-                    details={"resource": "elasticsearch"},
-                ) from exc
-            factory = Elasticsearch
-        self._client = call_backend(
-            "connect",
-            "elasticsearch",
-            lambda: factory(self.config.uri, request_timeout=self.config.timeout_sec),
-        )
-        call_backend("connect", "elasticsearch", lambda: self._client.info())
+        with self._state_lock:
+            if self._client is not None:
+                return
+            factory = self._client_factory
+            if factory is None:
+                try:
+                    from elasticsearch import Elasticsearch
+                except ImportError as exc:
+                    raise ResourceUnavailableError(
+                        "elasticsearch client is not installed",
+                        details={"resource": "elasticsearch"},
+                    ) from exc
+                factory = Elasticsearch
+            client = call_backend(
+                "connect",
+                "elasticsearch",
+                lambda: factory(
+                    self.config.uri,
+                    request_timeout=self.config.timeout_sec,
+                ),
+            )
+            call_backend("connect", "elasticsearch", client.info)
+            self._client = client
 
     def close(self) -> None:
-        if self._client is not None and self._owns_client:
-            call_backend("close", "elasticsearch", self._client.close)
-        self._client = None
+        self._read_guard.begin_close()
+        try:
+            with self._state_lock:
+                try:
+                    if self._client is not None and self._owns_client:
+                        call_backend("close", "elasticsearch", self._client.close)
+                finally:
+                    self._client = None
+        finally:
+            self._read_guard.end_close()
 
     def _get_client(self) -> Any:
-        if self._client is None:
-            raise ResourceUnavailableError("Elasticsearch adapter is not connected")
-        return self._client
+        with self._state_lock:
+            if self._client is None:
+                raise ResourceUnavailableError(
+                    "Elasticsearch adapter is not connected"
+                )
+            return self._client
 
     def health_check(self) -> None:
-        healthy = call_backend("health_check", "elasticsearch", lambda: self._get_client().ping())
+        with self._read_guard.read():
+            healthy = call_backend(
+                "health_check",
+                "elasticsearch",
+                lambda: self._get_client().ping(),
+            )
         if not healthy:
             raise ResourceUnavailableError("Elasticsearch ping failed")
 
     def has_icu_plugin(self) -> bool:
-        response = call_backend(
-            "plugins", "elasticsearch", lambda: self._get_client().nodes.info(metric="plugins")
-        )
+        with self._read_guard.read():
+            response = call_backend(
+                "plugins",
+                "elasticsearch",
+                lambda: self._get_client().nodes.info(metric="plugins"),
+            )
         nodes = response.get("nodes", {}) if isinstance(response, Mapping) else {}
         for node in nodes.values():
             if not isinstance(node, Mapping):
@@ -107,23 +134,32 @@ class ElasticsearchSearchAdapter:
         fuzzy: bool | None,
     ) -> Sequence[Mapping[str, Any]]:
         query = self._validate_query(query, top_k)
+        if fuzzy is not None and not isinstance(fuzzy, bool):
+            raise InvalidQueryError("fuzzy must be a boolean or None")
         use_fuzzy = self.config.fuzzy_enabled if fuzzy is None else fuzzy
         body = self._body(query, top_k, field, source_fields, use_fuzzy)
-        response = call_backend(
-            "search",
-            index,
-            lambda: self._get_client().search(
-                index=index, body=body, request_timeout=self.config.timeout_sec
-            ),
-        )
+        with self._read_guard.read():
+            response = call_backend(
+                "search",
+                index,
+                lambda: self._get_client().search(
+                    index=index,
+                    body=body,
+                    request_timeout=self.config.timeout_sec,
+                ),
+            )
+        if not isinstance(response, Mapping):
+            raise ContractMismatchError("Elasticsearch response is not a mapping")
         try:
             hits = response["hits"]["hits"]
         except (KeyError, TypeError) as exc:
             raise ContractMismatchError(
                 "Elasticsearch response is missing hits", details={"resource": index}
             ) from exc
-        if not isinstance(hits, Sequence):
+        if not isinstance(hits, Sequence) or isinstance(hits, (str, bytes)):
             raise ContractMismatchError("Elasticsearch hits must be a sequence")
+        if any(not isinstance(hit, Mapping) for hit in hits):
+            raise ContractMismatchError("Elasticsearch hit must be a mapping")
         return tuple(hits)
 
     @staticmethod
@@ -228,26 +264,43 @@ class ElasticsearchSearchAdapter:
         output = []
         for hit in hits:
             source, score = self._source_and_score(hit, self.config.summary_index)
-            output.append(
-                VideoSearchHit(
-                    video_id=str(self._required(source, "video_id")),
-                    summary=(None if source.get("summary") is None else str(source["summary"])),
-                    raw_score=score,
+            try:
+                output.append(
+                    VideoSearchHit(
+                        video_id=str(self._required(source, "video_id")),
+                        summary=(
+                            None
+                            if source.get("summary") is None
+                            else str(source["summary"])
+                        ),
+                        raw_score=score,
+                    )
                 )
-            )
+            except Exception as exc:
+                if isinstance(exc, ContractMismatchError):
+                    raise
+                raise ContractMismatchError(
+                    "Invalid summary Elasticsearch hit"
+                ) from exc
         return tuple(output)
 
     def index_exists(self, index: str) -> bool:
-        return bool(
-            call_backend(
-                "index_exists", index, lambda: self._get_client().indices.exists(index=index)
+        with self._read_guard.read():
+            return bool(
+                call_backend(
+                    "index_exists",
+                    index,
+                    lambda: self._get_client().indices.exists(index=index),
+                )
             )
-        )
 
     def get_mapping(self, index: str) -> Mapping[str, Any]:
-        response = call_backend(
-            "get_mapping", index, lambda: self._get_client().indices.get_mapping(index=index)
-        )
+        with self._read_guard.read():
+            response = call_backend(
+                "get_mapping",
+                index,
+                lambda: self._get_client().indices.get_mapping(index=index),
+            )
         if not isinstance(response, Mapping):
             raise ContractMismatchError("Elasticsearch mapping response is invalid")
         root = response.get(index)
@@ -261,24 +314,23 @@ class ElasticsearchSearchAdapter:
     def sample_documents(
         self, index: str, source_fields: Sequence[str], limit: int
     ) -> Sequence[Mapping[str, Any]]:
-        if limit < 1:
-            raise InvalidQueryError("limit must be >= 1")
+        self._validate_lookup(source_fields, limit)
         body = {
             "size": limit,
             "_source": list(source_fields),
             "query": {"match_all": {}},
         }
-        response = call_backend(
-            "sample_documents",
-            index,
-            lambda: self._get_client().search(
-                index=index, body=body, request_timeout=self.config.timeout_sec
-            ),
-        )
-        try:
-            return tuple(hit["_source"] for hit in response["hits"]["hits"])
-        except (KeyError, TypeError) as exc:
-            raise ContractMismatchError("Elasticsearch sample response is invalid") from exc
+        with self._read_guard.read():
+            response = call_backend(
+                "sample_documents",
+                index,
+                lambda: self._get_client().search(
+                    index=index,
+                    body=body,
+                    request_timeout=self.config.timeout_sec,
+                ),
+            )
+        return self._extract_sources(response, "sample")
 
     def find_documents(
         self,
@@ -288,8 +340,18 @@ class ElasticsearchSearchAdapter:
         *,
         limit: int = 2,
     ) -> Sequence[Mapping[str, Any]]:
-        if not filters:
+        self._validate_lookup(source_fields, limit)
+        if not isinstance(filters, Mapping) or not filters:
             raise InvalidQueryError("at least one exact filter is required")
+        if any(
+            not isinstance(field, str)
+            or not field.strip()
+            or value is None
+            for field, value in filters.items()
+        ):
+            raise InvalidQueryError(
+                "exact filters require non-empty fields and non-null values"
+            )
         body = {
             "size": limit,
             "_source": list(source_fields),
@@ -299,14 +361,54 @@ class ElasticsearchSearchAdapter:
                 }
             },
         }
-        response = call_backend(
-            "find_documents",
-            index,
-            lambda: self._get_client().search(
-                index=index, body=body, request_timeout=self.config.timeout_sec
-            ),
-        )
+        with self._read_guard.read():
+            response = call_backend(
+                "find_documents",
+                index,
+                lambda: self._get_client().search(
+                    index=index,
+                    body=body,
+                    request_timeout=self.config.timeout_sec,
+                ),
+            )
+        return self._extract_sources(response, "exact lookup")
+
+    @staticmethod
+    def _validate_lookup(source_fields: Sequence[str], limit: int) -> None:
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+            raise InvalidQueryError("limit must be >= 1")
+        if not source_fields or any(
+            not isinstance(field, str) or not field.strip() for field in source_fields
+        ):
+            raise InvalidQueryError(
+                "source_fields must contain non-empty field names"
+            )
+
+    @staticmethod
+    def _extract_sources(
+        response: Any, operation: str
+    ) -> tuple[Mapping[str, Any], ...]:
+        if not isinstance(response, Mapping):
+            raise ContractMismatchError(
+                f"Elasticsearch {operation} response is invalid"
+            )
         try:
-            return tuple(hit["_source"] for hit in response["hits"]["hits"])
+            hits = response["hits"]["hits"]
         except (KeyError, TypeError) as exc:
-            raise ContractMismatchError("Elasticsearch exact lookup response is invalid") from exc
+            raise ContractMismatchError(
+                f"Elasticsearch {operation} response is invalid"
+            ) from exc
+        if not isinstance(hits, Sequence) or isinstance(hits, (str, bytes)):
+            raise ContractMismatchError(
+                f"Elasticsearch {operation} hits are invalid"
+            )
+        sources: list[Mapping[str, Any]] = []
+        for hit in hits:
+            if not isinstance(hit, Mapping) or not isinstance(
+                hit.get("_source"), Mapping
+            ):
+                raise ContractMismatchError(
+                    f"Elasticsearch {operation} hit is missing _source"
+                )
+            sources.append(hit["_source"])
+        return tuple(sources)

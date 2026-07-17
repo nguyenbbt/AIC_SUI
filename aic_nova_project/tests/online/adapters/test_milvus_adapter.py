@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import math
+import threading
 import unittest
 
 from online.adapters.milvus import MilvusSearchAdapter
 from online.config import MilvusResourceConfig
-from online.domain.errors import ContractMismatchError, DimensionMismatchError, InvalidQueryError, ResourceUnavailableError
+from online.domain.errors import (
+    ContractMismatchError,
+    DimensionMismatchError,
+    InvalidQueryError,
+    ResourceUnavailableError,
+)
 
 
 class FakeBackend:
@@ -88,6 +94,38 @@ class MilvusAdapterTests(unittest.TestCase):
         with self.assertRaises(Exception) as raised:
             self.adapter.search_ocr(self.vector, 1)
         self.assertEqual(raised.exception.code.value, "BRANCH_TIMEOUT")
+
+    def test_malformed_score_and_sample_response_are_contract_errors(self) -> None:
+        self.backend.hits["ocr_features"] = (
+            {"entity": {"frame_id": "F1", "video_id": "V1"}, "distance": float("nan")},
+        )
+        with self.assertRaises(ContractMismatchError):
+            self.adapter.search_ocr(self.vector, 1)
+        self.backend.sample_records = lambda name, output_fields, limit: "bad"  # type: ignore[method-assign]
+        with self.assertRaises(ContractMismatchError):
+            self.adapter.sample_records("visual_features", ("embedding",), 1)
+
+    def test_close_is_rejected_while_a_read_is_active(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+        original = self.backend.search
+
+        def blocked(*args, **kwargs):
+            entered.set()
+            release.wait(timeout=1)
+            return original(*args, **kwargs)
+
+        self.backend.search = blocked
+        thread = threading.Thread(
+            target=lambda: self.adapter.search_visual(self.vector, 1)
+        )
+        thread.start()
+        self.assertTrue(entered.wait(timeout=1))
+        with self.assertRaises(ResourceUnavailableError):
+            self.adapter.close()
+        release.set()
+        thread.join(timeout=2)
+        self.adapter.close()
 
 
 if __name__ == "__main__":

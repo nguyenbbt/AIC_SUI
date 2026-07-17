@@ -1,0 +1,7 @@
+# Runtime-only Online infrastructure dependencies.
+pydantic>=2.7,<3
+pymilvus>=2.4,<3
+elasticsearch>=8.12,<9
+torch>=2.0.0
+open_clip_torch>=2.20.0
+sentence-transformers>=2.2.2

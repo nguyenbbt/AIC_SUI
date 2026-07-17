@@ -4,9 +4,15 @@ from __future__ import annotations
 
 from typing import Annotated, Generic, Literal, TypeVar
 
-from pydantic import Field, model_validator
+from pydantic import AfterValidator, Field, model_validator
 
-from .base import FiniteFloat, NonEmptyStr, StrictFrozenModel, ensure_bbox_order
+from .base import (
+    FiniteFloat,
+    NonEmptyStr,
+    StrictFrozenModel,
+    ensure_bbox_order,
+    freeze_mapping,
+)
 from .enums import BranchStatus, CandidateLevel, RetrievalBranch
 
 
@@ -71,7 +77,7 @@ class BranchResult(StrictFrozenModel, Generic[CandidateT]):
     requested_top_k: int = Field(ge=1)
     latency_ms: Annotated[FiniteFloat, Field(ge=0.0)]
     status: BranchStatus
-    warnings: tuple[str, ...] = ()
+    warnings: tuple[NonEmptyStr, ...] = ()
 
     @property
     def returned_count(self) -> int:
@@ -86,8 +92,10 @@ class BranchResult(StrictFrozenModel, Generic[CandidateT]):
         }[self.candidate_level]
         if any(not isinstance(candidate, expected) for candidate in self.candidates):
             raise ValueError(f"{self.candidate_level.value} result contains wrong candidate type")
-        if self.status is BranchStatus.FAILED and not any(w.strip() for w in self.warnings):
-            raise ValueError("failed BranchResult must contain a warning")
+        if self.status is not BranchStatus.SUCCESS and not self.warnings:
+            raise ValueError("non-success BranchResult must contain a warning")
+        if self.status in {BranchStatus.FAILED, BranchStatus.DISABLED} and self.candidates:
+            raise ValueError("failed/disabled BranchResult must not contain candidates")
         if any(candidate.provenance.branch is not self.branch for candidate in self.candidates):
             raise ValueError("candidate provenance branch must match BranchResult branch")
         if any(
@@ -101,11 +109,11 @@ class BranchResult(StrictFrozenModel, Generic[CandidateT]):
 class ObjectDetection(StrictFrozenModel):
     label: NonEmptyStr
     confidence: Annotated[FiniteFloat, Field(ge=0.0, le=1.0)]
-    x_min: FiniteFloat
-    y_min: FiniteFloat
-    x_max: FiniteFloat
-    y_max: FiniteFloat
-    model_source: str | None = None
+    x_min: Annotated[FiniteFloat, Field(ge=0.0)]
+    y_min: Annotated[FiniteFloat, Field(ge=0.0)]
+    x_max: Annotated[FiniteFloat, Field(ge=0.0)]
+    y_max: Annotated[FiniteFloat, Field(ge=0.0)]
+    model_source: NonEmptyStr | None = None
 
     _ordered = model_validator(mode="after")(ensure_bbox_order)
 
@@ -135,7 +143,9 @@ class FusedFrameCandidate(StrictFrozenModel):
     shot_id: int = Field(ge=0)
     timestamp_sec: Annotated[FiniteFloat, Field(ge=0.0)]
     final_score: FiniteFloat
-    branch_scores: dict[RetrievalBranch, NormalizedScore]
+    branch_scores: Annotated[
+        dict[RetrievalBranch, NormalizedScore], AfterValidator(freeze_mapping)
+    ]
     evidence: tuple[CandidateEvidence, ...]
     near_frames: tuple[NearFrameRef, ...] = ()
     objects: tuple[ObjectDetection, ...] = ()

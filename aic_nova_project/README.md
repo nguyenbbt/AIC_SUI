@@ -82,6 +82,31 @@ $env:PYTHONPATH="."
 pytest data_pipeline/shot_keyframe/tests feature_extraction/visual_embedding/tests feature_extraction/asr_transcript/tests feature_extraction/ocr/tests feature_extraction/object_detection/tests
 ```
 
+### Online Data & Infrastructure
+
+From PowerShell at the repository root:
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r online\requirements-runtime.txt
+python -m pip install -r online\requirements-test.txt
+python -m pytest -p no:cacheprovider --import-mode=importlib tests/online -q
+```
+
+The contract/adapter unit tests do not require running Milvus or Elasticsearch.
+Optional runtime validation is read-only:
+
+```powershell
+python -m online.validate_contract
+python -m online.validate_contract --fail-on-partial
+```
+
+Configure `AIC_ONLINE_MILVUS_URI`, `AIC_ONLINE_ES_URI`, and
+`AIC_ONLINE_SQLITE_PATH` (plus the other names documented in
+`online/README.md`) instead of embedding endpoints or credentials in code.
+
 * `feature_extraction/visual_embedding`: Generates feature vectors from keyframes.
 * `feature_extraction/ocr`: Extracts and recognizes text overlay (subtitles, banners) in keyframes.
 * `feature_extraction/asr_transcript`: Extracts audio, generates transcripts via PhoWhisper, and cleans transcripts with LLM.

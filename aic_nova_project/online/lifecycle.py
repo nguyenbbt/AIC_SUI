@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import threading
 from enum import Enum
 from typing import Protocol
 
 from pydantic import Field
 
 from .domain.base import NonEmptyStr, StrictFrozenModel
+from .domain.errors import DataInfrastructureError
 
 
 class HealthStatus(str, Enum):
@@ -46,37 +48,48 @@ class InfrastructureLifecycle:
     def __init__(self) -> None:
         self._resources: list[tuple[str, ManagedResource, bool]] = []
         self._started: list[ManagedResource] = []
+        self._lock = threading.RLock()
 
     def register(self, name: str, resource: ManagedResource, *, required: bool) -> None:
-        if not name.strip():
+        if not isinstance(name, str) or not name.strip():
             raise ValueError("resource name must not be empty")
-        if any(existing == name for existing, _, _ in self._resources):
-            raise ValueError(f"duplicate resource name: {name}")
-        self._resources.append((name, resource, required))
+        if not isinstance(required, bool):
+            raise TypeError("required must be a boolean")
+        with self._lock:
+            if any(existing == name for existing, _, _ in self._resources):
+                raise ValueError(f"duplicate resource name: {name}")
+            self._resources.append((name, resource, required))
 
     def start(self) -> InfrastructureHealth:
-        for _, resource, _ in self._resources:
-            if resource in self._started:
-                continue
-            try:
-                resource.connect()
-            except Exception:
-                continue
-            self._started.append(resource)
+        with self._lock:
+            for _, resource, _ in self._resources:
+                if resource in self._started:
+                    continue
+                try:
+                    resource.connect()
+                except Exception:
+                    continue
+                self._started.append(resource)
         return self.health()
 
     def health(self) -> InfrastructureHealth:
         components: list[ComponentHealth] = []
-        for name, resource, required in self._resources:
+        with self._lock:
+            resources = tuple(self._resources)
+        for name, resource, required in resources:
             try:
                 resource.health_check()
             except Exception as exc:
+                if isinstance(exc, DataInfrastructureError):
+                    message = exc.message
+                else:
+                    message = f"{type(exc).__name__}: resource health check failed"
                 components.append(
                     ComponentHealth(
                         name=name,
                         required=required,
                         healthy=False,
-                        message=str(exc),
+                        message=message,
                     )
                 )
             else:
@@ -92,12 +105,15 @@ class InfrastructureLifecycle:
 
     def close(self) -> None:
         first_error: Exception | None = None
-        for resource in reversed(self._started):
+        with self._lock:
+            started = tuple(self._started)
+        for resource in reversed(started):
             try:
                 resource.close()
             except Exception as exc:
                 first_error = first_error or exc
-        self._started.clear()
+        with self._lock:
+            self._started.clear()
         if first_error is not None:
             raise first_error
 

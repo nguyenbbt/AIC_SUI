@@ -113,19 +113,64 @@ class ContractValidatorTests(unittest.TestCase):
 
     def validator(self):
         return OfflineContractValidator(
-            OnlineDataConfig(), milvus=self.milvus, elasticsearch=self.es, sqlite=self.sqlite
+            OnlineDataConfig(),
+            milvus=self.milvus,
+            elasticsearch=self.es,
+            sqlite=self.sqlite,
+            encoder_smoke_vectors={
+                "visual_features": lambda: (1.0, 0.0),
+                "ocr_features": lambda: (1.0, 0.0),
+                "asr_features": lambda: (1.0, 0.0),
+                "summary_features": lambda: (1.0, 0.0),
+            },
         )
 
     def test_pass_for_consistent_complete_fixture(self) -> None:
         report = self.validator().validate()
         self.assertEqual(report.status, ValidationStatus.PASS)
         self.assertEqual(report.dimensions["visual_features"], 2)
+        self.assertIn("milvus:visual_features", report.resources_checked)
+        self.assertEqual(report.sample_counts["milvus:visual"], 1)
+        self.assertEqual(report.checks_skipped, ())
 
     def test_fail_for_core_frame_id_contract_mismatch(self) -> None:
         self.milvus.records["visual_features"][0]["frame_id"] = "shot_00000_pos_050"
         report = self.validator().validate()
         self.assertEqual(report.status, ValidationStatus.FAIL)
-        self.assertTrue(any(check.name == "join.visual_to_metadata" for check in report.failed_checks))
+        self.assertTrue(
+            any(check.name == "canonical_id.milvus.visual" for check in report.failed_checks)
+        )
+
+    def test_same_malformed_id_across_resources_still_fails(self) -> None:
+        malformed = "shot_00000_pos_050"
+        self.milvus.records["visual_features"][0]["frame_id"] = malformed
+        self.sqlite.metadata = {
+            malformed: FrameMetadata(
+                frame_id=malformed,
+                video_id="V1",
+                shot_id=0,
+                timestamp_sec=1.0,
+            )
+        }
+        self.sqlite.rows["metadata"][0]["frame_id"] = malformed
+        report = self.validator().validate()
+        self.assertEqual(report.status, ValidationStatus.FAIL)
+        self.assertTrue(
+            any(check.name == "canonical_id.milvus.visual" for check in report.failed_checks)
+        )
+
+    def test_missing_encoder_smoke_is_explicit_not_run_and_not_pass(self) -> None:
+        validator = OfflineContractValidator(
+            OnlineDataConfig(),
+            milvus=self.milvus,
+            elasticsearch=self.es,
+            sqlite=self.sqlite,
+        )
+        report = validator.validate()
+        self.assertNotEqual(report.status, ValidationStatus.PASS)
+        smoke = next(check for check in report.checks if check.name == "encoder.visual_features")
+        self.assertEqual(smoke.status.value, "NOT_RUN")
+        self.assertIn("encoder.visual_features", report.checks_skipped)
 
     def test_partial_when_optional_resource_is_missing(self) -> None:
         del self.milvus.records["ocr_features"]

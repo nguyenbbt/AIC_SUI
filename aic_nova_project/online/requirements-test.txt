@@ -1,0 +1,2 @@
+# SDK-free contract/adapter unit-test dependencies.
+pytest>=8.2,<9

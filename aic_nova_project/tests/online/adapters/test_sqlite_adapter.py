@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import sqlite3
 import unittest
+from pathlib import Path
+from uuid import uuid4
 
 from online.adapters.sqlite import SQLiteReadAdapter
 from online.config import SQLiteResourceConfig
+from online.domain.errors import ContractMismatchError
+from online.testing import create_sqlite_fixture
 
 
 SCHEMA = """
@@ -94,6 +98,43 @@ class SQLiteAdapterTests(unittest.TestCase):
             set(self.adapter.table_columns("metadata")),
             {"frame_id", "video_id", "shot_id", "timestamp"},
         )
+
+    def test_invalid_object_and_metadata_rows_translate_to_contract_error(self) -> None:
+        connection = self.adapter._conn()
+        connection.execute("PRAGMA query_only=OFF")
+        connection.execute(
+            "INSERT INTO objects (frame_id,label,confidence,x_min,y_min,x_max,y_max) VALUES (?,?,?,?,?,?,?)",
+            ("V001_00000_015", "bad", 1.5, 0, 0, 1, 1),
+        )
+        with self.assertRaises(ContractMismatchError):
+            self.adapter.get_objects_by_frame_ids(["V001_00000_015"])
+        connection.execute(
+            "INSERT INTO metadata VALUES (?, ?, ?, ?)",
+            ("V001_00001_099", "V001", 1, "not-a-number"),
+        )
+        connection.execute("PRAGMA query_only=ON")
+        with self.assertRaises(ContractMismatchError):
+            self.adapter.get_frames_by_ids(["V001_00001_099"])
+
+    def test_reproducible_file_fixture_opens_read_only(self) -> None:
+        path = Path(f".online-test-{uuid4().hex}.db")
+        try:
+            create_sqlite_fixture(
+                path,
+                metadata_rows=(("V001_00000_015", "V001", 0, 1.5),),
+                object_rows=(
+                    ("V001_00000_015", "person", 0.9, 0, 0, 10, 10, "fixture"),
+                ),
+            )
+            adapter = SQLiteReadAdapter(SQLiteResourceConfig(path=path))
+            adapter.connect()
+            self.assertEqual(
+                adapter.get_ordered_frames_by_video("V001")[0].frame_id,
+                "V001_00000_015",
+            )
+            adapter.close()
+        finally:
+            path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
