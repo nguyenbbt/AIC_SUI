@@ -5,7 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Annotated, Any, Protocol, runtime_checkable
 
-from fastapi import Depends, FastAPI, Request, status
+from collections.abc import Callable
+
+from fastapi import Depends, FastAPI, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import Field
 
@@ -56,9 +58,12 @@ class HealthResponse(StrictFrozenModel):
 def create_app(
     *,
     orchestrator: SearchOrchestratorPort | None = None,
+    health_provider: Callable[[], HealthResponse] | None = None,
+    lifespan: Any | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="AIC Online Retrieval API")
+    app = FastAPI(title="AIC Online Retrieval API", lifespan=lifespan)
     app.state.orchestrator = orchestrator
+    app.state.health_provider = health_provider
 
     @app.exception_handler(DataInfrastructureError)
     async def handle_domain_error(_: Request, exc: DataInfrastructureError) -> JSONResponse:
@@ -73,10 +78,15 @@ def create_app(
 
     @app.get("/health/ready", response_model=HealthResponse)
     async def ready(
+        response: Response,
         current: SearchOrchestratorPort = Depends(_get_orchestrator),
     ) -> HealthResponse:
-        # C-08 readiness is API-composition readiness. Runtime DB/model checks
-        # remain Person-A validator responsibilities.
+        provider = getattr(app.state, "health_provider", None)
+        if provider is not None:
+            health = provider()
+            if health.status == "unhealthy":
+                response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+            return health
         return HealthResponse(
             status="ready",
             checks={
