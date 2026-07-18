@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import unittest
 from unittest.mock import patch
 
@@ -57,6 +58,11 @@ class ManagedElasticsearch(FakeElasticsearchSearchPort):
     def health_check(self) -> None:
         if not self.connected:
             raise RuntimeError("elasticsearch is not connected")
+
+
+class BrokenTextEncoder(FakeTextEncoder):
+    def encode_texts(self, texts):
+        raise RuntimeError("encoder unavailable")
 
 
 def runtime_with_fakes() -> tuple[object, ManagedMilvus, ManagedElasticsearch]:
@@ -136,6 +142,31 @@ class RuntimeCompositionTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             runtime.ranking_executor.submit(lambda: None)
 
+    def test_required_encoder_probe_marks_runtime_unhealthy(self) -> None:
+        frame = FrameMetadata(
+            frame_id="V001_00000_015",
+            video_id="V001",
+            shot_id=0,
+            timestamp_sec=1.5,
+        )
+        runtime = build_online_runtime(
+            data_config=OnlineDataConfig(),
+            runtime_config=RuntimeCompositionConfig(),
+            milvus=ManagedMilvus(),
+            elasticsearch=ManagedElasticsearch(),
+            metadata=FakeMetadataReaderPort((frame,)),
+            object_reader=FakeObjectReaderPort({}),
+            visual_encoder=BrokenTextEncoder(),
+            vietnamese_encoder=FakeTextEncoder(),
+        )
+
+        health = runtime.start()
+        runtime.close()
+
+        self.assertEqual(health.status.value, "unhealthy")
+        visual = next(component for component in health.components if component.name == "visual_encoder")
+        self.assertFalse(visual.healthy)
+
     def test_runtime_app_lifespan_wires_search_end_to_end_with_fakes(self) -> None:
         runtime, milvus, elasticsearch = runtime_with_fakes()
 
@@ -168,6 +199,23 @@ class RuntimeCompositionTests(unittest.TestCase):
         ):
             with self.assertRaises(ValueError):
                 RuntimeCompositionConfig.from_env()
+
+        with patch.dict(
+            "os.environ",
+            {"AIC_ONLINE_DEPLOYMENT_MODE": "Production"},
+            clear=True,
+        ):
+            with self.assertRaises(ValueError):
+                RuntimeCompositionConfig.from_env()
+
+        with self.assertRaises(ValueError):
+            RuntimeCompositionConfig(deployment_mode="prodution")
+
+    def test_runtime_config_rejects_non_finite_timeouts(self) -> None:
+        for invalid_timeout in (math.nan, math.inf, -math.inf, 0.0):
+            with self.subTest(invalid_timeout=invalid_timeout):
+                with self.assertRaises(ValueError):
+                    RuntimeCompositionConfig(default_timeout_sec=invalid_timeout)
 
 
 if __name__ == "__main__":

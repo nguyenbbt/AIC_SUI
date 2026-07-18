@@ -133,6 +133,7 @@ class ASRIntervalFrameMapper:
                 latency_ms=result.latency_ms,
                 status=result.status,
                 warnings=result.warnings,
+                missing_metadata_count=result.missing_metadata_count,
             ),
             mapping_loss_count=mapping_loss_count,
             policy_name=self.name,
@@ -158,7 +159,8 @@ class ASRIntervalFrameMapper:
             return ()
 
         raw_score = interval.raw_score / len(matched)
-        normalized_score = self._interval_normalized_score(interval) / len(matched)
+        interval_normalized_score = self._interval_normalized_score(interval)
+        normalized_score = interval_normalized_score / len(matched)
         return tuple(
             FrameCandidate(
                 frame_id=frame.frame_id,
@@ -170,10 +172,14 @@ class ASRIntervalFrameMapper:
                 normalized_score=normalized_score,
                 provenance=CandidateProvenance(
                     branch=interval.provenance.branch,
-                    backend="derived",
-                    source_resource=f"{interval.provenance.source_resource}:{interval.interval_id}",
+                    backend=interval.provenance.backend,
+                    source_resource=interval.provenance.source_resource,
                     query_variant_id=interval.provenance.query_variant_id,
                     query_text=interval.provenance.query_text,
+                    source_candidate_id=interval.interval_id,
+                    source_start_time_sec=interval.start_time_sec,
+                    source_end_time_sec=interval.end_time_sec,
+                    source_normalized_score=interval_normalized_score,
                 ),
             )
             for frame in matched
@@ -242,4 +248,5 @@ def _empty_frame_result(result: BranchResult[Any]) -> BranchResult[FrameCandidat
         latency_ms=result.latency_ms,
         status=result.status,
         warnings=result.warnings,
+        missing_metadata_count=result.missing_metadata_count,
     )

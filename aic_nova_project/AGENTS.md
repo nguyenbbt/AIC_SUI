@@ -607,8 +607,8 @@ do not determine these algorithms or production parameters.
 
 ## 13. Current verified readiness gates
 
-The Person A boundary and Person B B1-B9 implementation are code-ready against
-the SDK-free Online suite:
+The merged Person A, B and C implementation is code-ready against the SDK-free
+Online suite:
 
 1. Standard pytest collection imports the source `online` package without test
    package shadowing.
@@ -621,6 +621,13 @@ the SDK-free Online suite:
 5. Retrieval branches preserve candidate level, raw score and provenance, and
    the async service bounds synchronous work with deterministic ordering,
    timeouts and lifecycle guards.
+6. Ranking preserves frame, ASR interval and summary evidence; applies one
+   explicit experimental policy for normalization, query aggregation, fusion,
+   summary/object boosts and visual-core behavior; and reports bounded
+   diagnostics without fabricating fallback weights.
+7. API startup probes required/optional encoders, rejects experimental policies
+   in production mode, sanitizes public errors and drains retrieval/ranking
+   executors before infrastructure shutdown.
 
 `NEED_RUNTIME_VERIFICATION` still applies to installed encoder/database SDKs,
 running services, actual schemas, stored vectors and Offline-produced records.

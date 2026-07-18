@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 from online.domain.candidates import (
@@ -33,6 +34,8 @@ class SummaryPropagationConfig:
     weight: float = 0.1
     max_boost: float = 0.2
     method_name: str = "summary_video_score_cap_v1"
+    fallback_rrf_k: int = 60
+    query_variant_weights: Mapping[str, float] | None = None
 
     def __post_init__(self) -> None:
         if not _finite_non_negative(self.weight):
@@ -45,6 +48,23 @@ class SummaryPropagationConfig:
             raise ValueError("max_boost must be <= 1 while stored in CandidateEvidence.normalized_score")
         if not isinstance(self.method_name, str) or not self.method_name.strip():
             raise ValueError("method_name must be non-empty")
+        if (
+            isinstance(self.fallback_rrf_k, bool)
+            or not isinstance(self.fallback_rrf_k, int)
+            or self.fallback_rrf_k < 1
+        ):
+            raise ValueError("fallback_rrf_k must be a positive integer")
+        weights: dict[str, float] = {}
+        for variant_id, variant_weight in (self.query_variant_weights or {}).items():
+            if not isinstance(variant_id, str) or not variant_id.strip():
+                raise ValueError("summary query variant IDs must be non-empty strings")
+            if not _finite_non_negative(variant_weight):
+                raise ValueError("summary query variant weights must be finite and >= 0")
+            weights[variant_id.strip()] = float(variant_weight)
+        object.__setattr__(self, "query_variant_weights", MappingProxyType(weights))
+
+    def variant_weight_for(self, query_variant_id: str) -> float:
+        return float((self.query_variant_weights or {}).get(query_variant_id, 1.0))
 
 
 @dataclass(frozen=True)
@@ -106,10 +126,10 @@ class SummaryScorePropagator:
         self,
         summary_results: Sequence[BranchResult[Any]],
     ) -> dict[str, float]:
+        """Return the applied, capped summary boost for each video."""
+
         return {
-            video_id: min(1.0, contribution.total_boost / self.config.weight)
-            if self.config.weight > 0.0
-            else 0.0
+            video_id: contribution.total_boost
             for video_id, contribution in self._contributions_by_video(summary_results).items()
         }
 
@@ -130,9 +150,14 @@ class SummaryScorePropagator:
                     raise TypeError("summary BranchResult contains a non-video candidate")
                 score = candidate.normalized_score
                 if score is None:
-                    score = 1.0 / (60 + candidate.rank)
+                    score = 1.0 / (self.config.fallback_rrf_k + candidate.rank)
                 remaining = max(0.0, self.config.max_boost - boost_by_video[candidate.video_id])
-                contribution = min(remaining, score * self.config.weight)
+                contribution = min(
+                    remaining,
+                    score
+                    * self.config.variant_weight_for(result.query_variant_id)
+                    * self.config.weight,
+                )
                 if contribution <= 0.0:
                     continue
                 boost_by_video[candidate.video_id] += contribution
@@ -142,6 +167,10 @@ class SummaryScorePropagator:
                         query_variant_id=candidate.provenance.query_variant_id,
                         raw_score=candidate.raw_score,
                         normalized_score=contribution,
+                        backend=candidate.provenance.backend,
+                        source_resource=candidate.provenance.source_resource,
+                        source_candidate_id=candidate.video_id,
+                        source_normalized_score=score,
                     )
                 )
         return {

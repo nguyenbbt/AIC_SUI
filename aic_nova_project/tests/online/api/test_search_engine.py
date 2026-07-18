@@ -151,14 +151,33 @@ class SearchEngineAPITests(unittest.TestCase):
         self.assertNotIn("TOP_SECRET", response.text)
         self.assertNotIn("reason", response.text)
 
-    def test_disabling_visual_dense_is_rejected_as_invalid_query(self) -> None:
-        response = TestClient(create_app(orchestrator=FakeOrchestrator())).post(
+        malicious_allowed_value = ResourceUnavailableError(
+            "safe public message only",
+            details={
+                "branch": "token=TOP_SECRET",
+                "constraint": "TOP_SECRET",
+                "frame_id": "TOP_SECRET",
+                "resource": "token=TOP_SECRET",
+            },
+        )
+        redacted = TestClient(
+            create_app(orchestrator=FakeOrchestrator(error=malicious_allowed_value))
+        ).post("/search", json={"query": "query"})
+        self.assertEqual(redacted.json()["error"]["details"], {})
+        self.assertNotIn("TOP_SECRET", redacted.text)
+
+    def test_api_leaves_core_branch_policy_to_the_orchestrator(self) -> None:
+        orchestrator = FakeOrchestrator()
+        response = TestClient(create_app(orchestrator=orchestrator)).post(
             "/search",
             json={"query": "query", "enabled_branches": ["ocr_bm25"]},
         )
 
-        self.assertEqual(response.status_code, 422)
-        self.assertEqual(response.json()["error"]["code"], "INVALID_QUERY")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            orchestrator.calls[0].enabled_branches,
+            (RetrievalBranch.OCR_BM25,),
+        )
 
     def test_competition_candidates_adapter_is_minimal_and_stable(self) -> None:
         adapted = competition_candidates((fused_frame(),))

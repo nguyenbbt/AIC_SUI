@@ -19,6 +19,7 @@ def video_candidate(
     branch: RetrievalBranch,
     rank: int = 1,
     normalized_score: float | None = None,
+    variant_id: str = "q0",
 ) -> VideoCandidate:
     return VideoCandidate(
         video_id=video_id,
@@ -30,7 +31,7 @@ def video_candidate(
             branch=branch,
             backend="milvus" if branch is RetrievalBranch.SUMMARY_DENSE else "elasticsearch",
             source_resource=branch.value,
-            query_variant_id="q0",
+            query_variant_id=variant_id,
             query_text="query",
         ),
     )
@@ -42,11 +43,12 @@ def summary_result(
     *,
     status: BranchStatus = BranchStatus.SUCCESS,
     warnings: tuple[str, ...] = (),
+    variant_id: str = "q0",
 ) -> BranchResult[VideoCandidate]:
     return BranchResult[VideoCandidate](
         branch=branch,
         candidate_level=CandidateLevel.VIDEO,
-        query_variant_id="q0",
+        query_variant_id=variant_id,
         candidates=candidates,
         requested_top_k=10,
         latency_ms=1.0,
@@ -201,6 +203,48 @@ class SummaryPropagationTests(unittest.TestCase):
         twice = propagator.propagate(once, summary_results)
 
         self.assertEqual(twice, once)
+
+    def test_query_variant_weight_and_configured_rrf_apply_to_summary(self) -> None:
+        disabled_q1 = SummaryScorePropagator(
+            SummaryPropagationConfig(
+                weight=1.0,
+                max_boost=1.0,
+                fallback_rrf_k=10,
+                query_variant_weights={"q0": 1.0, "q1": 0.0},
+            )
+        )
+        q1_result = summary_result(
+            RetrievalBranch.SUMMARY_DENSE,
+            (
+                video_candidate(
+                    "V001",
+                    branch=RetrievalBranch.SUMMARY_DENSE,
+                    rank=1,
+                    variant_id="q1",
+                ),
+            ),
+            variant_id="q1",
+        )
+
+        disabled = disabled_q1.propagate(
+            (frame("V001_00000_015", video_id="V001", final_score=0.5),),
+            (q1_result,),
+        )
+        self.assertEqual(disabled[0].diagnostics.summary_boost, 0.0)
+
+        enabled_q1 = SummaryScorePropagator(
+            SummaryPropagationConfig(
+                weight=1.0,
+                max_boost=1.0,
+                fallback_rrf_k=10,
+                query_variant_weights={"q1": 0.5},
+            )
+        ).propagate(
+            (frame("V001_00000_015", video_id="V001", final_score=0.5),),
+            (q1_result,),
+        )[0]
+        self.assertAlmostEqual(enabled_q1.diagnostics.summary_boost, (1 / 11) * 0.5)
+        self.assertAlmostEqual(enabled_q1.evidence[0].source_normalized_score, 1 / 11)
 
     def test_invalid_inputs_are_rejected(self) -> None:
         propagator = SummaryScorePropagator()

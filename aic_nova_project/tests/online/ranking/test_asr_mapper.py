@@ -79,7 +79,11 @@ class ASRIntervalFrameMapperTests(unittest.TestCase):
         )
 
         self.assertEqual(tuple(item.frame_id for item in mapped), ("V001_00000_015", "V001_00000_050"))
-        self.assertEqual(tuple(item.provenance.backend for item in mapped), ("derived", "derived"))
+        self.assertEqual(tuple(item.provenance.backend for item in mapped), ("milvus", "milvus"))
+        self.assertEqual(tuple(item.provenance.source_candidate_id for item in mapped), ("speech", "speech"))
+        self.assertEqual(tuple(item.provenance.source_start_time_sec for item in mapped), (1.0, 1.0))
+        self.assertEqual(tuple(item.provenance.source_end_time_sec for item in mapped), (6.0, 6.0))
+        self.assertEqual(tuple(item.provenance.source_normalized_score for item in mapped), (0.6, 0.6))
         self.assertEqual(tuple(item.raw_score for item in mapped), (0.45, 0.45))
         self.assertEqual(tuple(item.normalized_score for item in mapped), (0.3, 0.3))
 
@@ -176,7 +180,15 @@ class ASRIntervalFrameMapperTests(unittest.TestCase):
         self.assertAlmostEqual(sum(item.normalized_score for item in mapped), 1 / 11)
         self.assertEqual(
             tuple(item.provenance.source_resource for item in mapped),
-            ("asr_features:speech-42", "asr_features:speech-42"),
+            ("asr_features", "asr_features"),
+        )
+        self.assertEqual(
+            tuple(item.provenance.source_candidate_id for item in mapped),
+            ("speech-42", "speech-42"),
+        )
+        self.assertEqual(
+            tuple(item.provenance.source_normalized_score for item in mapped),
+            (1 / 11, 1 / 11),
         )
 
     def test_video_without_metadata_is_mapping_loss_not_cross_video_mapping(self) -> None:

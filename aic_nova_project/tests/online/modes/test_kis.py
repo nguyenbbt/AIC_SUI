@@ -14,7 +14,12 @@ from online.domain.candidates import (
 )
 from online.domain.diagnostics import BranchDiagnostics, QueryDiagnostics
 from online.domain.enums import BranchStatus, CandidateLevel, CountOperator, FilterMode, QueryMode, RetrievalBranch
-from online.domain.errors import BranchTimeoutError, ContractMismatchError, ResourceUnavailableError
+from online.domain.errors import (
+    BranchTimeoutError,
+    ContractMismatchError,
+    InvalidQueryError,
+    ResourceUnavailableError,
+)
 from online.domain.query import ObjectConstraint
 from online.modes.kis import KISRankingService, KISSearchOrchestrator, KISSearchResult
 from online.ports.records import FrameMetadata
@@ -73,6 +78,7 @@ def failed_frame_result(
     warning: str,
     *,
     variant_id: str = "q0",
+    missing_metadata_count: int = 0,
 ) -> BranchResult[FrameCandidate]:
     return BranchResult[FrameCandidate](
         branch=branch,
@@ -83,6 +89,7 @@ def failed_frame_result(
         latency_ms=2.0,
         status=BranchStatus.FAILED,
         warnings=(warning,),
+        missing_metadata_count=missing_metadata_count,
     )
 
 
@@ -399,6 +406,35 @@ class KISOrchestrationTests(unittest.TestCase):
         )
         self.assertAlmostEqual(asr_total, 1 / 11)
         self.assertIn("asr_truncated_interval_count=1", result.diagnostics.warnings)
+        asr_evidence = tuple(
+            evidence
+            for candidate in result.candidates
+            for evidence in candidate.evidence
+            if evidence.branch is RetrievalBranch.ASR_DENSE
+        )
+        self.assertTrue(asr_evidence)
+        self.assertTrue(all(evidence.source_candidate_id == "long" for evidence in asr_evidence))
+        self.assertTrue(all(evidence.source_start_time_sec == 0.0 for evidence in asr_evidence))
+        self.assertTrue(all(evidence.source_end_time_sec == 10.0 for evidence in asr_evidence))
+        self.assertTrue(all(evidence.source_normalized_score is not None for evidence in asr_evidence))
+
+    def test_missing_metadata_count_is_preserved_in_query_diagnostics(self) -> None:
+        ranking = KISRankingService(metadata=FakeMetadataReaderPort(()))
+        bundle = KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT)
+
+        result = ranking.rank(
+            bundle,
+            (
+                frame_result(RetrievalBranch.VISUAL_DENSE, ()),
+                failed_frame_result(
+                    RetrievalBranch.OCR_BM25,
+                    "MISSING_METADATA",
+                    missing_metadata_count=3,
+                ),
+            ),
+        )
+
+        self.assertEqual(result.diagnostics.missing_metadata_count, 3)
 
     def test_visual_dense_failure_is_core_error_not_empty_success(self) -> None:
         ranking = KISRankingService(metadata=FakeMetadataReaderPort(()))
@@ -458,6 +494,24 @@ class KISOrchestrationTests(unittest.TestCase):
         self.assertEqual(retrieval.calls, ["q-exec"])
         self.assertEqual(len(ranking.thread_names), 1)
         self.assertTrue(ranking.thread_names[0].startswith("aic-ranking"))
+
+    def test_orchestrator_enforces_c_policy_before_retrieval(self) -> None:
+        bundle = KISQueryBuilder().build(
+            "query",
+            mode=QueryMode.KIS_TEXT,
+            enabled_branches=(RetrievalBranch.OCR_BM25,),
+        )
+        retrieval = FakeRetrievalService(())
+        orchestrator = KISSearchOrchestrator(
+            retrieval=retrieval,
+            ranking=KISRankingService(metadata=FakeMetadataReaderPort(())),
+        )
+
+        with self.assertRaises(InvalidQueryError):
+            asyncio.run(orchestrator.search(bundle))
+        orchestrator.close()
+
+        self.assertEqual(retrieval.calls, [])
 
     def test_orchestrator_close_drains_active_request_and_rejects_new_work(self) -> None:
         async def scenario() -> None:

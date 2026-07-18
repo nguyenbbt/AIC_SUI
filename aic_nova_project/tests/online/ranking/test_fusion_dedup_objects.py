@@ -14,7 +14,7 @@ from online.domain.enums import BranchStatus, CandidateLevel, CountOperator, Fil
 from online.domain.errors import ContractMismatchError, InvalidQueryError
 from online.domain.query import ObjectConstraint
 from online.ranking.dedup import ShotDeduplicator
-from online.ranking.fusion import FusionConfig, WeightedFrameFusion
+from online.ranking.fusion import FRAME_FUSION_BRANCHES, FusionConfig, WeightedFrameFusion
 from online.ranking.object_filter import ObjectConstraintProcessor, ObjectProcessingConfig
 from online.testing import FakeObjectReaderPort
 
@@ -126,6 +126,11 @@ class FusionDedupAndObjectTests(unittest.TestCase):
             WeightedFrameFusion().fuse((result(RetrievalBranch.VISUAL_DENSE, (bad,)),))
         with self.assertRaises(ValueError):
             FusionConfig(weights={RetrievalBranch.VISUAL_DENSE: -1.0})
+        with self.assertRaises(ValueError):
+            FusionConfig(
+                default_weight=1.0,
+                weights={branch: 0.0 for branch in FRAME_FUSION_BRANCHES},
+            )
 
     def test_fusion_rejects_conflicting_metadata_for_same_frame_id(self) -> None:
         with self.assertRaises(ContractMismatchError):

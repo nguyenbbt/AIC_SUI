@@ -28,6 +28,20 @@ class CandidateProvenance(StrictFrozenModel):
     source_resource: NonEmptyStr
     query_variant_id: NonEmptyStr
     query_text: NonEmptyStr
+    source_candidate_id: NonEmptyStr | None = None
+    source_start_time_sec: Annotated[FiniteFloat, Field(ge=0.0)] | None = None
+    source_end_time_sec: Annotated[FiniteFloat, Field(ge=0.0)] | None = None
+    source_normalized_score: NormalizedScore | None = None
+
+    @model_validator(mode="after")
+    def validate_source_interval(self) -> "CandidateProvenance":
+        if (
+            self.source_start_time_sec is not None
+            and self.source_end_time_sec is not None
+            and self.source_end_time_sec < self.source_start_time_sec
+        ):
+            raise ValueError("source_end_time_sec must be >= source_start_time_sec")
+        return self
 
 
 class FrameCandidate(StrictFrozenModel):
@@ -81,6 +95,7 @@ class BranchResult(StrictFrozenModel, Generic[CandidateT]):
     latency_ms: Annotated[FiniteFloat, Field(ge=0.0)]
     status: BranchStatus
     warnings: tuple[NonEmptyStr, ...] = ()
+    missing_metadata_count: StrictIntValue = Field(default=0, ge=0)
 
     @property
     def returned_count(self) -> int:
@@ -132,6 +147,22 @@ class CandidateEvidence(StrictFrozenModel):
     query_variant_id: NonEmptyStr
     raw_score: FiniteFloat
     normalized_score: NormalizedScore
+    backend: Literal["milvus", "elasticsearch", "derived"] | None = None
+    source_resource: NonEmptyStr | None = None
+    source_candidate_id: NonEmptyStr | None = None
+    source_start_time_sec: Annotated[FiniteFloat, Field(ge=0.0)] | None = None
+    source_end_time_sec: Annotated[FiniteFloat, Field(ge=0.0)] | None = None
+    source_normalized_score: NormalizedScore | None = None
+
+    @model_validator(mode="after")
+    def validate_source_interval(self) -> "CandidateEvidence":
+        if (
+            self.source_start_time_sec is not None
+            and self.source_end_time_sec is not None
+            and self.source_end_time_sec < self.source_start_time_sec
+        ):
+            raise ValueError("source_end_time_sec must be >= source_start_time_sec")
+        return self
 
 
 class CandidateDiagnostics(StrictFrozenModel):

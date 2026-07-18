@@ -73,15 +73,6 @@ class KISQueryBuilder:
             raise InvalidQueryError("enabled_branches must be a sequence")
         else:
             branches = enabled_branches
-        try:
-            branch_values = tuple(RetrievalBranch(branch) for branch in branches)
-        except (TypeError, ValueError) as exc:
-            raise InvalidQueryError("enabled_branches contains an unknown branch") from exc
-        if RetrievalBranch.VISUAL_DENSE not in branch_values:
-            raise InvalidQueryError(
-                "KIS baseline requires visual_dense retrieval",
-                details={"branch": RetrievalBranch.VISUAL_DENSE.value},
-            )
 
         try:
             return QueryBundle(
@@ -90,7 +81,7 @@ class KISQueryBuilder:
                 original_query=query_text,
                 text_variants=tuple(variants),
                 object_constraints=tuple(object_constraints),
-                enabled_branches=branch_values,
+                enabled_branches=tuple(branches),
                 options=QueryOptions() if options is None else options,
             )
         except ValidationError as exc:

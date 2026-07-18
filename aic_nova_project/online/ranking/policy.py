@@ -17,6 +17,7 @@ from online.domain.base import (
     serialize_mapping,
 )
 from online.domain.enums import RetrievalBranch
+from online.ranking.fusion import FRAME_FUSION_BRANCHES
 
 
 RankingPolicyStatus = Literal["experimental", "approved"]
@@ -61,7 +62,13 @@ class RankingPolicyConfig(StrictFrozenModel):
             raise ValueError("only weighted_sum_query_variant_v1 aggregation is currently implemented")
         if self.asr_mapping_method != "timestamp_inclusive_distributed_v1":
             raise ValueError("only timestamp_inclusive_distributed_v1 ASR mapping is currently implemented")
-        if self.fusion_default_weight == 0.0 and not self.fusion_weights:
+        invalid_fusion_branches = set(self.fusion_weights) - set(FRAME_FUSION_BRANCHES)
+        if invalid_fusion_branches:
+            raise ValueError("fusion_weights may contain only frame-level retrieval branches")
+        if not any(
+            self.fusion_weights.get(branch, self.fusion_default_weight) > 0.0
+            for branch in FRAME_FUSION_BRANCHES
+        ):
             raise ValueError("fusion must have at least one positive weight")
         if self.summary_method != "summary_video_score_cap_v1":
             raise ValueError("only summary_video_score_cap_v1 summary propagation is currently implemented")

@@ -20,6 +20,15 @@ from online.domain.enums import BranchStatus, CandidateLevel, RetrievalBranch
 from online.domain.errors import ContractMismatchError
 
 
+FRAME_FUSION_BRANCHES: tuple[RetrievalBranch, ...] = (
+    RetrievalBranch.VISUAL_DENSE,
+    RetrievalBranch.OCR_DENSE,
+    RetrievalBranch.OCR_BM25,
+    RetrievalBranch.ASR_DENSE,
+    RetrievalBranch.ASR_BM25,
+)
+
+
 @dataclass(frozen=True)
 class FusionConfig:
     """Weights for normalized branch fusion.
@@ -41,9 +50,16 @@ class FusionConfig:
         normalized: dict[RetrievalBranch, float] = {}
         for raw_branch, weight in self.weights.items():
             branch = RetrievalBranch(raw_branch)
+            if branch not in FRAME_FUSION_BRANCHES:
+                raise ValueError(f"fusion weight is not valid for video-level branch {branch.value}")
             if not _valid_weight(weight):
                 raise ValueError(f"invalid fusion weight for {branch.value}")
             normalized[branch] = float(weight)
+        if not any(
+            normalized.get(branch, float(self.default_weight)) > 0.0
+            for branch in FRAME_FUSION_BRANCHES
+        ):
+            raise ValueError("fusion must have at least one positive frame-branch weight")
         object.__setattr__(self, "weights", MappingProxyType(normalized))
 
     def weight_for(self, branch: RetrievalBranch) -> float:
@@ -97,6 +113,16 @@ class WeightedFrameFusion:
                     query_variant_id=candidate.provenance.query_variant_id,
                     raw_score=candidate.raw_score,
                     normalized_score=candidate.normalized_score,
+                    backend=candidate.provenance.backend,
+                    source_resource=candidate.provenance.source_resource,
+                    source_candidate_id=candidate.provenance.source_candidate_id,
+                    source_start_time_sec=candidate.provenance.source_start_time_sec,
+                    source_end_time_sec=candidate.provenance.source_end_time_sec,
+                    source_normalized_score=(
+                        candidate.provenance.source_normalized_score
+                        if candidate.provenance.source_normalized_score is not None
+                        else candidate.normalized_score
+                    ),
                 )
             )
 

@@ -28,7 +28,7 @@ from online.ports.objects import ObjectReaderPort
 from online.ranking.aggregation import RRFQueryVariantAggregator
 from online.ranking.asr_mapper import ASRIntervalFrameMapper
 from online.ranking.dedup import ShotDeduplicator
-from online.ranking.fusion import FusionConfig, WeightedFrameFusion
+from online.ranking.fusion import FRAME_FUSION_BRANCHES, FusionConfig, WeightedFrameFusion
 from online.ranking.normalizers import RRFScoreNormalizer, ScoreNormalizer
 from online.ranking.object_filter import ObjectConstraintProcessor, ObjectProcessingConfig
 from online.ranking.summary import SummaryScorePropagator
@@ -69,6 +69,7 @@ class KISRankingService:
         object_config: ObjectProcessingConfig | None = None,
         policy_name: str = "person_c_experimental_baseline_v1",
         policy_status: str = "experimental",
+        core_visual_policy: str = "q0_required",
     ) -> None:
         if not isinstance(metadata, MetadataReaderPort):
             raise TypeError("metadata must implement MetadataReaderPort")
@@ -85,19 +86,28 @@ class KISRankingService:
         self.object_config = object_config or ObjectProcessingConfig()
         self.policy_name = policy_name
         self.policy_status = policy_status
+        if core_visual_policy != "q0_required":
+            raise ValueError("only q0_required core visual policy is implemented")
+        self.core_visual_policy = core_visual_policy
+
+    def validate_bundle(self, bundle: QueryBundle) -> None:
+        if not isinstance(bundle, QueryBundle):
+            raise ContractMismatchError("bundle must be a validated QueryBundle")
+        if (
+            self.core_visual_policy == "q0_required"
+            and RetrievalBranch.VISUAL_DENSE not in bundle.enabled_branches
+        ):
+            raise InvalidQueryError(
+                "KIS baseline requires visual_dense retrieval",
+                details={"branch": RetrievalBranch.VISUAL_DENSE.value},
+            )
 
     def rank(
         self,
         bundle: QueryBundle,
         branch_results: Sequence[BranchResult[Any]],
     ) -> KISSearchResult:
-        if not isinstance(bundle, QueryBundle):
-            raise ContractMismatchError("bundle must be a validated QueryBundle")
-        if RetrievalBranch.VISUAL_DENSE not in bundle.enabled_branches:
-            raise InvalidQueryError(
-                "KIS baseline requires visual_dense retrieval",
-                details={"branch": RetrievalBranch.VISUAL_DENSE.value},
-            )
+        self.validate_bundle(bundle)
         started_at = perf_counter()
         stage_latencies: dict[str, float] = {}
         mapping_loss_count = 0
@@ -165,7 +175,7 @@ class KISRankingService:
                 mapping_losses_by_branch=mapping_losses_by_branch,
                 mapped_outputs_by_branch=mapped_outputs_by_branch,
             ),
-            missing_metadata_count=0,
+            missing_metadata_count=sum(result.missing_metadata_count for result in raw_results),
             object_filter_removals=object_filter_removals,
             dedup_removals=dedup_removals,
             normalization_method=self.normalizer.name,
@@ -181,6 +191,10 @@ class KISRankingService:
                 asr_stats=asr_stats,
                 object_method=ObjectConstraintProcessor.name,
                 dedup_method=self.dedup.name,
+                normalizer=self.normalizer,
+                aggregator=self.aggregator,
+                summary=self.summary,
+                object_config=self.object_config,
             ),
             errors=(),
         )
@@ -243,6 +257,9 @@ class KISSearchOrchestrator:
                 )
             self._active_requests += 1
         try:
+            validate_bundle = getattr(self.ranking, "validate_bundle", None)
+            if callable(validate_bundle):
+                validate_bundle(bundle)
             branch_results = await self.retrieval.retrieve(bundle)
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(
@@ -287,7 +304,7 @@ def _branch_diagnostics(
     for branch, values in grouped.items():
         diagnostics[branch] = BranchDiagnostics(
             status=_combined_branch_status(branch, values),
-            latency_ms=sum(result.latency_ms for result in values),
+            latency_ms=max(result.latency_ms for result in values),
             requested_top_k=max(result.requested_top_k for result in values),
             raw_result_count=sum(result.returned_count for result in values),
             output_candidate_count=mapped_outputs_by_branch.get(
@@ -331,12 +348,11 @@ def _combined_branch_status(
 
 
 def _fusion_weights(config: FusionConfig) -> Mapping[RetrievalBranch, FiniteFloat]:
-    weights = {
+    return {
         branch: config.weight_for(branch)
-        for branch in RetrievalBranch
+        for branch in FRAME_FUSION_BRANCHES
         if config.weight_for(branch) > 0.0
     }
-    return weights or {RetrievalBranch.VISUAL_DENSE: 1.0}
 
 
 def _raise_for_core_branch_failure(results: Sequence[BranchResult[Any]]) -> None:
@@ -402,6 +418,10 @@ def _query_warnings(
     asr_stats: Mapping[str, int],
     object_method: str,
     dedup_method: str,
+    normalizer: ScoreNormalizer,
+    aggregator: RRFQueryVariantAggregator,
+    summary: SummaryScorePropagator,
+    object_config: ObjectProcessingConfig,
 ) -> tuple[str, ...]:
     values = [
         f"ranking_policy={policy_name}:{policy_status}",
@@ -410,6 +430,18 @@ def _query_warnings(
         f"asr_mapping_method={asr_mapping_method}",
         f"object_method={object_method}",
         f"dedup_method={dedup_method}",
+        "branch_latency_method=max_variant_latency",
+        f"normalization_rrf_k={getattr(normalizer, 'k', 'n/a')}",
+        "query_variant_weights="
+        + ",".join(
+            f"{variant_id}:{weight}"
+            for variant_id, weight in sorted(aggregator.config.query_variant_weights.items())
+        ),
+        f"summary_weight={summary.config.weight}",
+        f"summary_max_boost={summary.config.max_boost}",
+        f"summary_fallback_rrf_k={summary.config.fallback_rrf_k}",
+        f"object_soft_boost_per_constraint={object_config.soft_boost_per_constraint}",
+        f"object_max_total_boost={object_config.max_total_boost}",
     ]
     values.extend(f"asr_{key}={value}" for key, value in sorted(asr_stats.items()))
     values.extend(

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Annotated, Any, Protocol, runtime_checkable
 
@@ -13,7 +15,7 @@ from pydantic import Field
 from online.domain.base import NonEmptyStr, StrictFrozenModel
 from online.domain.candidates import FusedFrameCandidate
 from online.domain.diagnostics import QueryDiagnostics
-from online.domain.enums import QueryMode, RetrievalBranch
+from online.domain.enums import BranchStatus, QueryMode, RetrievalBranch
 from online.domain.errors import (
     BranchTimeoutError,
     ContractMismatchError,
@@ -23,6 +25,7 @@ from online.domain.errors import (
     MissingMetadataError,
     ResourceUnavailableError,
 )
+from online.domain.identifiers import parse_canonical_frame_id
 from online.domain.query import ObjectConstraint
 from online.modes.kis import KISSearchResult
 from query_understanding.parser import parse_kis_query
@@ -174,18 +177,21 @@ _PUBLIC_ERROR_MESSAGES = {
 
 _PUBLIC_DETAIL_KEYS = frozenset(
     {
+        "actual",
         "actual_dimension",
         "branch",
         "constraint",
+        "expected",
         "expected_dimension",
         "frame_id",
         "missing_count",
         "query_variant_id",
-        "resource",
         "status",
         "validation_error_count",
     }
 )
+
+_SAFE_QUERY_VARIANT = re.compile(r"^q[0-9]{1,3}$")
 
 
 def _public_details(details: Mapping[str, Any]) -> dict[str, Any]:
@@ -193,8 +199,45 @@ def _public_details(details: Mapping[str, Any]) -> dict[str, Any]:
     for key, value in details.items():
         if key not in _PUBLIC_DETAIL_KEYS:
             continue
-        if isinstance(value, (str, int, float, bool)) or value is None:
-            output[key] = value
+        if key == "branch":
+            try:
+                output[key] = RetrievalBranch(value).value
+            except (TypeError, ValueError):
+                continue
+        elif key == "status":
+            try:
+                output[key] = BranchStatus(value).value
+            except (TypeError, ValueError):
+                continue
+        elif key == "query_variant_id":
+            if isinstance(value, str) and _SAFE_QUERY_VARIANT.fullmatch(value):
+                output[key] = value
+        elif key == "frame_id":
+            if isinstance(value, str):
+                try:
+                    parse_canonical_frame_id(value)
+                except DataInfrastructureError:
+                    continue
+                output[key] = value
+        elif key == "constraint":
+            if value == "object_position":
+                output[key] = value
+        elif key in {
+            "actual",
+            "actual_dimension",
+            "expected",
+            "expected_dimension",
+            "missing_count",
+            "validation_error_count",
+        }:
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                public_key = {
+                    "actual": "actual_dimension",
+                    "expected": "expected_dimension",
+                }.get(key, key)
+                output[public_key] = value
+            elif isinstance(value, float) and math.isfinite(value) and value >= 0.0:
+                output[key] = value
     return output
 
 

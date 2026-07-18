@@ -71,7 +71,8 @@ these values before claiming production readiness:
 - Fusion: `experimental_weighted_sum_normalized_v1` with equal default branch
   weights.
 - Summary propagation: `summary_video_score_cap_v1`, `weight=0.1`,
-  `max_boost=0.2`.
+  `max_boost=0.2`; it uses the same q0/q1/q2 weights and normalization RRF
+  fallback configured for the frame branches.
 - ASR interval mapping: `timestamp_inclusive_distributed_v1`,
   `max_frames_per_interval=50`, interval-level RRF `k=60` when upstream ASR
   results are not already normalized.
@@ -106,26 +107,25 @@ OQ-006 normalization, OQ-007 fusion/weights, OQ-008 summary boost, OQ-009
 object defaults, OQ-010/OQ-011 object position contracts, OQ-021 lifecycle, and
 OQ-022 missing metadata.
 
-The API response schema and diagnostics fields are still unstable while A/B/C
-contracts are being merged. The current implementation preserves only fields
-already present in the shared domain models.
+The A/B/C contracts are now merged in the shared domain models. The public API
+is still internal/unstable until OQ-002 is closed, so external clients must not
+assume that the response schema is final.
 
-Cross-layer contract limitations that still require A/B agreement:
+Current evidence and diagnostics behavior:
 
-- `CandidateEvidence` cannot yet store ASR `interval_id`, interval start/end,
-  transcript text, original interval normalized score, applied contribution and
-  source candidate ID as separate fields. The mapper temporarily carries
-  `interval_id` in derived frame provenance `source_resource`, but fusion cannot
-  expose it in final evidence without changing the shared model.
-- `CandidateEvidence` cannot yet distinguish summary original normalized score,
-  weight, cap and applied contribution. Until the model is extended, summary
-  evidence `normalized_score` stores the applied contribution used for the
-  final boost.
-- `QueryDiagnostics` cannot yet represent per-variant branch status, wall-clock
-  branch latency versus invocation latency sum, ASR truncation fields, or
-  missing metadata counts from B as structured fields. The C pipeline writes
-  these as bounded warning tags where possible and avoids inventing false
-  numeric values beyond the current shared schema.
+- ASR evidence preserves backend/resource, interval ID, interval start/end and
+  the interval-level normalized score as separate fields. The mapped-frame
+  contribution remains in `normalized_score`; transcript text is intentionally
+  not copied into every final frame.
+- Summary evidence stores the original normalized/RRF score in
+  `source_normalized_score` and the applied, weighted, capped contribution in
+  `normalized_score`.
+- `QueryDiagnostics.missing_metadata_count` is propagated from B. Branch
+  latency uses the maximum variant latency as the bounded wall-clock estimate;
+  per-variant outcomes and ASR truncation counters remain bounded warning tags
+  because the current diagnostics schema is branch-level.
+- The B query builder remains policy-neutral. C validates the configured
+  `q0_required` visual policy before retrieval begins.
 
 Run the API locally after installing runtime dependencies:
 
@@ -157,7 +157,10 @@ Minimal v-KIS request:
 ```
 
 Public endpoints are `/health/live`, `/health/ready`, and `/search`. The API is
-internal/unstable until OQ-002 is closed.
+internal/unstable until OQ-002 is closed. Runtime startup probes the required
+visual encoder and optional Vietnamese encoder for batch shape, dimension,
+finite values and positive vector norm; these checks do not replace the full
+Offline contract validator or a real database vertical slice.
 
 Concurrency contract: search ports are synchronous. SQLite serializes each
 connection's calls with a re-entrant lock and uses one read-only connection per

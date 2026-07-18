@@ -5,6 +5,8 @@ import unittest
 
 from pydantic import ValidationError
 
+from online.domain.enums import RetrievalBranch
+from online.ranking.fusion import FRAME_FUSION_BRANCHES
 from online.ranking.policy import RankingPolicyConfig
 
 
@@ -26,7 +28,20 @@ class RankingPolicyConfigTests(unittest.TestCase):
             RankingPolicyConfig(summary_weight=2.0)
         with self.assertRaises(ValidationError):
             RankingPolicyConfig(query_variant_weights={"q0": math.inf})
-
+        with self.assertRaises(ValidationError):
+            RankingPolicyConfig(
+                fusion_default_weight=0.0,
+                fusion_weights={RetrievalBranch.VISUAL_DENSE: 0.0},
+            )
+        with self.assertRaises(ValidationError):
+            RankingPolicyConfig(
+                fusion_default_weight=1.0,
+                fusion_weights={branch: 0.0 for branch in FRAME_FUSION_BRANCHES},
+            )
+        with self.assertRaises(ValidationError):
+            RankingPolicyConfig(
+                fusion_weights={RetrievalBranch.SUMMARY_DENSE: 1.0},
+            )
 
 if __name__ == "__main__":
     unittest.main()

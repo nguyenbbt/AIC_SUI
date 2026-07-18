@@ -7,7 +7,7 @@ import unittest
 
 from online.domain.candidates import BranchResult
 from online.domain.enums import BranchStatus, CandidateLevel, QueryMode, RetrievalBranch
-from online.domain.errors import ContractMismatchError, ResourceUnavailableError
+from online.domain.errors import ContractMismatchError, MissingMetadataError, ResourceUnavailableError
 from online.domain.query import QueryBundle, TextQueryVariant
 from online.retrieval.branches import (
     ASRLexicalBranch,
@@ -351,6 +351,37 @@ class RetrievalServiceTests(unittest.TestCase):
             all(result.warnings == ("RESOURCE_UNAVAILABLE",) for result in results)
         )
         self.assertTrue(all("secret" not in str(result.warnings) for result in results))
+
+    def test_missing_metadata_count_survives_failure_handoff(self) -> None:
+        visual = ProbeRunner(RetrievalBranch.VISUAL_DENSE)
+        ocr = ProbeRunner(
+            RetrievalBranch.OCR_BM25,
+            error=MissingMetadataError(
+                "metadata missing",
+                details={"missing_count": 4},
+            ),
+        )
+        query = KISQueryBuilder().build(
+            "query",
+            mode=QueryMode.KIS_TEXT,
+            enabled_branches=(RetrievalBranch.VISUAL_DENSE, RetrievalBranch.OCR_BM25),
+        )
+        service = RetrievalService(
+            branches={
+                RetrievalBranch.VISUAL_DENSE: visual,
+                RetrievalBranch.OCR_BM25: ocr,
+            },
+            invocation_configs=make_configs(query),
+            max_workers=2,
+        )
+        try:
+            results = asyncio.run(service.retrieve(query))
+        finally:
+            service.close(wait=True)
+
+        ocr_result = next(result for result in results if result.branch is RetrievalBranch.OCR_BM25)
+        self.assertEqual(ocr_result.warnings, ("MISSING_METADATA",))
+        self.assertEqual(ocr_result.missing_metadata_count, 4)
 
     def test_empty_success_is_not_converted_to_failure(self) -> None:
         visual = ProbeRunner(RetrievalBranch.VISUAL_DENSE)

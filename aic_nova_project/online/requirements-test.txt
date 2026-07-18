@@ -1,3 +1,4 @@
-# SDK-free contract/adapter unit-test dependencies.
+# SDK-free Online contract, adapter, ranking and API test dependencies.
 pytest>=8.2,<9
 httpx>=0.27,<0.29
+fastapi>=0.111,<1

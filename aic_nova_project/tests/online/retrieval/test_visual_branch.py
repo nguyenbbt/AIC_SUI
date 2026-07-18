@@ -197,7 +197,7 @@ class VisualSemanticBranchTests(unittest.TestCase):
         with self.assertRaises(ContractMismatchError):
             branch.retrieve_variant(TextQueryVariant(variant_id="q0", text="query"), top_k=1)
 
-    def test_invalid_top_k_and_disabled_branch_are_rejected_before_work(self) -> None:
+    def test_invalid_top_k_is_rejected_and_query_builder_keeps_branch_policy_neutral(self) -> None:
         encoder = FakeTextEncoder()
         milvus = FakeMilvusSearchPort()
         branch = VisualSemanticBranch(
@@ -211,12 +211,12 @@ class VisualSemanticBranchTests(unittest.TestCase):
                 with self.assertRaises(InvalidQueryError):
                     branch.retrieve_variant(variant, top_k=top_k)  # type: ignore[arg-type]
 
-        with self.assertRaises(InvalidQueryError):
-            KISQueryBuilder().build(
-                "query",
-                mode=QueryMode.KIS_TEXT,
-                enabled_branches=(RetrievalBranch.OCR_DENSE,),
-            )
+        bundle = KISQueryBuilder().build(
+            "query",
+            mode=QueryMode.KIS_TEXT,
+            enabled_branches=(RetrievalBranch.OCR_DENSE,),
+        )
+        self.assertEqual(bundle.enabled_branches, (RetrievalBranch.OCR_DENSE,))
         self.assertEqual(encoder.calls, [])
         self.assertEqual(milvus.visual_calls, [])
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -17,7 +18,12 @@ from online.adapters.milvus import MilvusSearchAdapter
 from online.adapters.sqlite import SQLiteReadAdapter
 from online.config import OnlineDataConfig
 from online.domain.enums import RetrievalBranch
-from online.lifecycle import HealthStatus, InfrastructureHealth, InfrastructureLifecycle
+from online.lifecycle import (
+    ComponentHealth,
+    HealthStatus,
+    InfrastructureHealth,
+    InfrastructureLifecycle,
+)
 from online.modes.kis import KISRankingService, KISSearchOrchestrator
 from online.ports import (
     ElasticsearchSearchPort,
@@ -28,7 +34,7 @@ from online.ports import (
 )
 from online.ranking.aggregation import QueryVariantAggregationConfig, RRFQueryVariantAggregator
 from online.ranking.asr_mapper import ASRIntervalFrameMapper, ASRMappingConfig
-from online.ranking.fusion import FusionConfig, WeightedFrameFusion
+from online.ranking.fusion import FRAME_FUSION_BRANCHES, FusionConfig, WeightedFrameFusion
 from online.ranking.normalizers import RRFScoreNormalizer
 from online.ranking.object_filter import ObjectProcessingConfig
 from online.ranking.policy import RankingPolicyConfig
@@ -57,6 +63,12 @@ class RuntimeCompositionConfig:
     deployment_mode: str = "development"
 
     def __post_init__(self) -> None:
+        if not isinstance(self.deployment_mode, str):
+            raise ValueError("deployment_mode must be development, test or production")
+        deployment_mode = self.deployment_mode.strip().lower()
+        if deployment_mode not in {"development", "test", "production"}:
+            raise ValueError("deployment_mode must be development, test or production")
+        object.__setattr__(self, "deployment_mode", deployment_mode)
         if _invalid_positive_int(self.max_workers):
             raise ValueError("max_workers must be a positive integer")
         if _invalid_positive_int(self.ranking_max_workers):
@@ -89,7 +101,7 @@ class RuntimeCompositionConfig:
             if value is not None and _invalid_positive_int(value):
                 raise ValueError("expected dimensions must be positive integers")
         policy = self.ranking_policy or RankingPolicyConfig()
-        if self.deployment_mode == "production" and policy.policy_status == "experimental":
+        if deployment_mode == "production" and policy.policy_status == "experimental":
             raise ValueError("experimental ranking policy is not allowed in production mode")
         object.__setattr__(self, "ranking_policy", policy)
 
@@ -131,14 +143,18 @@ class OnlineRuntime:
     lifecycle: InfrastructureLifecycle
     retrieval: RetrievalService
     ranking_executor: ThreadPoolExecutor
+    readiness_probes: tuple["RuntimeReadinessProbe", ...] = ()
+    readiness_components: tuple[ComponentHealth, ...] = ()
     last_health: InfrastructureHealth | None = None
 
     def start(self) -> InfrastructureHealth:
-        self.last_health = self.lifecycle.start()
+        infrastructure = self.lifecycle.start()
+        self.readiness_components = tuple(_run_readiness_probe(probe) for probe in self.readiness_probes)
+        self.last_health = _merge_health(infrastructure, self.readiness_components)
         return self.last_health
 
     def health(self) -> InfrastructureHealth:
-        self.last_health = self.lifecycle.health()
+        self.last_health = _merge_health(self.lifecycle.health(), self.readiness_components)
         return self.last_health
 
     def close(self) -> None:
@@ -152,6 +168,13 @@ class OnlineRuntime:
                     self.ranking_executor.shutdown(wait=True, cancel_futures=True)
                 finally:
                     self.lifecycle.close()
+
+
+@dataclass(frozen=True)
+class RuntimeReadinessProbe:
+    name: str
+    required: bool
+    check: Callable[[], None]
 
 
 def build_invocation_configs(
@@ -241,6 +264,8 @@ def build_online_runtime(
                 weight=policy.summary_weight,
                 max_boost=policy.summary_max_boost,
                 method_name=policy.summary_method,
+                fallback_rrf_k=policy.normalization_rrf_k,
+                query_variant_weights=policy.query_variant_weights,
             )
         ),
         object_config=ObjectProcessingConfig(
@@ -249,6 +274,7 @@ def build_online_runtime(
         ),
         policy_name=policy.policy_name,
         policy_status=policy.policy_status,
+        core_visual_policy=policy.core_visual_policy,
     )
     ranking_executor = ThreadPoolExecutor(
         max_workers=runtime_config.ranking_max_workers,
@@ -263,6 +289,24 @@ def build_online_runtime(
         lifecycle=lifecycle,
         retrieval=retrieval,
         ranking_executor=ranking_executor,
+        readiness_probes=(
+            RuntimeReadinessProbe(
+                name="visual_encoder",
+                required=True,
+                check=_encoder_readiness_probe(
+                    visual_encoder,
+                    expected_dimension=runtime_config.visual_expected_dimension,
+                ),
+            ),
+            RuntimeReadinessProbe(
+                name="vietnamese_encoder",
+                required=False,
+                check=_encoder_readiness_probe(
+                    vietnamese_encoder,
+                    expected_dimension=runtime_config.vietnamese_expected_dimension,
+                ),
+            ),
+        ),
     )
 
 
@@ -332,7 +376,7 @@ def _ranking_policy_from_env(prefix: str) -> RankingPolicyConfig:
         fusion_default_weight=_env_float(prefix, "RANKING_FUSION_DEFAULT_WEIGHT", 1.0),
         fusion_weights={
             branch: _env_float(prefix, f"RANKING_FUSION_{branch.name}_WEIGHT", 1.0)
-            for branch in RetrievalBranch
+            for branch in FRAME_FUSION_BRANCHES
         },
         summary_weight=_env_float(prefix, "RANKING_SUMMARY_WEIGHT", 0.1),
         summary_max_boost=_env_float(prefix, "RANKING_SUMMARY_MAX_BOOST", 0.2),
@@ -348,11 +392,71 @@ def _invalid_positive_int(value: object) -> bool:
 
 
 def _invalid_positive_float(value: object) -> bool:
-    return isinstance(value, bool) or not isinstance(value, (int, float)) or float(value) <= 0
+    return (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or float(value) <= 0
+    )
+
+
+def _encoder_readiness_probe(
+    encoder: TextEncoderPort,
+    *,
+    expected_dimension: int | None,
+) -> Callable[[], None]:
+    def check() -> None:
+        encoded = encoder.encode_texts(("readiness probe",))
+        vectors = tuple(tuple(float(value) for value in vector) for vector in encoded)
+        if len(vectors) != 1 or not vectors[0]:
+            raise ValueError("encoder readiness probe returned an invalid batch")
+        vector = vectors[0]
+        dimension = encoder.dimension
+        if isinstance(dimension, bool) or not isinstance(dimension, int) or dimension < 1:
+            raise ValueError("encoder readiness probe reported an invalid dimension")
+        if len(vector) != dimension:
+            raise ValueError("encoder readiness vector dimension is inconsistent")
+        if expected_dimension is not None and dimension != expected_dimension:
+            raise ValueError("encoder readiness dimension does not match configured dimension")
+        if not all(math.isfinite(value) for value in vector):
+            raise ValueError("encoder readiness vector must be finite")
+        norm = math.sqrt(sum(value * value for value in vector))
+        if not math.isfinite(norm) or norm <= 0.0:
+            raise ValueError("encoder readiness vector must have a positive finite norm")
+
+    return check
+
+
+def _run_readiness_probe(probe: RuntimeReadinessProbe) -> ComponentHealth:
+    try:
+        probe.check()
+    except Exception as exc:
+        return ComponentHealth(
+            name=probe.name,
+            required=probe.required,
+            healthy=False,
+            message=f"{type(exc).__name__}: readiness probe failed",
+        )
+    return ComponentHealth(name=probe.name, required=probe.required, healthy=True)
+
+
+def _merge_health(
+    infrastructure: InfrastructureHealth,
+    extra_components: tuple[ComponentHealth, ...],
+) -> InfrastructureHealth:
+    components = infrastructure.components + extra_components
+    if any(not component.healthy and component.required for component in components):
+        status = HealthStatus.UNHEALTHY
+    elif any(not component.healthy for component in components):
+        status = HealthStatus.DEGRADED
+    else:
+        status = HealthStatus.HEALTHY
+    return InfrastructureHealth(status=status, components=components)
 
 
 __all__ = [
     "OnlineRuntime",
+    "RuntimeReadinessProbe",
     "RuntimeCompositionConfig",
     "VARIANT_IDS",
     "build_invocation_configs",

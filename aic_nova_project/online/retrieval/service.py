@@ -263,6 +263,7 @@ class RetrievalService:
                 invocation,
                 warning=exc.code.value,
                 latency_ms=self._elapsed_ms(started_at),
+                missing_metadata_count=_missing_metadata_count(exc),
             )
         except Exception:
             result = self._failure_result(
@@ -298,6 +299,7 @@ class RetrievalService:
         *,
         warning: str,
         latency_ms: float,
+        missing_metadata_count: int = 0,
     ) -> BranchResult[Any]:
         status = (
             BranchStatus.FAILED
@@ -313,6 +315,7 @@ class RetrievalService:
             latency_ms=latency_ms,
             status=status,
             warnings=(warning,),
+            missing_metadata_count=missing_metadata_count,
         )
 
     @staticmethod
@@ -393,6 +396,15 @@ class RetrievalService:
         if not math.isfinite(elapsed) or elapsed < 0.0:
             raise RuntimeError("monotonic clock returned an invalid duration")
         return elapsed
+
+
+def _missing_metadata_count(exc: DataInfrastructureError) -> int:
+    if exc.code.value != "MISSING_METADATA":
+        return 0
+    value = exc.details.get("missing_count", 0)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
 
 
 __all__ = [
