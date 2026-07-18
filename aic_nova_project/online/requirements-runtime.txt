@@ -1,4 +1,6 @@
 # Runtime-only Online infrastructure dependencies.
 pydantic>=2.7,<3
+fastapi>=0.111,<1
+uvicorn[standard]>=0.30,<1
 pymilvus>=2.4,<3
 elasticsearch>=8.12,<9
