@@ -74,6 +74,7 @@ Before analyzing, planning or modifying source code, read these files in order:
 11. `docs/09-IMPLEMENTATION-PLAN.md`
 12. `docs/10-OFFLINE-CODE-ISSUES.md`
 13. `docs/11-ONLINE-TEAM-TASK-ASSIGNMENT.md`
+14. `docs/13-ONLINE-NEXT-STEPS-ADVANCED-MODES.md`
 
 `docs/10-OFFLINE-CODE-ISSUES.md` is an audit snapshot. Re-verify an issue against
 the checked-out code before claiming that it is still present.
@@ -81,6 +82,10 @@ the checked-out code before claiming that it is still present.
 `docs/11-ONLINE-TEAM-TASK-ASSIGNMENT.md` defines team boundaries and the approved
 internal Online model/port conventions. It does not silently close algorithmic
 questions listed in `docs/08-OPEN-QUESTIONS.md`.
+
+`docs/13-ONLINE-NEXT-STEPS-ADVANCED-MODES.md` is the current execution order for
+the three-person team after the A/B/C KIS merge: advanced-mode contracts and
+fake-data implementation first, real-data validation and tuning last.
 
 Do not begin a coding milestone before reading the documents relevant to that
 milestone and inspecting its source dependencies.
