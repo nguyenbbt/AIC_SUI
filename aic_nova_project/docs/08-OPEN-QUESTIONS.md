@@ -196,87 +196,55 @@ Cần chốt:
 
 ## OQ-013 — DANTE candidate scope
 
-**Blocker for:** TRAKE performance.
+**Status:** RESOLVED — xem DD-026.
 
-Cần chốt:
-
-- Chạy trên toàn bộ keyframe từng video?
-- Lấy top-M per event rồi union videos?
-- Candidate-video generation bằng visual branch?
-- Có threshold không?
-
-Không dùng summary hard prefilter.
+Dùng toàn bộ ordered keyframes của từng video, không top-M/threshold/summary
+prefilter. DANTE chạy độc lập theo `video_id`.
 
 ---
 
 ## OQ-014 — DANTE temporal distance
 
-**Blocker for:** DANTE implementation.
+**Status:** RESOLVED — xem DD-027.
 
-Distance dùng:
-
-- Keyframe index gap.
-- Timestamp seconds.
-- Shot gap.
-
-Cần chốt cùng đơn vị của `λ`.
+Dùng strict ordered-keyframe index gap `t - tau` và linear penalty đúng
+Equations (2)–(4) của paper AIO_DANTE+QUEST.
 
 ---
 
 ## OQ-015 — DANTE λ
 
-**Blocker for:** TRAKE ranking.
+**Status:** RESOLVED — xem DD-028.
 
-Cần:
-
-- Default.
-- Config range.
-- Validation dataset.
-- Có query-dependent λ không?
+Default `0.001`, configurable trong `[0.001, 0.01]`, không query-dependent.
 
 ---
 
 ## OQ-016 — DANTE output granularity
 
-**Blocker for:** TRAKE API.
+**Status:** RESOLVED — xem DD-029.
 
-Mỗi event trả:
-
-- Một best frame?
-- Best frame + near frames?
-- Top-k sequences?
-- Video score normalization theo số event?
+Trả top-k videos; mỗi video có một best sequence gồm đúng một keyframe cho mỗi
+event qua backtracking.
 
 ---
 
 ## OQ-017 — VQA evidence budget
 
-**Blocker for:** VQA generation.
+**Status:** RESOLVED — xem DD-030.
 
-Cần chốt:
-
-- Số video.
-- Số keyframe.
-- Near-frame window.
-- OCR text amount.
-- ASR intervals.
-- Summary length.
-- Token/image budget.
+Budget mặc định: 3 videos, tối đa 8 primary/12 total images, OCR 2,000 ký tự,
+ASR 4,000 ký tự, summary 800 ký tự/video và tổng evidence text 8,000 ký tự.
 
 ---
 
 ## OQ-018 — VQA model and prompt contract
 
-**Blocker for:** VQA final stage.
+**Status:** RESOLVED — xem DD-031.
 
-Cần chốt:
-
-- VLM/model.
-- Answer types.
-- Evidence-only policy.
-- Confidence.
-- Fallback/no-answer.
-- Output language.
+Dùng stable `gemini-3.5-flash` qua mockable port, structured evidence-only output,
+categorical confidence, explicit insufficient-evidence và trả lời cùng ngôn ngữ
+với câu hỏi.
 
 ---
 

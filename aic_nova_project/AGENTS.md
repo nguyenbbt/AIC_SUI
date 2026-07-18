@@ -75,6 +75,7 @@ Before analyzing, planning or modifying source code, read these files in order:
 12. `docs/10-OFFLINE-CODE-ISSUES.md`
 13. `docs/11-ONLINE-TEAM-TASK-ASSIGNMENT.md`
 14. `docs/13-ONLINE-NEXT-STEPS-ADVANCED-MODES.md`
+15. `docs/14-TRAKE-DANTE-VQA-CODING-ASSIGNMENT.md`
 
 `docs/10-OFFLINE-CODE-ISSUES.md` is an audit snapshot. Re-verify an issue against
 the checked-out code before claiming that it is still present.
@@ -83,9 +84,11 @@ the checked-out code before claiming that it is still present.
 internal Online model/port conventions. It does not silently close algorithmic
 questions listed in `docs/08-OPEN-QUESTIONS.md`.
 
-`docs/13-ONLINE-NEXT-STEPS-ADVANCED-MODES.md` is the current execution order for
-the three-person team after the A/B/C KIS merge: advanced-mode contracts and
-fake-data implementation first, real-data validation and tuning last.
+`docs/13-ONLINE-NEXT-STEPS-ADVANCED-MODES.md` is retained as planning history.
+After OQ-013–018 were resolved, `docs/14-TRAKE-DANTE-VQA-CODING-ASSIGNMENT.md`
+became the current execution order for the three-person team: advanced-mode
+contracts and fake-data implementation first, real-data validation and tuning
+last.
 
 Do not begin a coding milestone before reading the documents relevant to that
 milestone and inspecting its source dependencies.
@@ -411,8 +414,9 @@ Milestones:
 9. `B8`: shared t-KIS/v-KIS behavior.
 10. `B9`: integration with Person A adapters and handoff to Person C.
 
-Person B may later own TRAKE event encoding/similarity/DANTE after the related
-open questions are approved, and supports VQA retrieval reuse after KIS baseline.
+Person B owns TRAKE event encoding/similarity/DANTE under DD-026–DD-029 and the
+task boundaries in `docs/14-TRAKE-DANTE-VQA-CODING-ASSIGNMENT.md`. Person B also
+supports VQA retrieval rewrite/reuse under DD-030–DD-031.
 
 Person B does not own:
 
@@ -487,7 +491,8 @@ Milestones:
 7. `C6`: deterministic deduplication and near-frame grouping.
 8. `C7`: shared search orchestrator.
 9. `C8`: API, mode routing, health and error mapping after OQ-002.
-10. `C9`: VQA evidence orchestration after OQ-012/OQ-017/OQ-018.
+10. `C9`: VQA evidence contracts/fake orchestration under DD-030–DD-031; actual
+    image resolution and real-data VQA remain blocked by OQ-012.
 11. `C10`: UI/backend object-constraint contract.
 
 Person C must consume `RetrievalService`/`BranchResult` instead of running new
@@ -599,14 +604,17 @@ Do not silently decide:
 - Summary boost.
 - Object hard/soft default and position calculation.
 - Image path resolution.
-- DANTE candidate scope, distance, lambda or output granularity.
-- VQA evidence budget/model/prompt.
 - Stable Diffusion or QUEST activation.
 - Database retry/pooling/circuit-breaker lifecycle.
 - Missing metadata policy.
 
 Internal model shapes already approved in `docs/11` may be implemented, but they
 do not determine these algorithms or production parameters.
+
+DANTE scope/distance/lambda/output and VQA evidence/model/prompt are no longer
+open: follow DD-026–DD-031 and
+`docs/14-TRAKE-DANTE-VQA-CODING-ASSIGNMENT.md` exactly. OQ-012 still blocks the
+actual image resolver, but not VQA contract/fake implementation.
 
 ---
 

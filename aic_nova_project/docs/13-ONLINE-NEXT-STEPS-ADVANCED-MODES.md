@@ -1,5 +1,10 @@
 # 13 — Kế hoạch tiếp theo cho ba người: TRAKE/DANTE và VQA trước dữ liệu thật
 
+> **SUPERSEDED:** OQ-013–018 đã được người dùng ủy quyền và chốt tại DD-026–031.
+> Dùng `docs/14-TRAKE-DANTE-VQA-CODING-ASSIGNMENT.md` làm kế hoạch triển khai
+> chính thức. File này chỉ giữ lại lịch sử lập kế hoạch trước khi các quyết định
+> thuật toán được đóng.
+
 ## 1. Mục đích của tài liệu
 
 Tài liệu này bắt đầu tại mốc:
