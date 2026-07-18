@@ -76,7 +76,7 @@ Before analyzing, planning or modifying source code, read these files in order:
 13. `docs/11-ONLINE-TEAM-TASK-ASSIGNMENT.md`
 14. `docs/13-ONLINE-NEXT-STEPS-ADVANCED-MODES.md`
 15. `docs/14-TRAKE-DANTE-VQA-CODING-ASSIGNMENT.md`
-16. `docs/15-CODEX-HANDOFF-PACK-PERSON-A-C.md`
+16. `docs/15-THREE-PERSON-PARALLEL-CODING-PLAN.md`
 
 `docs/10-OFFLINE-CODE-ISSUES.md` is an audit snapshot. Re-verify an issue against
 the checked-out code before claiming that it is still present.
@@ -91,9 +91,9 @@ became the current execution order for the three-person team: advanced-mode
 contracts and fake-data implementation first, real-data validation and tuning
 last.
 
-`docs/15-CODEX-HANDOFF-PACK-PERSON-A-C.md` contains the exact bounded prompts,
-review gates and handoff report format used when Persons A and C work through
-separate Codex threads without the integration owner's conversation history.
+`docs/15-THREE-PERSON-PARALLEL-CODING-PLAN.md` is the active low-conflict plan
+for Persons A, B and C to implement advanced modes concurrently on separate
+branches before the real-data integration phase.
 
 Do not begin a coding milestone before reading the documents relevant to that
 milestone and inspecting its source dependencies.
