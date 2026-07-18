@@ -116,6 +116,10 @@ class SummaryPropagationTests(unittest.TestCase):
         )
         self.assertAlmostEqual(output[0].evidence[0].normalized_score, 0.15)
         self.assertAlmostEqual(output[0].evidence[1].normalized_score, 0.05)
+        self.assertAlmostEqual(
+            sum(evidence.normalized_score for evidence in output[0].evidence),
+            output[0].diagnostics.summary_boost,
+        )
         self.assertAlmostEqual(output[0].diagnostics.object_boost, 0.03)
         self.assertAlmostEqual(output[1].final_score, 0.55)
         self.assertEqual(len(output), 2)
@@ -159,6 +163,44 @@ class SummaryPropagationTests(unittest.TestCase):
             SummaryPropagationConfig(weight=-0.1)
         with self.assertRaises(ValueError):
             SummaryPropagationConfig(method_name=" ")
+        with self.assertRaises(ValueError):
+            SummaryPropagationConfig(weight=2.0)
+        with self.assertRaises(ValueError):
+            SummaryPropagationConfig(max_boost=2.0)
+
+    def test_propagate_is_idempotent_for_summary_evidence(self) -> None:
+        propagator = SummaryScorePropagator(
+            SummaryPropagationConfig(weight=0.1, max_boost=0.1)
+        )
+        summary_results = (
+            summary_result(
+                RetrievalBranch.SUMMARY_DENSE,
+                (
+                    video_candidate(
+                        "V001",
+                        branch=RetrievalBranch.SUMMARY_DENSE,
+                        normalized_score=0.7,
+                    ),
+                ),
+            ),
+            summary_result(
+                RetrievalBranch.SUMMARY_BM25,
+                (
+                    video_candidate(
+                        "V001",
+                        branch=RetrievalBranch.SUMMARY_BM25,
+                        normalized_score=0.7,
+                    ),
+                ),
+            ),
+        )
+        once = propagator.propagate(
+            (frame("V001_00000_015", video_id="V001", final_score=0.5),),
+            summary_results,
+        )
+        twice = propagator.propagate(once, summary_results)
+
+        self.assertEqual(twice, once)
 
     def test_invalid_inputs_are_rejected(self) -> None:
         propagator = SummaryScorePropagator()

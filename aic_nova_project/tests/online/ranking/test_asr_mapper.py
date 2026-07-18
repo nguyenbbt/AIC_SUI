@@ -163,6 +163,22 @@ class ASRIntervalFrameMapperTests(unittest.TestCase):
         self.assertEqual(tuple(item.raw_score for item in mapped), (0.5, 0.5))
         self.assertEqual(tuple(item.normalized_score for item in mapped), (0.4, 0.4))
 
+    def test_missing_interval_normalized_score_uses_interval_level_rrf_before_mapping(self) -> None:
+        mapper = ASRIntervalFrameMapper(ASRMappingConfig(interval_rrf_k=10))
+        mapped = mapper.map_interval(
+            interval("speech-42", start=1.0, end=6.0, rank=1, normalized_score=None),
+            (
+                frame("V001_00000_015", timestamp=1.5),
+                frame("V001_00000_050", timestamp=5.0),
+            ),
+        )
+
+        self.assertAlmostEqual(sum(item.normalized_score for item in mapped), 1 / 11)
+        self.assertEqual(
+            tuple(item.provenance.source_resource for item in mapped),
+            ("asr_features:speech-42", "asr_features:speech-42"),
+        )
+
     def test_video_without_metadata_is_mapping_loss_not_cross_video_mapping(self) -> None:
         mapper = ASRIntervalFrameMapper()
         result = mapper.map_result(

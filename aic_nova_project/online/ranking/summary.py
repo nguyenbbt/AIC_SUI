@@ -39,8 +39,18 @@ class SummaryPropagationConfig:
             raise ValueError("weight must be finite and >= 0")
         if not _finite_non_negative(self.max_boost):
             raise ValueError("max_boost must be finite and >= 0")
+        if self.weight > 1.0:
+            raise ValueError("weight must be <= 1 while stored in CandidateEvidence.normalized_score")
+        if self.max_boost > 1.0:
+            raise ValueError("max_boost must be <= 1 while stored in CandidateEvidence.normalized_score")
         if not isinstance(self.method_name, str) or not self.method_name.strip():
             raise ValueError("method_name must be non-empty")
+
+
+@dataclass(frozen=True)
+class SummaryContributionResult:
+    total_boost: float
+    evidence: tuple[CandidateEvidence, ...]
 
 
 class SummaryScorePropagator:
@@ -61,26 +71,32 @@ class SummaryScorePropagator:
         frame_values = _as_frames(frames)
         if not frame_values:
             return ()
-        summary_scores = self.aggregate_video_scores(summary_results)
-        if not summary_scores:
+        contributions = self._contributions_by_video(summary_results)
+        if not contributions:
             return frame_values
-        summary_evidence = self._summary_evidence_by_video(summary_results)
 
         boosted: list[FusedFrameCandidate] = []
         for frame in frame_values:
-            video_score = summary_scores.get(frame.video_id, 0.0)
-            boost = min(self.config.max_boost, video_score * self.config.weight)
+            contribution = contributions.get(frame.video_id)
+            if contribution is None:
+                boosted.append(frame)
+                continue
+            boost = contribution.total_boost
+            base_score = frame.final_score - frame.diagnostics.summary_boost
             diagnostics = CandidateDiagnostics(
-                summary_boost=frame.diagnostics.summary_boost + boost,
+                summary_boost=boost,
                 object_boost=frame.diagnostics.object_boost,
                 object_constraints_satisfied=frame.diagnostics.object_constraints_satisfied,
+            )
+            base_evidence = tuple(
+                evidence for evidence in frame.evidence if evidence.branch not in SUMMARY_BRANCHES
             )
             boosted.append(
                 frame.model_copy(
                     update={
-                        "final_score": frame.final_score + boost,
+                        "final_score": base_score + boost,
                         "diagnostics": diagnostics,
-                        "evidence": frame.evidence + summary_evidence.get(frame.video_id, ()),
+                        "evidence": base_evidence + contribution.evidence,
                     }
                 )
             )
@@ -90,31 +106,20 @@ class SummaryScorePropagator:
         self,
         summary_results: Sequence[BranchResult[Any]],
     ) -> dict[str, float]:
-        values = _as_branch_results(summary_results)
-        scores: dict[str, float] = defaultdict(float)
-        for result in values:
-            if result.status not in {BranchStatus.SUCCESS, BranchStatus.DEGRADED}:
-                continue
-            if result.candidate_level is not CandidateLevel.VIDEO:
-                continue
-            if result.branch not in SUMMARY_BRANCHES:
-                continue
-            for candidate in result.candidates:
-                if not isinstance(candidate, VideoCandidate):
-                    raise TypeError("summary BranchResult contains a non-video candidate")
-                score = candidate.normalized_score
-                if score is None:
-                    score = 1.0 / (60 + candidate.rank)
-                scores[candidate.video_id] = min(1.0, scores[candidate.video_id] + score)
-        return dict(scores)
+        return {
+            video_id: min(1.0, contribution.total_boost / self.config.weight)
+            if self.config.weight > 0.0
+            else 0.0
+            for video_id, contribution in self._contributions_by_video(summary_results).items()
+        }
 
-    def _summary_evidence_by_video(
+    def _contributions_by_video(
         self,
         summary_results: Sequence[BranchResult[Any]],
-    ) -> dict[str, tuple[CandidateEvidence, ...]]:
+    ) -> dict[str, SummaryContributionResult]:
         values = _as_branch_results(summary_results)
         by_video: dict[str, list[CandidateEvidence]] = defaultdict(list)
-        used_boost_by_video: dict[str, float] = defaultdict(float)
+        boost_by_video: dict[str, float] = defaultdict(float)
         for result in values:
             if result.status not in {BranchStatus.SUCCESS, BranchStatus.DEGRADED}:
                 continue
@@ -126,11 +131,11 @@ class SummaryScorePropagator:
                 score = candidate.normalized_score
                 if score is None:
                     score = 1.0 / (60 + candidate.rank)
-                remaining = max(0.0, self.config.max_boost - used_boost_by_video[candidate.video_id])
+                remaining = max(0.0, self.config.max_boost - boost_by_video[candidate.video_id])
                 contribution = min(remaining, score * self.config.weight)
                 if contribution <= 0.0:
                     continue
-                used_boost_by_video[candidate.video_id] += contribution
+                boost_by_video[candidate.video_id] += contribution
                 by_video[candidate.video_id].append(
                     CandidateEvidence(
                         branch=candidate.provenance.branch,
@@ -140,7 +145,10 @@ class SummaryScorePropagator:
                     )
                 )
         return {
-            video_id: tuple(evidence)
+            video_id: SummaryContributionResult(
+                total_boost=boost_by_video[video_id],
+                evidence=tuple(evidence),
+            )
             for video_id, evidence in by_video.items()
         }
 

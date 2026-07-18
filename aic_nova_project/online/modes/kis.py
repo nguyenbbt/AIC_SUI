@@ -7,6 +7,7 @@ import asyncio
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from concurrent.futures import Executor, ThreadPoolExecutor
+from threading import Condition
 from time import perf_counter
 from typing import Any, Protocol, runtime_checkable
 
@@ -14,7 +15,13 @@ from online.domain.base import FiniteFloat, StrictFrozenModel
 from online.domain.candidates import BranchResult, FusedFrameCandidate
 from online.domain.diagnostics import BranchDiagnostics, QueryDiagnostics
 from online.domain.enums import BranchStatus, CandidateLevel, RetrievalBranch
-from online.domain.errors import BranchTimeoutError, ContractMismatchError, ResourceUnavailableError
+from online.domain.errors import (
+    BranchTimeoutError,
+    ContractMismatchError,
+    ErrorCode,
+    InvalidQueryError,
+    ResourceUnavailableError,
+)
 from online.domain.query import QueryBundle
 from online.ports.metadata import MetadataReaderPort
 from online.ports.objects import ObjectReaderPort
@@ -23,7 +30,7 @@ from online.ranking.asr_mapper import ASRIntervalFrameMapper
 from online.ranking.dedup import ShotDeduplicator
 from online.ranking.fusion import FusionConfig, WeightedFrameFusion
 from online.ranking.normalizers import RRFScoreNormalizer, ScoreNormalizer
-from online.ranking.object_filter import ObjectConstraintProcessor
+from online.ranking.object_filter import ObjectConstraintProcessor, ObjectProcessingConfig
 from online.ranking.summary import SummaryScorePropagator
 from online.retrieval.service import RetrievalServicePort
 
@@ -59,6 +66,9 @@ class KISRankingService:
         fusion: WeightedFrameFusion | None = None,
         summary: SummaryScorePropagator | None = None,
         dedup: ShotDeduplicator | None = None,
+        object_config: ObjectProcessingConfig | None = None,
+        policy_name: str = "person_c_experimental_baseline_v1",
+        policy_status: str = "experimental",
     ) -> None:
         if not isinstance(metadata, MetadataReaderPort):
             raise TypeError("metadata must implement MetadataReaderPort")
@@ -72,6 +82,9 @@ class KISRankingService:
         self.fusion = fusion or WeightedFrameFusion()
         self.summary = summary or SummaryScorePropagator()
         self.dedup = dedup or ShotDeduplicator()
+        self.object_config = object_config or ObjectProcessingConfig()
+        self.policy_name = policy_name
+        self.policy_status = policy_status
 
     def rank(
         self,
@@ -80,11 +93,17 @@ class KISRankingService:
     ) -> KISSearchResult:
         if not isinstance(bundle, QueryBundle):
             raise ContractMismatchError("bundle must be a validated QueryBundle")
+        if RetrievalBranch.VISUAL_DENSE not in bundle.enabled_branches:
+            raise InvalidQueryError(
+                "KIS baseline requires visual_dense retrieval",
+                details={"branch": RetrievalBranch.VISUAL_DENSE.value},
+            )
         started_at = perf_counter()
         stage_latencies: dict[str, float] = {}
         mapping_loss_count = 0
         mapping_losses_by_branch: dict[RetrievalBranch, int] = defaultdict(int)
         mapped_outputs_by_branch: dict[RetrievalBranch, int] = defaultdict(int)
+        asr_stats: dict[str, int] = defaultdict(int)
         raw_results = _as_branch_results(branch_results)
         _raise_for_core_branch_failure(raw_results)
 
@@ -99,6 +118,12 @@ class KISRankingService:
                 mapping_loss_count += mapped.mapping_loss_count
                 mapping_losses_by_branch[result.branch] += mapped.mapping_loss_count
                 mapped_outputs_by_branch[result.branch] += mapped.branch_result.returned_count
+                asr_stats["input_interval_count"] += mapped.input_interval_count
+                asr_stats["mapped_interval_count"] += mapped.mapped_interval_count
+                asr_stats["output_frame_count"] += mapped.output_frame_count
+                asr_stats["truncated_interval_count"] += mapped.truncated_interval_count
+                asr_stats["truncated_frame_count"] += mapped.truncated_frame_count
+                asr_stats["max_frames_per_interval"] = mapped.max_frames_per_interval
                 frame_results.append(mapped.branch_result)
             elif result.candidate_level is CandidateLevel.VIDEO:
                 summary_results.append(result)
@@ -151,6 +176,11 @@ class KISRankingService:
                 aggregation_method=self.aggregator.name,
                 summary_method=self.summary.name,
                 asr_mapping_method=self.asr_mapper.name,
+                policy_name=self.policy_name,
+                policy_status=self.policy_status,
+                asr_stats=asr_stats,
+                object_method=ObjectConstraintProcessor.name,
+                dedup_method=self.dedup.name,
             ),
             errors=(),
         )
@@ -167,7 +197,10 @@ class KISRankingService:
             raise ContractMismatchError(
                 "object constraints require an ObjectReaderPort"
             )
-        return ObjectConstraintProcessor(self.object_reader).process(
+        return ObjectConstraintProcessor(
+            self.object_reader,
+            config=self.object_config,
+        ).process(
             candidates,
             bundle.object_constraints,
         )
@@ -194,27 +227,49 @@ class KISSearchOrchestrator:
             max_workers=1,
             thread_name_prefix="aic-ranking",
         )
+        self._state = Condition()
+        self._active_requests = 0
+        self._closing = False
         self._closed = False
 
     async def search(self, bundle: QueryBundle) -> KISSearchResult:
         if not isinstance(bundle, QueryBundle):
             raise ContractMismatchError("bundle must be a validated QueryBundle")
-        if self._closed:
-            raise ResourceUnavailableError(
-                "Search orchestrator is closed",
-                details={"resource": "search_orchestrator"},
+        with self._state:
+            if self._closing or self._closed:
+                raise ResourceUnavailableError(
+                    "Search orchestrator is closing",
+                    details={"resource": "search_orchestrator"},
+                )
+            self._active_requests += 1
+        try:
+            branch_results = await self.retrieval.retrieve(bundle)
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(
+                self._ranking_executor,
+                self.ranking.rank,
+                bundle,
+                branch_results,
             )
-        branch_results = await self.retrieval.retrieve(bundle)
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            self._ranking_executor,
-            self.ranking.rank,
-            bundle,
-            branch_results,
-        )
+        finally:
+            with self._state:
+                self._active_requests -= 1
+                self._state.notify_all()
 
     def close(self, *, wait: bool = True) -> None:
-        self._closed = True
+        with self._state:
+            if self._closed:
+                return
+            self._closing = True
+            if wait:
+                while self._active_requests:
+                    self._state.wait()
+            elif self._active_requests:
+                raise ResourceUnavailableError(
+                    "Search orchestrator has active requests",
+                    details={"resource": "search_orchestrator"},
+                )
+            self._closed = True
         if self._owns_executor and isinstance(self._ranking_executor, ThreadPoolExecutor):
             self._ranking_executor.shutdown(wait=wait, cancel_futures=True)
 
@@ -231,7 +286,7 @@ def _branch_diagnostics(
     diagnostics: dict[RetrievalBranch, BranchDiagnostics] = {}
     for branch, values in grouped.items():
         diagnostics[branch] = BranchDiagnostics(
-            status=_combined_status(tuple(result.status for result in values)),
+            status=_combined_branch_status(branch, values),
             latency_ms=sum(result.latency_ms for result in values),
             requested_top_k=max(result.requested_top_k for result in values),
             raw_result_count=sum(result.returned_count for result in values),
@@ -261,6 +316,20 @@ def _combined_status(statuses: Sequence[BranchStatus]) -> BranchStatus:
     return BranchStatus.SUCCESS
 
 
+def _combined_branch_status(
+    branch: RetrievalBranch,
+    results: Sequence[BranchResult[Any]],
+) -> BranchStatus:
+    if branch not in CORE_BRANCHES:
+        return _combined_status(tuple(result.status for result in results))
+    q0 = tuple(result for result in results if result.query_variant_id == "q0")
+    if q0 and all(result.status is BranchStatus.SUCCESS for result in q0):
+        if any(result.status is not BranchStatus.SUCCESS for result in results):
+            return BranchStatus.DEGRADED
+        return BranchStatus.SUCCESS
+    return _combined_status(tuple(result.status for result in results))
+
+
 def _fusion_weights(config: FusionConfig) -> Mapping[RetrievalBranch, FiniteFloat]:
     weights = {
         branch: config.weight_for(branch)
@@ -276,20 +345,25 @@ def _raise_for_core_branch_failure(results: Sequence[BranchResult[Any]]) -> None
         grouped[result.branch].append(result)
     for branch in CORE_BRANCHES:
         values = tuple(grouped.get(branch, ()))
-        if not values:
+        q0 = tuple(result for result in values if result.query_variant_id == "q0")
+        if not q0:
             raise ResourceUnavailableError(
-                "Core visual retrieval branch did not return a result",
-                details={"branch": branch.value},
+                "Core visual q0 retrieval did not return a result",
+                details={"branch": branch.value, "query_variant_id": "q0"},
             )
         failed = tuple(
             result
-            for result in values
+            for result in q0
             if result.status in {BranchStatus.FAILED, BranchStatus.DISABLED}
         )
         if failed:
             warnings = tuple(warning for result in failed for warning in result.warnings)
-            details = {"branch": branch.value, "status": _combined_status(tuple(result.status for result in failed)).value}
-            if any("BRANCH_TIMEOUT" in warning for warning in warnings):
+            details = {
+                "branch": branch.value,
+                "query_variant_id": "q0",
+                "status": _combined_status(tuple(result.status for result in failed)).value,
+            }
+            if any(warning == ErrorCode.BRANCH_TIMEOUT.value for warning in warnings):
                 raise BranchTimeoutError("Core visual retrieval timed out", details=details)
             raise ResourceUnavailableError("Core visual retrieval is unavailable", details=details)
 
@@ -323,17 +397,26 @@ def _query_warnings(
     aggregation_method: str,
     summary_method: str,
     asr_mapping_method: str,
+    policy_name: str,
+    policy_status: str,
+    asr_stats: Mapping[str, int],
+    object_method: str,
+    dedup_method: str,
 ) -> tuple[str, ...]:
     values = [
-        "experimental_policy=rrf_k_60_equal_weight_fusion_summary_cap_v1",
+        f"ranking_policy={policy_name}:{policy_status}",
         f"aggregation_method={aggregation_method}",
         f"summary_method={summary_method}",
         f"asr_mapping_method={asr_mapping_method}",
+        f"object_method={object_method}",
+        f"dedup_method={dedup_method}",
     ]
+    values.extend(f"asr_{key}={value}" for key, value in sorted(asr_stats.items()))
     values.extend(
-        f"{result.branch.value}:{warning}"
+        f"branch={result.branch.value};query_variant_id={result.query_variant_id};code={warning}"
         for result in results
-        if result.branch not in CORE_BRANCHES and result.status is not BranchStatus.SUCCESS
+        if result.status is not BranchStatus.SUCCESS
+        and not (result.branch in CORE_BRANCHES and result.query_variant_id == "q0")
         for warning in result.warnings
     )
     return tuple(dict.fromkeys(values))

@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Annotated, Any, Protocol, runtime_checkable
 
 from fastapi import Depends, FastAPI, Request, Response, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import Field
 
@@ -68,6 +69,19 @@ def create_app(
         return JSONResponse(
             status_code=_http_status_for_error(exc),
             content={"error": _public_error_payload(exc)},
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def handle_validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "error": {
+                    "code": "INVALID_QUERY",
+                    "message": "The query is invalid for the current online contract",
+                    "details": {"validation_error_count": len(exc.errors())},
+                }
+            },
         )
 
     @app.get("/health/live", response_model=HealthResponse)
@@ -145,7 +159,7 @@ def _public_error_payload(exc: DataInfrastructureError) -> dict[str, Any]:
     return {
         "code": safe["code"],
         "message": _PUBLIC_ERROR_MESSAGES.get(safe["code"], "The search service could not complete the request"),
-        "details": safe["details"],
+        "details": _public_details(safe["details"]),
     }
 
 
@@ -157,6 +171,31 @@ _PUBLIC_ERROR_MESSAGES = {
     "MISSING_METADATA": "Required frame metadata is missing",
     "RESOURCE_UNAVAILABLE": "A required search resource is unavailable",
 }
+
+_PUBLIC_DETAIL_KEYS = frozenset(
+    {
+        "actual_dimension",
+        "branch",
+        "constraint",
+        "expected_dimension",
+        "frame_id",
+        "missing_count",
+        "query_variant_id",
+        "resource",
+        "status",
+        "validation_error_count",
+    }
+)
+
+
+def _public_details(details: Mapping[str, Any]) -> dict[str, Any]:
+    output: dict[str, Any] = {}
+    for key, value in details.items():
+        if key not in _PUBLIC_DETAIL_KEYS:
+            continue
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            output[key] = value
+    return output
 
 
 def competition_candidates(

@@ -18,6 +18,7 @@ from online.domain.errors import BranchTimeoutError, ContractMismatchError, Reso
 from online.domain.query import ObjectConstraint
 from online.modes.kis import KISRankingService, KISSearchOrchestrator, KISSearchResult
 from online.ports.records import FrameMetadata
+from online.ranking.asr_mapper import ASRIntervalFrameMapper, ASRMappingConfig
 from online.retrieval.query_builder import KISQueryBuilder
 from online.testing import FakeMetadataReaderPort, FakeObjectReaderPort
 
@@ -67,11 +68,16 @@ def frame_result(
     )
 
 
-def failed_frame_result(branch: RetrievalBranch, warning: str) -> BranchResult[FrameCandidate]:
+def failed_frame_result(
+    branch: RetrievalBranch,
+    warning: str,
+    *,
+    variant_id: str = "q0",
+) -> BranchResult[FrameCandidate]:
     return BranchResult[FrameCandidate](
         branch=branch,
         candidate_level=CandidateLevel.FRAME,
-        query_variant_id="q0",
+        query_variant_id=variant_id,
         candidates=(),
         requested_top_k=10,
         latency_ms=2.0,
@@ -140,6 +146,20 @@ class FakeRetrievalService:
 
     async def retrieve(self, bundle):
         self.calls.append(bundle.query_id)
+        return self.results
+
+
+class BlockingRetrievalService:
+    def __init__(self, results: tuple[BranchResult, ...]) -> None:
+        self.results = results
+        self.entered: asyncio.Event | None = None
+        self.release: asyncio.Event | None = None
+
+    async def retrieve(self, bundle):
+        if self.entered is None or self.release is None:
+            raise RuntimeError("events are not configured")
+        self.entered.set()
+        await self.release.wait()
         return self.results
 
 
@@ -270,8 +290,115 @@ class KISOrchestrationTests(unittest.TestCase):
         self.assertEqual(result.diagnostics.branches[RetrievalBranch.ASR_DENSE].output_candidate_count, 1)
         self.assertEqual(result.diagnostics.normalization_method, "rrf")
         self.assertIn("branch_normalization", result.diagnostics.stage_latencies_ms)
-        self.assertIn("aggregation_method=rrf_query_variant_aggregation", result.diagnostics.warnings)
+        self.assertIn("aggregation_method=weighted_sum_query_variant_v1", result.diagnostics.warnings)
         self.assertIn("fusion", result.diagnostics.stage_latencies_ms)
+
+    def test_visual_paraphrase_failure_degrades_without_dropping_q0(self) -> None:
+        frames = (
+            FrameMetadata(frame_id="V001_00000_015", video_id="V001", shot_id=0, timestamp_sec=1.5),
+        )
+        bundle = KISQueryBuilder().build(
+            "query",
+            mode=QueryMode.KIS_TEXT,
+            paraphrases=("variant",),
+            query_id="visual-q1-timeout",
+        )
+        ranking = KISRankingService(metadata=FakeMetadataReaderPort(frames))
+
+        result = ranking.rank(
+            bundle,
+            (
+                frame_result(
+                    RetrievalBranch.VISUAL_DENSE,
+                    (
+                        frame_candidate(
+                            "V001_00000_015",
+                            branch=RetrievalBranch.VISUAL_DENSE,
+                            rank=1,
+                            video_id="V001",
+                            shot_id=0,
+                            timestamp_sec=1.5,
+                        ),
+                    ),
+                ),
+                failed_frame_result(
+                    RetrievalBranch.VISUAL_DENSE,
+                    "BRANCH_TIMEOUT",
+                    variant_id="q1",
+                ),
+            ),
+        )
+
+        self.assertEqual(tuple(candidate.frame_id for candidate in result.candidates), ("V001_00000_015",))
+        self.assertEqual(result.diagnostics.branches[RetrievalBranch.VISUAL_DENSE].status, BranchStatus.DEGRADED)
+        self.assertIn(
+            "branch=visual_dense;query_variant_id=q1;code=BRANCH_TIMEOUT",
+            result.diagnostics.warnings,
+        )
+
+    def test_optional_branch_failure_does_not_fail_core_query(self) -> None:
+        frames = (
+            FrameMetadata(frame_id="V001_00000_015", video_id="V001", shot_id=0, timestamp_sec=1.5),
+        )
+        bundle = KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT, query_id="optional-fail")
+        ranking = KISRankingService(metadata=FakeMetadataReaderPort(frames))
+
+        result = ranking.rank(
+            bundle,
+            (
+                frame_result(
+                    RetrievalBranch.VISUAL_DENSE,
+                    (
+                        frame_candidate(
+                            "V001_00000_015",
+                            branch=RetrievalBranch.VISUAL_DENSE,
+                            rank=1,
+                            video_id="V001",
+                            shot_id=0,
+                            timestamp_sec=1.5,
+                        ),
+                    ),
+                ),
+                failed_frame_result(RetrievalBranch.OCR_BM25, "RESOURCE_UNAVAILABLE"),
+            ),
+        )
+
+        self.assertEqual(tuple(candidate.frame_id for candidate in result.candidates), ("V001_00000_015",))
+        self.assertIn(
+            "branch=ocr_bm25;query_variant_id=q0;code=RESOURCE_UNAVAILABLE",
+            result.diagnostics.warnings,
+        )
+
+    def test_asr_interval_contribution_is_not_multiplied_in_full_pipeline(self) -> None:
+        frames = (
+            FrameMetadata(frame_id="V001_00000_040", video_id="V001", shot_id=0, timestamp_sec=4.0),
+            FrameMetadata(frame_id="V001_00001_060", video_id="V001", shot_id=1, timestamp_sec=6.0),
+            FrameMetadata(frame_id="V001_00002_100", video_id="V001", shot_id=2, timestamp_sec=10.0),
+        )
+        bundle = KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT, query_id="asr-score")
+        ranking = KISRankingService(
+            metadata=FakeMetadataReaderPort(frames),
+            asr_mapper=ASRIntervalFrameMapper(
+                ASRMappingConfig(max_frames_per_interval=2, interval_rrf_k=10)
+            ),
+        )
+
+        result = ranking.rank(
+            bundle,
+            (
+                frame_result(RetrievalBranch.VISUAL_DENSE, ()),
+                asr_result((asr_interval("long", start=0.0, end=10.0, rank=1),)),
+            ),
+        )
+
+        asr_total = sum(
+            evidence.normalized_score
+            for candidate in result.candidates
+            for evidence in candidate.evidence
+            if evidence.branch is RetrievalBranch.ASR_DENSE
+        )
+        self.assertAlmostEqual(asr_total, 1 / 11)
+        self.assertIn("asr_truncated_interval_count=1", result.diagnostics.warnings)
 
     def test_visual_dense_failure_is_core_error_not_empty_success(self) -> None:
         ranking = KISRankingService(metadata=FakeMetadataReaderPort(()))
@@ -280,7 +407,7 @@ class KISOrchestrationTests(unittest.TestCase):
         with self.assertRaises(BranchTimeoutError):
             ranking.rank(
                 bundle,
-                (failed_frame_result(RetrievalBranch.VISUAL_DENSE, "BRANCH_TIMEOUT: visual timed out"),),
+                (failed_frame_result(RetrievalBranch.VISUAL_DENSE, "BRANCH_TIMEOUT"),),
             )
 
         with self.assertRaises(ResourceUnavailableError):
@@ -331,6 +458,54 @@ class KISOrchestrationTests(unittest.TestCase):
         self.assertEqual(retrieval.calls, ["q-exec"])
         self.assertEqual(len(ranking.thread_names), 1)
         self.assertTrue(ranking.thread_names[0].startswith("aic-ranking"))
+
+    def test_orchestrator_close_drains_active_request_and_rejects_new_work(self) -> None:
+        async def scenario() -> None:
+            bundle = KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT, query_id="q-drain")
+            other = KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT, query_id="q-rejected")
+            retrieval = BlockingRetrievalService(
+                (
+                    frame_result(
+                        RetrievalBranch.VISUAL_DENSE,
+                        (
+                            frame_candidate(
+                                "V001_00000_015",
+                                branch=RetrievalBranch.VISUAL_DENSE,
+                                rank=1,
+                                video_id="V001",
+                                shot_id=0,
+                                timestamp_sec=1.5,
+                            ),
+                        ),
+                    ),
+                )
+            )
+            retrieval.entered = asyncio.Event()
+            retrieval.release = asyncio.Event()
+            orchestrator = KISSearchOrchestrator(
+                retrieval=retrieval,
+                ranking=KISRankingService(
+                    metadata=FakeMetadataReaderPort(
+                        (FrameMetadata(frame_id="V001_00000_015", video_id="V001", shot_id=0, timestamp_sec=1.5),)
+                    )
+                ),
+            )
+
+            search_task = asyncio.create_task(orchestrator.search(bundle))
+            await retrieval.entered.wait()
+            close_task = asyncio.create_task(asyncio.to_thread(orchestrator.close))
+            await asyncio.sleep(0.01)
+            self.assertFalse(close_task.done())
+            with self.assertRaises(ResourceUnavailableError):
+                await orchestrator.search(other)
+            retrieval.release.set()
+            result = await search_task
+            await close_task
+            orchestrator.close()
+
+            self.assertEqual(tuple(candidate.frame_id for candidate in result.candidates), ("V001_00000_015",))
+
+        asyncio.run(scenario())
 
     def test_object_constraints_require_object_reader(self) -> None:
         bundle = KISQueryBuilder().build(

@@ -102,14 +102,20 @@ class RuntimeCompositionTests(unittest.TestCase):
                 "AIC_ONLINE_RETRIEVAL_MAX_WORKERS": "3",
                 "AIC_ONLINE_RANKING_MAX_WORKERS": "4",
                 "AIC_ONLINE_VISUAL_ENCODER_DIMENSION": "1024",
+                "AIC_ONLINE_RANKING_NORMALIZATION_RRF_K": "17",
+                "AIC_ONLINE_RANKING_QUERY_Q1_WEIGHT": "0.25",
+                "AIC_ONLINE_RANKING_ASR_MAX_FRAMES_PER_INTERVAL": "9",
             },
-            clear=False,
+            clear=True,
         ):
             config = RuntimeCompositionConfig.from_env()
 
         self.assertEqual(config.max_workers, 3)
         self.assertEqual(config.ranking_max_workers, 4)
         self.assertEqual(config.visual_expected_dimension, 1024)
+        self.assertEqual(config.ranking_policy.normalization_rrf_k, 17)
+        self.assertEqual(config.ranking_policy.query_variant_weights["q1"], 0.25)
+        self.assertEqual(config.ranking_policy.asr_max_frames_per_interval, 9)
         invocation_configs = build_invocation_configs(config)
         self.assertEqual(invocation_configs[(RetrievalBranch.VISUAL_DENSE, "q0")].top_k, 7)
         self.assertEqual(invocation_configs[(RetrievalBranch.OCR_DENSE, "q1")].top_k, 11)
@@ -153,6 +159,15 @@ class RuntimeCompositionTests(unittest.TestCase):
         self.assertEqual(response.json()["candidates"][0]["frame_id"], "V001_00000_015")
         self.assertTrue(milvus.closed)
         self.assertTrue(elasticsearch.closed)
+
+    def test_production_rejects_experimental_ranking_policy(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"AIC_ONLINE_DEPLOYMENT_MODE": "production"},
+            clear=True,
+        ):
+            with self.assertRaises(ValueError):
+                RuntimeCompositionConfig.from_env()
 
 
 if __name__ == "__main__":

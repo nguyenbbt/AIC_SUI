@@ -129,6 +129,37 @@ class SearchEngineAPITests(unittest.TestCase):
         ).post("/search", json={"query": "query"})
         self.assertEqual(mismatch.status_code, 409)
 
+    def test_public_error_details_are_allowlisted(self) -> None:
+        error = ResourceUnavailableError(
+            "TOP_SECRET raw message",
+            details={
+                "branch": "visual_dense",
+                "reason": "token=TOP_SECRET",
+                "authorization": "Bearer TOP_SECRET",
+                "uri": "http://localhost/private/path?token=TOP_SECRET",
+                "payload": {"token": "TOP_SECRET"},
+                "items": ("TOP_SECRET",),
+            },
+        )
+        response = TestClient(create_app(orchestrator=FakeOrchestrator(error=error))).post(
+            "/search",
+            json={"query": "query"},
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["error"]["details"], {"branch": "visual_dense"})
+        self.assertNotIn("TOP_SECRET", response.text)
+        self.assertNotIn("reason", response.text)
+
+    def test_disabling_visual_dense_is_rejected_as_invalid_query(self) -> None:
+        response = TestClient(create_app(orchestrator=FakeOrchestrator())).post(
+            "/search",
+            json={"query": "query", "enabled_branches": ["ocr_bm25"]},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["code"], "INVALID_QUERY")
+
     def test_competition_candidates_adapter_is_minimal_and_stable(self) -> None:
         adapted = competition_candidates((fused_frame(),))
 

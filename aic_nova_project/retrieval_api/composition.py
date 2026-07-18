@@ -26,6 +26,13 @@ from online.ports import (
     ObjectReaderPort,
     TextEncoderPort,
 )
+from online.ranking.aggregation import QueryVariantAggregationConfig, RRFQueryVariantAggregator
+from online.ranking.asr_mapper import ASRIntervalFrameMapper, ASRMappingConfig
+from online.ranking.fusion import FusionConfig, WeightedFrameFusion
+from online.ranking.normalizers import RRFScoreNormalizer
+from online.ranking.object_filter import ObjectProcessingConfig
+from online.ranking.policy import RankingPolicyConfig
+from online.ranking.summary import SummaryPropagationConfig, SummaryScorePropagator
 from online.retrieval.encoders import PECoreTextEncoder, VietnameseTextEncoder
 from online.retrieval.factory import build_retrieval_service
 from online.retrieval.query_builder import BASELINE_KIS_BRANCHES
@@ -46,6 +53,8 @@ class RuntimeCompositionConfig:
     branch_timeout_sec: Mapping[RetrievalBranch, float] | None = None
     visual_expected_dimension: int | None = None
     vietnamese_expected_dimension: int | None = None
+    ranking_policy: RankingPolicyConfig | None = None
+    deployment_mode: str = "development"
 
     def __post_init__(self) -> None:
         if _invalid_positive_int(self.max_workers):
@@ -79,6 +88,10 @@ class RuntimeCompositionConfig:
         for value in (self.visual_expected_dimension, self.vietnamese_expected_dimension):
             if value is not None and _invalid_positive_int(value):
                 raise ValueError("expected dimensions must be positive integers")
+        policy = self.ranking_policy or RankingPolicyConfig()
+        if self.deployment_mode == "production" and policy.policy_status == "experimental":
+            raise ValueError("experimental ranking policy is not allowed in production mode")
+        object.__setattr__(self, "ranking_policy", policy)
 
     @classmethod
     def from_env(cls, prefix: str = "AIC_ONLINE_") -> "RuntimeCompositionConfig":
@@ -101,6 +114,8 @@ class RuntimeCompositionConfig:
             },
             visual_expected_dimension=_env_optional_int(prefix, "VISUAL_ENCODER_DIMENSION"),
             vietnamese_expected_dimension=_env_optional_int(prefix, "VIETNAMESE_ENCODER_DIMENSION"),
+            ranking_policy=_ranking_policy_from_env(prefix),
+            deployment_mode=os.getenv(f"{prefix}DEPLOYMENT_MODE", "development").strip() or "development",
         )
 
     def top_k_for(self, branch: RetrievalBranch) -> int:
@@ -128,10 +143,10 @@ class OnlineRuntime:
 
     def close(self) -> None:
         try:
-            self.retrieval.close(wait=True)
+            self.orchestrator.close(wait=True)
         finally:
             try:
-                self.orchestrator.close(wait=True)
+                self.retrieval.close(wait=True)
             finally:
                 try:
                     self.ranking_executor.shutdown(wait=True, cancel_futures=True)
@@ -196,7 +211,45 @@ def build_online_runtime(
         invocation_configs=build_invocation_configs(runtime_config),
         max_workers=runtime_config.max_workers,
     )
-    ranking = KISRankingService(metadata=metadata, object_reader=object_reader)
+    policy = runtime_config.ranking_policy or RankingPolicyConfig()
+    ranking = KISRankingService(
+        metadata=metadata,
+        object_reader=object_reader,
+        asr_mapper=ASRIntervalFrameMapper(
+            ASRMappingConfig(
+                policy_name=policy.asr_mapping_method,
+                max_frames_per_interval=policy.asr_max_frames_per_interval,
+                interval_rrf_k=policy.asr_interval_rrf_k,
+            )
+        ),
+        aggregator=RRFQueryVariantAggregator(
+            QueryVariantAggregationConfig(
+                query_variant_weights=policy.query_variant_weights,
+                method_name=policy.aggregation_method,
+            )
+        ),
+        normalizer=RRFScoreNormalizer(k=policy.normalization_rrf_k),
+        fusion=WeightedFrameFusion(
+            FusionConfig(
+                weights=policy.fusion_weights,
+                default_weight=policy.fusion_default_weight,
+                method_name=policy.fusion_method,
+            )
+        ),
+        summary=SummaryScorePropagator(
+            SummaryPropagationConfig(
+                weight=policy.summary_weight,
+                max_boost=policy.summary_max_boost,
+                method_name=policy.summary_method,
+            )
+        ),
+        object_config=ObjectProcessingConfig(
+            soft_boost_per_constraint=policy.object_soft_boost_per_constraint,
+            max_total_boost=policy.object_max_total_boost,
+        ),
+        policy_name=policy.policy_name,
+        policy_status=policy.policy_status,
+    )
     ranking_executor = ThreadPoolExecutor(
         max_workers=runtime_config.ranking_max_workers,
         thread_name_prefix="aic-ranking",
@@ -264,6 +317,30 @@ def _env_optional_int(prefix: str, name: str) -> int | None:
 
 def _env_float(prefix: str, name: str, default: float) -> float:
     return float(os.getenv(f"{prefix}{name}", str(default)))
+
+
+def _ranking_policy_from_env(prefix: str) -> RankingPolicyConfig:
+    return RankingPolicyConfig(
+        policy_name=os.getenv(f"{prefix}RANKING_POLICY_NAME", "person_c_experimental_baseline_v1"),
+        policy_status=os.getenv(f"{prefix}RANKING_POLICY_STATUS", "experimental"),
+        normalization_rrf_k=_env_int(prefix, "RANKING_NORMALIZATION_RRF_K", 60),
+        query_variant_weights={
+            "q0": _env_float(prefix, "RANKING_QUERY_Q0_WEIGHT", 1.0),
+            "q1": _env_float(prefix, "RANKING_QUERY_Q1_WEIGHT", 1.0),
+            "q2": _env_float(prefix, "RANKING_QUERY_Q2_WEIGHT", 1.0),
+        },
+        fusion_default_weight=_env_float(prefix, "RANKING_FUSION_DEFAULT_WEIGHT", 1.0),
+        fusion_weights={
+            branch: _env_float(prefix, f"RANKING_FUSION_{branch.name}_WEIGHT", 1.0)
+            for branch in RetrievalBranch
+        },
+        summary_weight=_env_float(prefix, "RANKING_SUMMARY_WEIGHT", 0.1),
+        summary_max_boost=_env_float(prefix, "RANKING_SUMMARY_MAX_BOOST", 0.2),
+        asr_max_frames_per_interval=_env_int(prefix, "RANKING_ASR_MAX_FRAMES_PER_INTERVAL", 50),
+        asr_interval_rrf_k=_env_int(prefix, "RANKING_ASR_INTERVAL_RRF_K", 60),
+        object_soft_boost_per_constraint=_env_float(prefix, "RANKING_OBJECT_SOFT_BOOST", 0.05),
+        object_max_total_boost=_env_float(prefix, "RANKING_OBJECT_MAX_TOTAL_BOOST", 0.2),
+    )
 
 
 def _invalid_positive_int(value: object) -> bool:

@@ -66,25 +66,98 @@ approved production ranking policy. Runtime deployments must review and pin
 these values before claiming production readiness:
 
 - Branch-local score normalizer: RRF with `k=60`.
-- Query-variant aggregation: RRF contribution aggregation with `k=60`.
+- Query-variant aggregation: `weighted_sum_query_variant_v1` with q0/q1/q2
+  weights.
 - Fusion: `experimental_weighted_sum_normalized_v1` with equal default branch
   weights.
 - Summary propagation: `summary_video_score_cap_v1`, `weight=0.1`,
   `max_boost=0.2`.
 - ASR interval mapping: `timestamp_inclusive_distributed_v1`,
-  `max_frames_per_interval=50`.
+  `max_frames_per_interval=50`, interval-level RRF `k=60` when upstream ASR
+  results are not already normalized.
 - Ranking executor: bounded thread pool from `AIC_ONLINE_RANKING_MAX_WORKERS`
   with default `2`.
 
-Open questions for benchmark tuning: OQ-C-01 choose RRF vs min-max per branch;
-OQ-C-02 approve branch weights per modality; OQ-C-03 approve summary/object
-boost limits; OQ-C-04 define ASR interval provenance fields in the shared
-domain; OQ-C-05 define summary evidence IDs, cap and weight provenance in the
-shared domain; OQ-C-06 decide whether visual-dense can ever be disabled.
+The runtime composition reads the same policy from environment variables:
+
+```powershell
+$env:AIC_ONLINE_RANKING_POLICY_NAME = "person_c_experimental_baseline_v1"
+$env:AIC_ONLINE_RANKING_POLICY_STATUS = "experimental"
+$env:AIC_ONLINE_RANKING_NORMALIZATION_RRF_K = "60"
+$env:AIC_ONLINE_RANKING_QUERY_Q0_WEIGHT = "1.0"
+$env:AIC_ONLINE_RANKING_QUERY_Q1_WEIGHT = "1.0"
+$env:AIC_ONLINE_RANKING_QUERY_Q2_WEIGHT = "1.0"
+$env:AIC_ONLINE_RANKING_FUSION_DEFAULT_WEIGHT = "1.0"
+$env:AIC_ONLINE_RANKING_SUMMARY_WEIGHT = "0.1"
+$env:AIC_ONLINE_RANKING_SUMMARY_MAX_BOOST = "0.2"
+$env:AIC_ONLINE_RANKING_ASR_MAX_FRAMES_PER_INTERVAL = "50"
+$env:AIC_ONLINE_RANKING_ASR_INTERVAL_RRF_K = "60"
+$env:AIC_ONLINE_RANKING_OBJECT_SOFT_BOOST = "0.05"
+$env:AIC_ONLINE_RANKING_OBJECT_MAX_TOTAL_BOOST = "0.2"
+```
+
+If `AIC_ONLINE_DEPLOYMENT_MODE=production`, startup rejects an experimental
+policy. Mark the policy `approved` only after the team closes the relevant open
+questions.
+
+Open questions for benchmark tuning use the canonical IDs from
+`docs/08-OPEN-QUESTIONS.md`: OQ-004 query aggregation, OQ-005 ASR mapping,
+OQ-006 normalization, OQ-007 fusion/weights, OQ-008 summary boost, OQ-009
+object defaults, OQ-010/OQ-011 object position contracts, OQ-021 lifecycle, and
+OQ-022 missing metadata.
 
 The API response schema and diagnostics fields are still unstable while A/B/C
 contracts are being merged. The current implementation preserves only fields
 already present in the shared domain models.
+
+Cross-layer contract limitations that still require A/B agreement:
+
+- `CandidateEvidence` cannot yet store ASR `interval_id`, interval start/end,
+  transcript text, original interval normalized score, applied contribution and
+  source candidate ID as separate fields. The mapper temporarily carries
+  `interval_id` in derived frame provenance `source_resource`, but fusion cannot
+  expose it in final evidence without changing the shared model.
+- `CandidateEvidence` cannot yet distinguish summary original normalized score,
+  weight, cap and applied contribution. Until the model is extended, summary
+  evidence `normalized_score` stores the applied contribution used for the
+  final boost.
+- `QueryDiagnostics` cannot yet represent per-variant branch status, wall-clock
+  branch latency versus invocation latency sum, ASR truncation fields, or
+  missing metadata counts from B as structured fields. The C pipeline writes
+  these as bounded warning tags where possible and avoids inventing false
+  numeric values beyond the current shared schema.
+
+Run the API locally after installing runtime dependencies:
+
+```powershell
+python -m uvicorn retrieval_api.main:app --host 127.0.0.1 --port 8000
+```
+
+Minimal t-KIS request:
+
+```json
+{
+  "query": "person in red near a bicycle",
+  "mode": "kis_text",
+  "paraphrases": ["human wearing red beside a bike"],
+  "enabled_branches": ["visual_dense"],
+  "include_diagnostics": true
+}
+```
+
+Minimal v-KIS request:
+
+```json
+{
+  "query": "find the scene matching this video clue",
+  "mode": "kis_video",
+  "enabled_branches": ["visual_dense"],
+  "include_diagnostics": true
+}
+```
+
+Public endpoints are `/health/live`, `/health/ready`, and `/search`. The API is
+internal/unstable until OQ-002 is closed.
 
 Concurrency contract: search ports are synchronous. SQLite serializes each
 connection's calls with a re-entrant lock and uses one read-only connection per

@@ -54,7 +54,7 @@ This repository contains the full pipeline for the AI Challenge 2026 Video Retri
 │
 ├── indexing/                          # Module 6: Vector DB and metadata indexing (scaffolded)
 ├── query_understanding/               # Module 7: Query expansion & intent (scaffolded)
-├── retrieval_api/                     # Module 8: Core retrieval engine (scaffolded)
+├── retrieval_api/                     # Module 8: Online retrieval API and runtime wiring
 └── ui/                                # Module 9: Frontend User Interface (scaffolded)
 ```
 

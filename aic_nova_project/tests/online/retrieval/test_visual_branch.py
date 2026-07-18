@@ -211,13 +211,12 @@ class VisualSemanticBranchTests(unittest.TestCase):
                 with self.assertRaises(InvalidQueryError):
                     branch.retrieve_variant(variant, top_k=top_k)  # type: ignore[arg-type]
 
-        disabled_query = KISQueryBuilder().build(
-            "query",
-            mode=QueryMode.KIS_TEXT,
-            enabled_branches=(RetrievalBranch.OCR_DENSE,),
-        )
         with self.assertRaises(InvalidQueryError):
-            branch.retrieve(disabled_query, top_k=1)
+            KISQueryBuilder().build(
+                "query",
+                mode=QueryMode.KIS_TEXT,
+                enabled_branches=(RetrievalBranch.OCR_DENSE,),
+            )
         self.assertEqual(encoder.calls, [])
         self.assertEqual(milvus.visual_calls, [])
 

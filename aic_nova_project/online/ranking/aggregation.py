@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+import math
+from types import MappingProxyType
 from typing import Any
 
 from online.domain.candidates import (
@@ -13,47 +15,77 @@ from online.domain.candidates import (
     VideoCandidate,
 )
 from online.domain.enums import BranchStatus
+from online.domain.errors import ContractMismatchError
 
 
 CandidateKey = tuple[str, ...]
 
 
-class RRFQueryVariantAggregator:
-    """Assign RRF contributions across q0/q1/q2 without breaking BranchResult.
+@dataclass(frozen=True)
+class QueryVariantAggregationConfig:
+    """Policy for weighting already-normalized query variants."""
 
-    The shared ``BranchResult`` contract requires every result and candidate to
-    keep one exact ``query_variant_id``.  For that reason this component does
-    not collapse variants into a synthetic mixed-variant result.  It computes
-    frame/interval/video totals across variants, stores each evidence item's RRF
-    contribution in ``normalized_score``, and leaves fusion to aggregate those
-    contributions by candidate ID and branch.
+    query_variant_weights: Mapping[str, float]
+    method_name: str = "weighted_sum_query_variant_v1"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.method_name, str) or not self.method_name.strip():
+            raise ValueError("method_name must be non-empty")
+        weights: dict[str, float] = {}
+        for raw_variant_id, raw_weight in self.query_variant_weights.items():
+            if not isinstance(raw_variant_id, str) or not raw_variant_id.strip():
+                raise ValueError("query variant IDs must be non-empty strings")
+            if (
+                isinstance(raw_weight, bool)
+                or not isinstance(raw_weight, (int, float))
+                or not math.isfinite(float(raw_weight))
+                or float(raw_weight) < 0.0
+            ):
+                raise ValueError("query variant weights must be finite and >= 0")
+            weights[raw_variant_id.strip()] = float(raw_weight)
+        object.__setattr__(self, "query_variant_weights", MappingProxyType(weights))
+
+    def weight_for(self, query_variant_id: str) -> float:
+        return float(self.query_variant_weights.get(query_variant_id, 1.0))
+
+
+class RRFQueryVariantAggregator:
+    """Apply configured weights to branch-local normalized q0/q1/q2 evidence.
+
+    The class name is retained for import compatibility with earlier C code.
+    Its policy name reflects the current behavior: weighted sum across query
+    variants, while RRF belongs to the branch-local normalizer.
     """
 
-    name = "rrf_query_variant_aggregation"
+    def __init__(self, config: QueryVariantAggregationConfig | None = None) -> None:
+        self.config = config or QueryVariantAggregationConfig(
+            query_variant_weights={"q0": 1.0, "q1": 1.0, "q2": 1.0}
+        )
 
-    def __init__(self, *, k: int = 60, preserve_existing_normalized_scores: bool = True) -> None:
-        if isinstance(k, bool) or not isinstance(k, int) or k < 1:
-            raise ValueError("k must be a positive integer")
-        self.k = k
-        self.preserve_existing_normalized_scores = bool(preserve_existing_normalized_scores)
+    @property
+    def name(self) -> str:
+        return self.config.method_name
 
     def aggregate(self, branch_results: Sequence[BranchResult[Any]]) -> tuple[BranchResult[Any], ...]:
         values = _as_branch_results(branch_results)
-        totals: dict[tuple[object, CandidateKey], float] = defaultdict(float)
         for result in values:
             if result.status not in {BranchStatus.SUCCESS, BranchStatus.DEGRADED}:
                 continue
             for candidate in result.candidates:
-                totals[(result.branch, _candidate_key(candidate))] += self._rrf(candidate.rank)
+                if candidate.normalized_score is None:
+                    raise ContractMismatchError(
+                        "query-variant aggregation requires normalized candidates",
+                        details={
+                            "branch": result.branch.value,
+                            "query_variant_id": result.query_variant_id,
+                        },
+                    )
 
         return tuple(
             result.model_copy(
                 update={
                     "candidates": tuple(
-                        self._with_query_variant_score(
-                            candidate,
-                            totals[(result.branch, _candidate_key(candidate))],
-                        )
+                        self._with_weighted_score(candidate, result.query_variant_id)
                         for candidate in result.candidates
                     )
                 }
@@ -63,26 +95,12 @@ class RRFQueryVariantAggregator:
             for result in values
         )
 
-    def _rrf(self, rank: int) -> float:
-        return 1.0 / (self.k + rank)
-
-    def _variant_contribution(self, candidate: object, total: float) -> float:
-        contribution = self._rrf(getattr(candidate, "rank"))
-        # RRF values are naturally small, but keep the domain score invariant
-        # intact if callers use an unusually small k or many query variants.
-        if total <= 1.0:
-            return contribution
-        return contribution / total
-
-    def _with_query_variant_score(self, candidate: object, total: float) -> object:
-        if (
-            self.preserve_existing_normalized_scores
-            and getattr(candidate, "normalized_score", None) is not None
-        ):
-            return candidate
-        return candidate.model_copy(  # type: ignore[attr-defined]
-            update={"normalized_score": self._variant_contribution(candidate, total)}
-        )
+    def _with_weighted_score(self, candidate: object, query_variant_id: str) -> object:
+        score = getattr(candidate, "normalized_score", None)
+        if score is None:
+            raise ContractMismatchError("query-variant aggregation requires normalized candidates")
+        weighted_score = min(1.0, score * self.config.weight_for(query_variant_id))
+        return candidate.model_copy(update={"normalized_score": weighted_score})  # type: ignore[attr-defined]
 
 
 def _candidate_key(candidate: object) -> CandidateKey:

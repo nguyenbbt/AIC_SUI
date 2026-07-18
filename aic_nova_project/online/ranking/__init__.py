@@ -1,11 +1,12 @@
 """Person-C ranking, fusion and reranking utilities."""
 
-from .aggregation import RRFQueryVariantAggregator
+from .aggregation import QueryVariantAggregationConfig, RRFQueryVariantAggregator
 from .asr_mapper import ASRIntervalFrameMapper, ASRMappingConfig, ASRMappingResult
 from .dedup import ShotDeduplicator
 from .fusion import FusionConfig, WeightedFrameFusion
 from .normalizers import MinMaxScoreNormalizer, RRFScoreNormalizer, ScoreNormalizer
 from .object_filter import ObjectConstraintProcessor, ObjectProcessingConfig
+from .policy import RankingPolicyConfig
 from .summary import SummaryPropagationConfig, SummaryScorePropagator
 
 __all__ = [
@@ -16,8 +17,10 @@ __all__ = [
     "MinMaxScoreNormalizer",
     "ObjectConstraintProcessor",
     "ObjectProcessingConfig",
+    "QueryVariantAggregationConfig",
     "RRFQueryVariantAggregator",
     "RRFScoreNormalizer",
+    "RankingPolicyConfig",
     "ScoreNormalizer",
     "ShotDeduplicator",
     "SummaryPropagationConfig",
