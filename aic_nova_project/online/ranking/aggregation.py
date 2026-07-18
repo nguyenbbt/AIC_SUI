@@ -31,10 +31,11 @@ class RRFQueryVariantAggregator:
 
     name = "rrf_query_variant_aggregation"
 
-    def __init__(self, *, k: int = 60) -> None:
+    def __init__(self, *, k: int = 60, preserve_existing_normalized_scores: bool = True) -> None:
         if isinstance(k, bool) or not isinstance(k, int) or k < 1:
             raise ValueError("k must be a positive integer")
         self.k = k
+        self.preserve_existing_normalized_scores = bool(preserve_existing_normalized_scores)
 
     def aggregate(self, branch_results: Sequence[BranchResult[Any]]) -> tuple[BranchResult[Any], ...]:
         values = _as_branch_results(branch_results)
@@ -49,13 +50,9 @@ class RRFQueryVariantAggregator:
             result.model_copy(
                 update={
                     "candidates": tuple(
-                        candidate.model_copy(
-                            update={
-                                "normalized_score": self._variant_contribution(
-                                    candidate,
-                                    totals[(result.branch, _candidate_key(candidate))],
-                                )
-                            }
+                        self._with_query_variant_score(
+                            candidate,
+                            totals[(result.branch, _candidate_key(candidate))],
                         )
                         for candidate in result.candidates
                     )
@@ -76,6 +73,16 @@ class RRFQueryVariantAggregator:
         if total <= 1.0:
             return contribution
         return contribution / total
+
+    def _with_query_variant_score(self, candidate: object, total: float) -> object:
+        if (
+            self.preserve_existing_normalized_scores
+            and getattr(candidate, "normalized_score", None) is not None
+        ):
+            return candidate
+        return candidate.model_copy(  # type: ignore[attr-defined]
+            update={"normalized_score": self._variant_contribution(candidate, total)}
+        )
 
 
 def _candidate_key(candidate: object) -> CandidateKey:

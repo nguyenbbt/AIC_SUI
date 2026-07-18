@@ -34,14 +34,34 @@ class ShotDeduplicator:
     def _represent_group(group: Sequence[FusedFrameCandidate]) -> FusedFrameCandidate:
         ordered = tuple(sorted(group, key=lambda item: (-item.final_score, item.frame_id)))
         representative = ordered[0]
-        near_frames = tuple(
-            NearFrameRef(
+        near_by_id = {
+            frame.frame_id: frame
+            for frame in representative.near_frames
+            if frame.frame_id != representative.frame_id
+        }
+        for candidate in ordered[1:]:
+            if candidate.frame_id == representative.frame_id:
+                continue
+            near_by_id[candidate.frame_id] = NearFrameRef(
                 frame_id=candidate.frame_id,
                 timestamp_sec=candidate.timestamp_sec,
                 final_score=candidate.final_score,
             )
-            for candidate in ordered[1:]
+        near_frames = tuple(
+            sorted(
+                near_by_id.values(),
+                key=lambda item: (-item.final_score, item.frame_id),
+            )
         )
-        return representative.model_copy(
-            update={"near_frames": representative.near_frames + near_frames}
+        return FusedFrameCandidate(
+            frame_id=representative.frame_id,
+            video_id=representative.video_id,
+            shot_id=representative.shot_id,
+            timestamp_sec=representative.timestamp_sec,
+            final_score=representative.final_score,
+            branch_scores=representative.branch_scores,
+            evidence=representative.evidence,
+            near_frames=near_frames,
+            objects=representative.objects,
+            diagnostics=representative.diagnostics,
         )

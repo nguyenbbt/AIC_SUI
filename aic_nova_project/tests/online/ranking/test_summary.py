@@ -110,6 +110,12 @@ class SummaryPropagationTests(unittest.TestCase):
         self.assertEqual(tuple(item.video_id for item in output), ("V001", "V002"))
         self.assertAlmostEqual(output[0].final_score, 0.7)
         self.assertAlmostEqual(output[0].diagnostics.summary_boost, 0.2)
+        self.assertEqual(
+            tuple(evidence.branch for evidence in output[0].evidence),
+            (RetrievalBranch.SUMMARY_DENSE, RetrievalBranch.SUMMARY_BM25),
+        )
+        self.assertAlmostEqual(output[0].evidence[0].normalized_score, 0.15)
+        self.assertAlmostEqual(output[0].evidence[1].normalized_score, 0.05)
         self.assertAlmostEqual(output[0].diagnostics.object_boost, 0.03)
         self.assertAlmostEqual(output[1].final_score, 0.55)
         self.assertEqual(len(output), 2)

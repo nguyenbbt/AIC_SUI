@@ -11,6 +11,7 @@ from online.domain.candidates import (
     ObjectDetection,
 )
 from online.domain.enums import BranchStatus, CandidateLevel, CountOperator, FilterMode, RetrievalBranch
+from online.domain.errors import ContractMismatchError, InvalidQueryError
 from online.domain.query import ObjectConstraint
 from online.ranking.dedup import ShotDeduplicator
 from online.ranking.fusion import FusionConfig, WeightedFrameFusion
@@ -126,6 +127,39 @@ class FusionDedupAndObjectTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             FusionConfig(weights={RetrievalBranch.VISUAL_DENSE: -1.0})
 
+    def test_fusion_rejects_conflicting_metadata_for_same_frame_id(self) -> None:
+        with self.assertRaises(ContractMismatchError):
+            WeightedFrameFusion().fuse(
+                (
+                    result(
+                        RetrievalBranch.VISUAL_DENSE,
+                        (
+                            candidate(
+                                "V001_00000_015",
+                                branch=RetrievalBranch.VISUAL_DENSE,
+                                normalized_score=0.6,
+                                video_id="V001",
+                                shot_id=0,
+                                timestamp_sec=1.5,
+                            ),
+                        ),
+                    ),
+                    result(
+                        RetrievalBranch.OCR_BM25,
+                        (
+                            candidate(
+                                "V001_00000_015",
+                                branch=RetrievalBranch.OCR_BM25,
+                                normalized_score=0.8,
+                                video_id="V999",
+                                shot_id=0,
+                                timestamp_sec=1.5,
+                            ),
+                        ),
+                    ),
+                )
+            )
+
     def test_dedup_groups_by_video_and_shot_keeps_near_frames(self) -> None:
         output = ShotDeduplicator().deduplicate(
             (
@@ -143,6 +177,12 @@ class FusionDedupAndObjectTests(unittest.TestCase):
         representative = output[1]
         self.assertEqual(tuple(ref.frame_id for ref in representative.near_frames), ("V001_00000_050",))
         self.assertNotIn(representative.frame_id, tuple(ref.frame_id for ref in representative.near_frames))
+
+        rerun = ShotDeduplicator().deduplicate(output)
+        self.assertEqual(
+            tuple(ref.frame_id for ref in rerun[1].near_frames),
+            ("V001_00000_050",),
+        )
 
     def test_object_constraints_apply_hard_filter_and_soft_boost(self) -> None:
         objects = {
@@ -192,7 +232,7 @@ class FusionDedupAndObjectTests(unittest.TestCase):
 
     def test_position_constraints_wait_for_image_size_contract(self) -> None:
         processor = ObjectConstraintProcessor(FakeObjectReaderPort({}))
-        with self.assertRaises(ValueError):
+        with self.assertRaises(InvalidQueryError):
             processor.process(
                 (fused("V001_00000_015", final_score=0.5, shot_id=0),),
                 (

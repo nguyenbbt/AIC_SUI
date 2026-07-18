@@ -39,8 +39,8 @@ def diagnostics(query_id: str) -> QueryDiagnostics:
                 output_candidate_count=1,
             )
         },
-        normalization_method="rrf_query_variant_aggregation",
-        fusion_method="weighted_mean_normalized",
+        normalization_method="rrf",
+        fusion_method="experimental_weighted_sum_normalized_v1",
         fusion_weights={RetrievalBranch.VISUAL_DENSE: 1.0},
     )
 
@@ -120,6 +120,8 @@ class SearchEngineAPITests(unittest.TestCase):
             create_app(orchestrator=FakeOrchestrator(error=ResourceUnavailableError("secret backend down")))
         ).post("/search", json={"query": "query"})
         self.assertEqual(unavailable.status_code, 503)
+        self.assertEqual(unavailable.json()["error"]["message"], "A required search resource is unavailable")
+        self.assertNotIn("secret", unavailable.json()["error"]["message"])
         self.assertNotIn("secret", str(unavailable.json()["error"]["details"]))
 
         mismatch = TestClient(

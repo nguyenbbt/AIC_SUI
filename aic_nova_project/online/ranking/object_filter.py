@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from online.domain.candidates import CandidateDiagnostics, FusedFrameCandidate
 from online.domain.enums import CountOperator, FilterMode
+from online.domain.errors import InvalidQueryError
 from online.domain.query import ObjectConstraint
 from online.ports.objects import ObjectReaderPort
 
@@ -50,7 +51,10 @@ class ObjectConstraintProcessor:
         if not values or not constraint_values:
             return values
         if any(constraint.position is not None for constraint in constraint_values):
-            raise ValueError("object position constraints require an approved image-size contract")
+            raise InvalidQueryError(
+                "object position constraints are not supported by the current online contract",
+                details={"constraint": "object_position"},
+            )
 
         frame_ids = tuple(candidate.frame_id for candidate in values)
         objects_by_frame = self.object_reader.get_objects_by_frame_ids(frame_ids)

@@ -6,6 +6,7 @@ import math
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 from online.domain.candidates import (
@@ -16,6 +17,7 @@ from online.domain.candidates import (
     FusedFrameCandidate,
 )
 from online.domain.enums import BranchStatus, CandidateLevel, RetrievalBranch
+from online.domain.errors import ContractMismatchError
 
 
 @dataclass(frozen=True)
@@ -29,7 +31,7 @@ class FusionConfig:
 
     weights: Mapping[RetrievalBranch, float]
     default_weight: float = 1.0
-    method_name: str = "weighted_mean_normalized"
+    method_name: str = "experimental_weighted_sum_normalized_v1"
 
     def __post_init__(self) -> None:
         if not isinstance(self.method_name, str) or not self.method_name.strip():
@@ -42,7 +44,7 @@ class FusionConfig:
             if not _valid_weight(weight):
                 raise ValueError(f"invalid fusion weight for {branch.value}")
             normalized[branch] = float(weight)
-        object.__setattr__(self, "weights", normalized)
+        object.__setattr__(self, "weights", MappingProxyType(normalized))
 
     def weight_for(self, branch: RetrievalBranch) -> float:
         return float(self.weights.get(branch, self.default_weight))
@@ -79,6 +81,7 @@ class WeightedFrameFusion:
     def _fuse_frame(self, candidates: Sequence[FrameCandidate]) -> FusedFrameCandidate:
         ordered = tuple(sorted(candidates, key=_evidence_sort_key))
         representative = ordered[0]
+        _validate_frame_contract(ordered)
         branch_scores: dict[RetrievalBranch, float] = {}
         evidence: list[CandidateEvidence] = []
         for candidate in ordered:
@@ -141,3 +144,21 @@ def _evidence_sort_key(candidate: FrameCandidate) -> tuple[str, str, int]:
         candidate.provenance.query_variant_id,
         candidate.rank,
     )
+
+
+def _validate_frame_contract(candidates: Sequence[FrameCandidate]) -> None:
+    first = candidates[0]
+    for candidate in candidates[1:]:
+        mismatches = {
+            field
+            for field in ("video_id", "shot_id", "timestamp_sec")
+            if getattr(candidate, field) != getattr(first, field)
+        }
+        if mismatches:
+            raise ContractMismatchError(
+                "frame_id maps to conflicting metadata across branches",
+                details={
+                    "frame_id": first.frame_id,
+                    "mismatched_fields": tuple(sorted(mismatches)),
+                },
+            )

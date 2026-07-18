@@ -147,6 +147,22 @@ class ASRIntervalFrameMapperTests(unittest.TestCase):
         )
         self.assertEqual(result.mapping_loss_count, 0)
 
+    def test_long_interval_is_limited_and_scores_use_kept_frame_count(self) -> None:
+        mapper = ASRIntervalFrameMapper(ASRMappingConfig(max_frames_per_interval=2))
+        mapped = mapper.map_interval(
+            interval("long", start=0.0, end=10.0, raw_score=1.0, normalized_score=0.8),
+            (
+                frame("V001_00000_000", timestamp=0.0),
+                frame("V001_00000_040", timestamp=4.0),
+                frame("V001_00000_060", timestamp=6.0),
+                frame("V001_00000_100", timestamp=10.0),
+            ),
+        )
+
+        self.assertEqual(tuple(item.frame_id for item in mapped), ("V001_00000_040", "V001_00000_060"))
+        self.assertEqual(tuple(item.raw_score for item in mapped), (0.5, 0.5))
+        self.assertEqual(tuple(item.normalized_score for item in mapped), (0.4, 0.4))
+
     def test_video_without_metadata_is_mapping_loss_not_cross_video_mapping(self) -> None:
         mapper = ASRIntervalFrameMapper()
         result = mapper.map_result(
@@ -179,6 +195,8 @@ class ASRIntervalFrameMapperTests(unittest.TestCase):
             )
         with self.assertRaises(ValueError):
             ASRMappingConfig(policy_name=" ")
+        with self.assertRaises(ValueError):
+            ASRMappingConfig(max_frames_per_interval=0)
 
 
 if __name__ == "__main__":

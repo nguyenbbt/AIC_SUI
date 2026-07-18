@@ -8,7 +8,13 @@ from online.ranking.aggregation import RRFQueryVariantAggregator
 from online.ranking.fusion import WeightedFrameFusion
 
 
-def frame(frame_id: str, *, variant_id: str, rank: int) -> FrameCandidate:
+def frame(
+    frame_id: str,
+    *,
+    variant_id: str,
+    rank: int,
+    normalized_score: float | None = None,
+) -> FrameCandidate:
     return FrameCandidate(
         frame_id=frame_id,
         video_id="V001",
@@ -16,6 +22,7 @@ def frame(frame_id: str, *, variant_id: str, rank: int) -> FrameCandidate:
         timestamp_sec=1.0,
         rank=rank,
         raw_score=100.0 - rank,
+        normalized_score=normalized_score,
         provenance=CandidateProvenance(
             branch=RetrievalBranch.VISUAL_DENSE,
             backend="milvus",
@@ -102,6 +109,25 @@ class QueryVariantAggregationTests(unittest.TestCase):
 
         self.assertEqual(aggregated[0].candidates[0].normalized_score, 1 / 11)
         self.assertIs(aggregated[1], failed)
+
+    def test_existing_normalized_scores_are_not_overwritten(self) -> None:
+        aggregated = RRFQueryVariantAggregator(k=10).aggregate(
+            (
+                branch_result(
+                    "q0",
+                    (
+                        frame(
+                            "V001_00000_015",
+                            variant_id="q0",
+                            rank=1,
+                            normalized_score=0.42,
+                        ),
+                    ),
+                ),
+            )
+        )
+
+        self.assertEqual(aggregated[0].candidates[0].normalized_score, 0.42)
 
     def test_invalid_aggregator_inputs_are_rejected(self) -> None:
         with self.assertRaises(ValueError):

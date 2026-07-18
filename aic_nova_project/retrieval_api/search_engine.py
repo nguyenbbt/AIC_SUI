@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Annotated, Any, Protocol, runtime_checkable
-
-from collections.abc import Callable
 
 from fastapi import Depends, FastAPI, Request, Response, status
 from fastapi.responses import JSONResponse
@@ -69,7 +67,7 @@ def create_app(
     async def handle_domain_error(_: Request, exc: DataInfrastructureError) -> JSONResponse:
         return JSONResponse(
             status_code=_http_status_for_error(exc),
-            content={"error": exc.to_safe_dict()},
+            content={"error": _public_error_payload(exc)},
         )
 
     @app.get("/health/live", response_model=HealthResponse)
@@ -140,6 +138,25 @@ def _http_status_for_error(exc: DataInfrastructureError) -> int:
     if isinstance(exc, (ContractMismatchError, DimensionMismatchError, MissingMetadataError)):
         return status.HTTP_409_CONFLICT
     return status.HTTP_500_INTERNAL_SERVER_ERROR
+
+
+def _public_error_payload(exc: DataInfrastructureError) -> dict[str, Any]:
+    safe = exc.to_safe_dict()
+    return {
+        "code": safe["code"],
+        "message": _PUBLIC_ERROR_MESSAGES.get(safe["code"], "The search service could not complete the request"),
+        "details": safe["details"],
+    }
+
+
+_PUBLIC_ERROR_MESSAGES = {
+    "BRANCH_TIMEOUT": "A required retrieval branch timed out",
+    "CONTRACT_MISMATCH": "A retrieval contract mismatch prevented search",
+    "DIMENSION_MISMATCH": "A vector dimension mismatch prevented search",
+    "INVALID_QUERY": "The query is invalid for the current online contract",
+    "MISSING_METADATA": "Required frame metadata is missing",
+    "RESOURCE_UNAVAILABLE": "A required search resource is unavailable",
+}
 
 
 def competition_candidates(

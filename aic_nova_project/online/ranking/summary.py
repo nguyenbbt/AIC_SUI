@@ -10,6 +10,7 @@ from typing import Any
 
 from online.domain.candidates import (
     BranchResult,
+    CandidateEvidence,
     CandidateDiagnostics,
     FusedFrameCandidate,
     VideoCandidate,
@@ -63,6 +64,7 @@ class SummaryScorePropagator:
         summary_scores = self.aggregate_video_scores(summary_results)
         if not summary_scores:
             return frame_values
+        summary_evidence = self._summary_evidence_by_video(summary_results)
 
         boosted: list[FusedFrameCandidate] = []
         for frame in frame_values:
@@ -78,6 +80,7 @@ class SummaryScorePropagator:
                     update={
                         "final_score": frame.final_score + boost,
                         "diagnostics": diagnostics,
+                        "evidence": frame.evidence + summary_evidence.get(frame.video_id, ()),
                     }
                 )
             )
@@ -104,6 +107,42 @@ class SummaryScorePropagator:
                     score = 1.0 / (60 + candidate.rank)
                 scores[candidate.video_id] = min(1.0, scores[candidate.video_id] + score)
         return dict(scores)
+
+    def _summary_evidence_by_video(
+        self,
+        summary_results: Sequence[BranchResult[Any]],
+    ) -> dict[str, tuple[CandidateEvidence, ...]]:
+        values = _as_branch_results(summary_results)
+        by_video: dict[str, list[CandidateEvidence]] = defaultdict(list)
+        used_boost_by_video: dict[str, float] = defaultdict(float)
+        for result in values:
+            if result.status not in {BranchStatus.SUCCESS, BranchStatus.DEGRADED}:
+                continue
+            if result.candidate_level is not CandidateLevel.VIDEO or result.branch not in SUMMARY_BRANCHES:
+                continue
+            for candidate in result.candidates:
+                if not isinstance(candidate, VideoCandidate):
+                    raise TypeError("summary BranchResult contains a non-video candidate")
+                score = candidate.normalized_score
+                if score is None:
+                    score = 1.0 / (60 + candidate.rank)
+                remaining = max(0.0, self.config.max_boost - used_boost_by_video[candidate.video_id])
+                contribution = min(remaining, score * self.config.weight)
+                if contribution <= 0.0:
+                    continue
+                used_boost_by_video[candidate.video_id] += contribution
+                by_video[candidate.video_id].append(
+                    CandidateEvidence(
+                        branch=candidate.provenance.branch,
+                        query_variant_id=candidate.provenance.query_variant_id,
+                        raw_score=candidate.raw_score,
+                        normalized_score=contribution,
+                    )
+                )
+        return {
+            video_id: tuple(evidence)
+            for video_id, evidence in by_video.items()
+        }
 
 
 def _as_frames(frames: Sequence[FusedFrameCandidate]) -> tuple[FusedFrameCandidate, ...]:

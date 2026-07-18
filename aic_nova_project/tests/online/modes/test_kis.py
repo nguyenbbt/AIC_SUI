@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import unittest
 
 from online.domain.candidates import (
@@ -11,10 +12,11 @@ from online.domain.candidates import (
     ObjectDetection,
     VideoCandidate,
 )
+from online.domain.diagnostics import BranchDiagnostics, QueryDiagnostics
 from online.domain.enums import BranchStatus, CandidateLevel, CountOperator, FilterMode, QueryMode, RetrievalBranch
-from online.domain.errors import ContractMismatchError
+from online.domain.errors import BranchTimeoutError, ContractMismatchError, ResourceUnavailableError
 from online.domain.query import ObjectConstraint
-from online.modes.kis import KISRankingService, KISSearchOrchestrator
+from online.modes.kis import KISRankingService, KISSearchOrchestrator, KISSearchResult
 from online.ports.records import FrameMetadata
 from online.retrieval.query_builder import KISQueryBuilder
 from online.testing import FakeMetadataReaderPort, FakeObjectReaderPort
@@ -62,6 +64,19 @@ def frame_result(
         requested_top_k=10,
         latency_ms=2.0,
         status=BranchStatus.SUCCESS,
+    )
+
+
+def failed_frame_result(branch: RetrievalBranch, warning: str) -> BranchResult[FrameCandidate]:
+    return BranchResult[FrameCandidate](
+        branch=branch,
+        candidate_level=CandidateLevel.FRAME,
+        query_variant_id="q0",
+        candidates=(),
+        requested_top_k=10,
+        latency_ms=2.0,
+        status=BranchStatus.FAILED,
+        warnings=(warning,),
     )
 
 
@@ -126,6 +141,34 @@ class FakeRetrievalService:
     async def retrieve(self, bundle):
         self.calls.append(bundle.query_id)
         return self.results
+
+
+class ThreadRecordingRanking:
+    def __init__(self) -> None:
+        self.thread_names: list[str] = []
+
+    def rank(self, bundle, branch_results) -> KISSearchResult:
+        self.thread_names.append(threading.current_thread().name)
+        return KISSearchResult(
+            candidates=(),
+            diagnostics=QueryDiagnostics(
+                query_id=bundle.query_id,
+                total_latency_ms=1.0,
+                stage_latencies_ms={"ranking": 1.0},
+                branches={
+                    RetrievalBranch.VISUAL_DENSE: BranchDiagnostics(
+                        status=BranchStatus.SUCCESS,
+                        latency_ms=1.0,
+                        requested_top_k=1,
+                        raw_result_count=0,
+                        output_candidate_count=0,
+                    )
+                },
+                normalization_method="fake",
+                fusion_method="fake",
+                fusion_weights={RetrievalBranch.VISUAL_DENSE: 1.0},
+            ),
+        )
 
 
 class KISOrchestrationTests(unittest.TestCase):
@@ -225,7 +268,23 @@ class KISOrchestrationTests(unittest.TestCase):
         self.assertEqual(result.diagnostics.object_filter_removals, 1)
         self.assertEqual(result.diagnostics.branches[RetrievalBranch.ASR_DENSE].mapping_loss_count, 1)
         self.assertEqual(result.diagnostics.branches[RetrievalBranch.ASR_DENSE].output_candidate_count, 1)
+        self.assertEqual(result.diagnostics.normalization_method, "rrf")
+        self.assertIn("branch_normalization", result.diagnostics.stage_latencies_ms)
+        self.assertIn("aggregation_method=rrf_query_variant_aggregation", result.diagnostics.warnings)
         self.assertIn("fusion", result.diagnostics.stage_latencies_ms)
+
+    def test_visual_dense_failure_is_core_error_not_empty_success(self) -> None:
+        ranking = KISRankingService(metadata=FakeMetadataReaderPort(()))
+        bundle = KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT, query_id="core-fail")
+
+        with self.assertRaises(BranchTimeoutError):
+            ranking.rank(
+                bundle,
+                (failed_frame_result(RetrievalBranch.VISUAL_DENSE, "BRANCH_TIMEOUT: visual timed out"),),
+            )
+
+        with self.assertRaises(ResourceUnavailableError):
+            ranking.rank(bundle, ())
 
     def test_async_orchestrator_uses_retrieval_service_port(self) -> None:
         bundle = KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT, query_id="q-orch")
@@ -259,6 +318,19 @@ class KISOrchestrationTests(unittest.TestCase):
 
         self.assertEqual(retrieval.calls, ["q-orch"])
         self.assertEqual(tuple(candidate.frame_id for candidate in result.candidates), ("V001_00000_015",))
+
+    def test_async_orchestrator_runs_ranking_in_executor(self) -> None:
+        bundle = KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT, query_id="q-exec")
+        retrieval = FakeRetrievalService(())
+        ranking = ThreadRecordingRanking()
+        orchestrator = KISSearchOrchestrator(retrieval=retrieval, ranking=ranking)
+
+        asyncio.run(orchestrator.search(bundle))
+        orchestrator.close()
+
+        self.assertEqual(retrieval.calls, ["q-exec"])
+        self.assertEqual(len(ranking.thread_names), 1)
+        self.assertTrue(ranking.thread_names[0].startswith("aic-ranking"))
 
     def test_object_constraints_require_object_reader(self) -> None:
         bundle = KISQueryBuilder().build(

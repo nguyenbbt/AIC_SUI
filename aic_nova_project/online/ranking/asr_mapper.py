@@ -28,10 +28,17 @@ class ASRMappingConfig:
     """
 
     policy_name: str = "timestamp_inclusive_distributed_v1"
+    max_frames_per_interval: int = 50
 
     def __post_init__(self) -> None:
         if not isinstance(self.policy_name, str) or not self.policy_name.strip():
             raise ValueError("policy_name must be non-empty")
+        if (
+            isinstance(self.max_frames_per_interval, bool)
+            or not isinstance(self.max_frames_per_interval, int)
+            or self.max_frames_per_interval < 1
+        ):
+            raise ValueError("max_frames_per_interval must be a positive integer")
 
 
 @dataclass(frozen=True)
@@ -120,6 +127,17 @@ class ASRIntervalFrameMapper:
             for frame in frames
             if interval.start_time_sec <= frame.timestamp_sec <= interval.end_time_sec
         )
+        if len(matched) > self.config.max_frames_per_interval:
+            matched = tuple(
+                sorted(
+                    matched,
+                    key=lambda frame: (
+                        abs(frame.timestamp_sec - ((interval.start_time_sec + interval.end_time_sec) / 2.0)),
+                        frame.timestamp_sec,
+                        frame.frame_id,
+                    ),
+                )[: self.config.max_frames_per_interval]
+            )
         if not matched:
             return ()
 

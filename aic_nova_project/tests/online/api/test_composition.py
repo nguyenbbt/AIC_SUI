@@ -100,6 +100,7 @@ class RuntimeCompositionTests(unittest.TestCase):
                 "AIC_ONLINE_RETRIEVAL_TIMEOUT_SEC": "2.5",
                 "AIC_ONLINE_OCR_BM25_TIMEOUT_SEC": "1.25",
                 "AIC_ONLINE_RETRIEVAL_MAX_WORKERS": "3",
+                "AIC_ONLINE_RANKING_MAX_WORKERS": "4",
                 "AIC_ONLINE_VISUAL_ENCODER_DIMENSION": "1024",
             },
             clear=False,
@@ -107,6 +108,7 @@ class RuntimeCompositionTests(unittest.TestCase):
             config = RuntimeCompositionConfig.from_env()
 
         self.assertEqual(config.max_workers, 3)
+        self.assertEqual(config.ranking_max_workers, 4)
         self.assertEqual(config.visual_expected_dimension, 1024)
         invocation_configs = build_invocation_configs(config)
         self.assertEqual(invocation_configs[(RetrievalBranch.VISUAL_DENSE, "q0")].top_k, 7)
@@ -125,6 +127,8 @@ class RuntimeCompositionTests(unittest.TestCase):
         self.assertEqual(health.status.value, "healthy")
         self.assertTrue(milvus.closed)
         self.assertTrue(elasticsearch.closed)
+        with self.assertRaises(RuntimeError):
+            runtime.ranking_executor.submit(lambda: None)
 
     def test_runtime_app_lifespan_wires_search_end_to_end_with_fakes(self) -> None:
         runtime, milvus, elasticsearch = runtime_with_fakes()

@@ -59,10 +59,37 @@ Unit tests intentionally do not prove SDK/service/model compatibility. Runtime
 validation must be performed against a disposable or read-only environment;
 production indexes are never used as test fixtures.
 
+## Person-C Ranking Policy Status
+
+The current KIS ranking policy is an experimental benchmark baseline, not an
+approved production ranking policy. Runtime deployments must review and pin
+these values before claiming production readiness:
+
+- Branch-local score normalizer: RRF with `k=60`.
+- Query-variant aggregation: RRF contribution aggregation with `k=60`.
+- Fusion: `experimental_weighted_sum_normalized_v1` with equal default branch
+  weights.
+- Summary propagation: `summary_video_score_cap_v1`, `weight=0.1`,
+  `max_boost=0.2`.
+- ASR interval mapping: `timestamp_inclusive_distributed_v1`,
+  `max_frames_per_interval=50`.
+- Ranking executor: bounded thread pool from `AIC_ONLINE_RANKING_MAX_WORKERS`
+  with default `2`.
+
+Open questions for benchmark tuning: OQ-C-01 choose RRF vs min-max per branch;
+OQ-C-02 approve branch weights per modality; OQ-C-03 approve summary/object
+boost limits; OQ-C-04 define ASR interval provenance fields in the shared
+domain; OQ-C-05 define summary evidence IDs, cap and weight provenance in the
+shared domain; OQ-C-06 decide whether visual-dense can ever be disabled.
+
+The API response schema and diagnostics fields are still unstable while A/B/C
+contracts are being merged. The current implementation preserves only fields
+already present in the shared domain models.
+
 Concurrency contract: search ports are synchronous. SQLite serializes each
 connection's calls with a re-entrant lock and uses one read-only connection per
 adapter instance. Milvus and Elasticsearch allow concurrent reads through a
 long-lived adapter instance; `close()` is rejected while a read is active.
-Callers must stop scheduling work, drain their controlled executor, then close
-the lifecycle. SDK thread-safety and alias behavior remain
+Callers must stop scheduling work, drain their controlled retrieval/ranking
+executors, then close the lifecycle. SDK thread-safety and alias behavior remain
 `NEED_RUNTIME_VERIFICATION` until tested with the deployed SDK/services.
