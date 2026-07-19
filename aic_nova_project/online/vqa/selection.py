@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from math import isfinite
+from numbers import Real
 from typing import Literal
 
 from online.domain.candidates import FusedFrameCandidate
@@ -28,17 +30,24 @@ class _TextEvidenceChunk:
     end_time_sec: float | None = None
 
     def __post_init__(self) -> None:
-        if not self.stable_id or not self.video_id:
-            raise ValueError("stable_id and video_id must be non-empty")
+        for field_name in ("stable_id", "video_id", "text"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{field_name} must be a non-empty string")
         if self.evidence_type not in {"ocr", "asr", "summary"}:
             raise ValueError("unsupported evidence_type")
-        if isinstance(self.source_rank, bool) or self.source_rank < 0:
+        if not isinstance(self.source_rank, int) or isinstance(self.source_rank, bool) or self.source_rank < 0:
             raise ValueError("source_rank must be a non-negative integer")
-        if isinstance(self.source_order, bool) or self.source_order < 0:
+        if not isinstance(self.source_order, int) or isinstance(self.source_order, bool) or self.source_order < 0:
             raise ValueError("source_order must be a non-negative integer")
         if self.evidence_type == "asr":
             if self.start_time_sec is None or self.end_time_sec is None:
                 raise ValueError("ASR chunks require start and end times")
+            if any(
+                isinstance(value, bool) or not isinstance(value, Real) or not isfinite(value) or value < 0
+                for value in (self.start_time_sec, self.end_time_sec)
+            ):
+                raise ValueError("ASR start and end times must be finite non-negative numbers")
             if self.end_time_sec < self.start_time_sec:
                 raise ValueError("ASR end_time_sec must be >= start_time_sec")
 

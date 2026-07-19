@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from online.domain.candidates import CandidateDiagnostics, FusedFrameCandidate
 from online.domain.enums import RetrievalBranch
 from online.ports.records import FrameMetadata
@@ -32,6 +34,64 @@ def metadata(frame_id: str, video_id: str, timestamp: float) -> FrameMetadata:
 
 def chunk(stable_id: str, kind: str, text: str, *, video: str = "V1", rank: int = 0, order: int = 0, start: float | None = None, end: float | None = None) -> _TextEvidenceChunk:
     return _TextEvidenceChunk(stable_id, kind, rank, order, text, video, start, end)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("stable_id", ""),
+        ("stable_id", "   "),
+        ("stable_id", 123),
+        ("video_id", ""),
+        ("video_id", "   "),
+        ("video_id", 123),
+        ("text", ""),
+        ("text", "   "),
+        ("text", 123),
+        ("source_rank", True),
+        ("source_rank", 0.5),
+        ("source_rank", float("nan")),
+        ("source_rank", float("inf")),
+        ("source_order", False),
+        ("source_order", 0.5),
+        ("source_order", float("nan")),
+        ("source_order", float("inf")),
+    ),
+)
+def test_text_chunk_rejects_invalid_identity_text_and_ordering_fields(field: str, value: object) -> None:
+    values: dict[str, object] = {
+        "stable_id": "chunk-1",
+        "evidence_type": "ocr",
+        "source_rank": 0,
+        "source_order": 0,
+        "text": "text",
+        "video_id": "V1",
+    }
+    values[field] = value
+
+    with pytest.raises(ValueError):
+        _TextEvidenceChunk(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("start", "end"),
+    (
+        (True, 1),
+        (0, False),
+        ("0", 1),
+        (0, "1"),
+        (float("nan"), 1),
+        (0, float("nan")),
+        (float("inf"), 1),
+        (0, float("inf")),
+        (-0.1, 1),
+        (0, -0.1),
+        (2, 1),
+    ),
+)
+def test_text_chunk_rejects_invalid_asr_times(start: object, end: object) -> None:
+    with pytest.raises(ValueError):
+        _TextEvidenceChunk("chunk-1", "asr", 0, 0, "text", "V1", start, end)  # type: ignore[arg-type]
 
 
 def test_primary_selection_guarantees_diversity_then_fills_caps_and_deduplicates() -> None:
