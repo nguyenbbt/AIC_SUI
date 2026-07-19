@@ -51,6 +51,8 @@ def _safe_opaque_reference(value: str) -> str:
     if posix.is_absolute() or windows.is_absolute() or bool(windows.drive):
         raise ValueError("local absolute paths are not allowed in public evidence")
     parsed = urlsplit(value)
+    if parsed.scheme.lower() == "file":
+        raise ValueError("file:// references are not allowed in public evidence")
     if parsed.username is not None or parsed.password is not None:
         raise ValueError("credentials are not allowed in public evidence references")
     sensitive_query_parts = ("api_key", "apikey", "token", "secret", "signature", "credential")

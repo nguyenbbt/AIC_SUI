@@ -7,7 +7,13 @@ from .metadata import MetadataReaderPort
 from .objects import ObjectReaderPort
 from .records import ASRSearchHit, FrameMetadata, FrameSearchHit, VideoSearchHit
 from .search import ElasticsearchSearchPort, MilvusSearchPort
-from .visual_corpus import OrderedVisualBatch, OrderedVisualFrame, VisualCorpusPort
+from .visual_corpus import (
+    OrderedVisualBatch,
+    OrderedVisualFrame,
+    VisualCorpusPort,
+    validate_ordered_visual_batch,
+    validate_ordered_visual_stream,
+)
 from .vlm import VLMPort
 
 __all__ = [
@@ -28,4 +34,6 @@ __all__ = [
     "VideoSearchHit",
     "VisualCorpusPort",
     "VLMPort",
+    "validate_ordered_visual_batch",
+    "validate_ordered_visual_stream",
 ]

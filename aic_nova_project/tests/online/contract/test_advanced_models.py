@@ -113,6 +113,8 @@ class TRAKEAdvancedModelTests(unittest.TestCase):
         for invalid_lambda in (0.0009, 0.0101, float("nan"), float("inf"), True):
             with self.assertRaises(ValidationError):
                 DANTEPolicy(lambda_penalty=invalid_lambda)
+        with self.assertRaises(ValidationError):
+            DANTEPolicy(policy_version="unsupported")
 
     def test_sequence_rejects_cross_video_non_increasing_missing_or_duplicate_event(self) -> None:
         first = _match("e1", local_index=1, frame_id="V001_00000_015", shot_id=0)
@@ -315,8 +317,6 @@ class VQAAdvancedModelTests(unittest.TestCase):
             "C:\\private\\V001.webp",
             "/srv/private/V001.webp",
             "\\\\server\\private\\V001.webp",
-            "https://example.test/V001.webp?api_key=secret",
-            "https://user:password@example.test/V001.webp",
         ):
             with self.assertRaises(ValidationError):
                 ImageEvidence(
@@ -326,6 +326,30 @@ class VQAAdvancedModelTests(unittest.TestCase):
                     shot_id=0,
                     timestamp_sec=1.5,
                     image_reference=reference,
+                )
+        for reference in (
+            "file:///srv/private/secret.webp",
+            "FILE:///C:/private/secret.webp",
+            "file://server/share/secret.webp",
+            "https://example.test/V001.webp?api_key=secret",
+            "https://user:password@example.test/V001.webp",
+        ):
+            with self.assertRaises(ValidationError):
+                ImageEvidence(
+                    evidence_id=reference,
+                    video_id="V001",
+                    frame_id="V001_00000_015",
+                    shot_id=0,
+                    timestamp_sec=1.5,
+                    image_reference="fixture://images/V001_00000_015",
+                )
+            with self.assertRaises(ValidationError):
+                VLMResponse(
+                    status="answered",
+                    answer="Có",
+                    answer_type="yes_no",
+                    confidence="high",
+                    evidence_ids=(reference,),
                 )
         with self.assertRaises(ValidationError):
             OCREvidence(

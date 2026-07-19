@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
@@ -27,7 +27,7 @@ class TRAKEEvent(StrictFrozenModel):
 class DANTEPolicy(StrictFrozenModel):
     """Versioned public DANTE policy selected for a TRAKE request."""
 
-    policy_version: NonEmptyStr = DANTE_POLICY_VERSION
+    policy_version: Literal["dante-index-gap-v1"] = DANTE_POLICY_VERSION
     lambda_penalty: Annotated[
         FiniteFloat,
         Field(ge=DANTE_MIN_LAMBDA, le=DANTE_MAX_LAMBDA),
@@ -105,7 +105,7 @@ class TRAKEVideoResult(StrictFrozenModel):
 class TRAKEDiagnostics(StrictFrozenModel):
     """Bounded diagnostics for one TRAKE service execution."""
 
-    policy_version: NonEmptyStr
+    policy_version: Literal["dante-index-gap-v1"]
     lambda_penalty: Annotated[
         FiniteFloat,
         Field(ge=DANTE_MIN_LAMBDA, le=DANTE_MAX_LAMBDA),

@@ -42,6 +42,89 @@ class OrderedVisualFrame(StrictFrozenModel):
 OrderedVisualBatch = Sequence[OrderedVisualFrame]
 
 
+def validate_ordered_visual_batch(
+    video_id: str,
+    batch: OrderedVisualBatch,
+    *,
+    expected_dimension: int | None = None,
+) -> tuple[OrderedVisualFrame, ...]:
+    """Validate one ordered batch before it enters a corpus stream.
+
+    A batch may start at any local index because the stream validator checks
+    continuity across batch boundaries. Within a batch, records must already be
+    strictly ordered and must belong to the requested video.
+    """
+
+    if not isinstance(video_id, str) or not video_id.strip():
+        raise ValueError("video_id must not be empty or whitespace")
+    if not isinstance(batch, Sequence) or not batch:
+        raise ValueError("visual batches must be non-empty sequences")
+
+    validated = tuple(batch)
+    dimensions = expected_dimension
+    seen_frame_ids: set[str] = set()
+    previous_index: int | None = None
+    for frame in validated:
+        if not isinstance(frame, OrderedVisualFrame):
+            raise ValueError("visual batches must contain OrderedVisualFrame values")
+        if frame.video_id != video_id:
+            raise ValueError("visual frame video_id does not match requested video_id")
+        if frame.frame_id in seen_frame_ids:
+            raise ValueError("duplicate frame_id in visual batch")
+        if previous_index is not None and frame.local_index <= previous_index:
+            raise ValueError("visual batch local_index values must be strictly increasing")
+        dimension = len(frame.vector)
+        if dimensions is None:
+            dimensions = dimension
+        elif dimension != dimensions:
+            raise ValueError("visual vectors in one corpus must have one dimension")
+        seen_frame_ids.add(frame.frame_id)
+        previous_index = frame.local_index
+    return validated
+
+
+def validate_ordered_visual_stream(
+    video_id: str,
+    batches: Iterable[OrderedVisualBatch],
+) -> tuple[OrderedVisualFrame, ...]:
+    """Materialize and validate the complete ordered stream for one video.
+
+    This is intentionally the shared boundary validator B can call after
+    consuming adapter batches. It detects wrong-video records, duplicate IDs,
+    missing/non-contiguous local positions, reordered batches, and dimension
+    changes across batches.
+    """
+
+    frames: list[OrderedVisualFrame] = []
+    expected_index = 0
+    expected_dimension: int | None = None
+    seen_frame_ids: set[str] = set()
+    seen_local_indices: set[int] = set()
+    for batch in batches:
+        validated_batch = validate_ordered_visual_batch(
+            video_id,
+            batch,
+            expected_dimension=expected_dimension,
+        )
+        if expected_dimension is None:
+            expected_dimension = len(validated_batch[0].vector)
+        for frame in validated_batch:
+            if frame.frame_id in seen_frame_ids:
+                raise ValueError("duplicate frame_id in visual corpus stream")
+            if frame.local_index in seen_local_indices:
+                raise ValueError("duplicate local_index in visual corpus stream")
+            if frame.local_index != expected_index:
+                raise ValueError(
+                    "visual stream local_index values must be contiguous and ordered "
+                    "from zero"
+                )
+            seen_frame_ids.add(frame.frame_id)
+            seen_local_indices.add(frame.local_index)
+            frames.append(frame)
+            expected_index += 1
+    return tuple(frames)
+
+
 @runtime_checkable
 class VisualCorpusPort(Protocol):
     def list_video_ids(self) -> Sequence[str]: ...

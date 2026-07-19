@@ -19,6 +19,7 @@ from online.ports import (
     OrderedVisualFrame,
     VLMPort,
     VisualCorpusPort,
+    validate_ordered_visual_stream,
 )
 
 
@@ -114,6 +115,87 @@ class AdvancedPortContractTests(unittest.TestCase):
         flattened = tuple(frame for batch in batches for frame in batch)
         self.assertEqual(tuple(frame.local_index for frame in flattened), (0,))
         self.assertEqual(tuple(frame.video_id for frame in flattened), ("V001",))
+
+    def test_stream_validator_accepts_ordered_batches_and_preserves_order(self) -> None:
+        frames = (
+            OrderedVisualFrame(
+                frame_id="V001_00000_015",
+                video_id="V001",
+                shot_id=0,
+                local_index=0,
+                timestamp_sec=1.5,
+                vector=(1.0, 0.0),
+            ),
+            OrderedVisualFrame(
+                frame_id="V001_00000_030",
+                video_id="V001",
+                shot_id=0,
+                local_index=1,
+                timestamp_sec=3.0,
+                vector=(0.0, 1.0),
+            ),
+            OrderedVisualFrame(
+                frame_id="V001_00001_015",
+                video_id="V001",
+                shot_id=1,
+                local_index=2,
+                timestamp_sec=4.5,
+                vector=(1.0, 0.0),
+            ),
+        )
+        result = validate_ordered_visual_stream("V001", ((frames[0],), frames[1:]))
+        self.assertEqual(result, frames)
+
+    def test_stream_validator_rejects_wrong_video_duplicates_gaps_reordered_batches_and_dimension_changes(
+        self,
+    ) -> None:
+        frame0 = MinimalVisualCorpus().frame
+        frame1 = OrderedVisualFrame(
+            frame_id="V001_00000_030",
+            video_id="V001",
+            shot_id=0,
+            local_index=1,
+            timestamp_sec=3.0,
+            vector=(0.0, 1.0),
+        )
+        frame2 = OrderedVisualFrame(
+            frame_id="V001_00001_015",
+            video_id="V001",
+            shot_id=1,
+            local_index=2,
+            timestamp_sec=4.5,
+            vector=(1.0, 0.0),
+        )
+        wrong_video = frame1.model_copy(
+            update={"video_id": "V002", "frame_id": "V002_00000_030"}
+        )
+        duplicate_frame_id = frame0.model_copy(update={"local_index": 1})
+        duplicate_local_index = frame1.model_copy(
+            update={"frame_id": "V001_00000_045", "local_index": 0}
+        )
+        dimension_change = OrderedVisualFrame(
+            frame_id="V001_00001_030",
+            video_id="V001",
+            shot_id=1,
+            local_index=1,
+            timestamp_sec=5.0,
+            vector=(1.0, 0.0, 0.0),
+        )
+
+        invalid_streams = (
+            ((wrong_video,),),
+            ((frame0,), (duplicate_frame_id,)),
+            ((frame0,), (duplicate_local_index,)),
+            ((frame0,), (frame2,)),
+            ((frame1,), (frame0,)),
+            ((frame0,), (dimension_change,)),
+        )
+        for batches in invalid_streams:
+            with self.assertRaises(ValueError):
+                validate_ordered_visual_stream("V001", batches)
+
+        with self.assertRaises(ValueError):
+            validate_ordered_visual_stream("V001", ((frame1, frame0),))
 
 
 if __name__ == "__main__":
