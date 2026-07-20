@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from concurrent.futures import Executor, ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
-from threading import Lock
+from threading import Condition
 from time import perf_counter
 from typing import Protocol, runtime_checkable
 
@@ -74,8 +74,9 @@ class VQAOrchestrator:
         self._vlm_timeout_sec = float(vlm_timeout_sec)
         self._executor = executor or ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="aic-vqa")
         self._owns_executor = executor is None
-        self._state_lock = Lock()
+        self._state = Condition()
         self._active = 0
+        self._closing = False
         self._closed = False
 
     async def answer(
@@ -92,9 +93,12 @@ class VQAOrchestrator:
     ) -> VQAExecution:
         if not isinstance(question, VQAQuestion) or not isinstance(budget, VQAEvidenceBudget):
             raise ContractMismatchError("question and budget must be validated public VQA models")
-        with self._state_lock:
-            if self._closed:
-                raise RuntimeError("VQAOrchestrator is closed")
+        with self._state:
+            if self._closing or self._closed:
+                raise ResourceUnavailableError(
+                    "VQA orchestrator is closing",
+                    details={"resource": "vqa_orchestrator"},
+                )
             self._active += 1
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self._total_timeout_sec
@@ -107,8 +111,9 @@ class VQAOrchestrator:
         except TimeoutError as exc:
             raise BranchTimeoutError("VQA execution exceeded its total timeout") from exc
         finally:
-            with self._state_lock:
+            with self._state:
                 self._active -= 1
+                self._state.notify_all()
 
     async def _execute(
         self,
@@ -250,11 +255,16 @@ class VQAOrchestrator:
             ),
         )
 
-    def close(self, *, wait: bool = True) -> None:
-        with self._state_lock:
+    def close(self, *, wait: bool = False) -> None:
+        with self._state:
             if self._closed:
                 return
-            if self._active:
+            self._closing = True
+            if wait:
+                while self._active:
+                    self._state.wait()
+            elif self._active:
+                self._closing = False
                 raise RuntimeError("VQAOrchestrator cannot close during active execution")
             self._closed = True
         if self._owns_executor:

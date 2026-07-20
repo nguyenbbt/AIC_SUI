@@ -25,6 +25,8 @@ from online.lifecycle import (
     InfrastructureLifecycle,
 )
 from online.modes.kis import KISRankingService, KISSearchOrchestrator
+from online.modes.trake import TRAKEModeAdapter
+from online.modes.vqa import VQAModeAdapter
 from online.ports import (
     ElasticsearchSearchPort,
     MetadataReaderPort,
@@ -143,6 +145,8 @@ class OnlineRuntime:
     lifecycle: InfrastructureLifecycle
     retrieval: RetrievalService
     ranking_executor: ThreadPoolExecutor
+    trake_mode: TRAKEModeAdapter | None = None
+    vqa_mode: VQAModeAdapter | None = None
     readiness_probes: tuple["RuntimeReadinessProbe", ...] = ()
     readiness_components: tuple[ComponentHealth, ...] = ()
     last_health: InfrastructureHealth | None = None
@@ -159,15 +163,23 @@ class OnlineRuntime:
 
     def close(self) -> None:
         try:
-            self.orchestrator.close(wait=True)
+            if self.vqa_mode is not None:
+                self.vqa_mode.close(wait=True)
         finally:
             try:
-                self.retrieval.close(wait=True)
+                if self.trake_mode is not None:
+                    self.trake_mode.close(wait=True)
             finally:
                 try:
-                    self.ranking_executor.shutdown(wait=True, cancel_futures=True)
+                    self.orchestrator.close(wait=True)
                 finally:
-                    self.lifecycle.close()
+                    try:
+                        self.retrieval.close(wait=True)
+                    finally:
+                        try:
+                            self.ranking_executor.shutdown(wait=True, cancel_futures=True)
+                        finally:
+                            self.lifecycle.close()
 
 
 @dataclass(frozen=True)
@@ -200,6 +212,8 @@ def build_online_runtime(
     object_reader: ObjectReaderPort | None = None,
     visual_encoder: TextEncoderPort | None = None,
     vietnamese_encoder: TextEncoderPort | None = None,
+    trake_mode: TRAKEModeAdapter | None = None,
+    vqa_mode: VQAModeAdapter | None = None,
 ) -> OnlineRuntime:
     data_config = data_config or OnlineDataConfig.from_env()
     runtime_config = runtime_config or RuntimeCompositionConfig.from_env()
@@ -289,6 +303,8 @@ def build_online_runtime(
         lifecycle=lifecycle,
         retrieval=retrieval,
         ranking_executor=ranking_executor,
+        trake_mode=trake_mode,
+        vqa_mode=vqa_mode,
         readiness_probes=(
             RuntimeReadinessProbe(
                 name="visual_encoder",
@@ -321,6 +337,8 @@ def create_runtime_app_from_env(
         runtime = runtime_factory()
         app.state.online_runtime = runtime
         app.state.orchestrator = runtime.orchestrator
+        app.state.trake_mode = runtime.trake_mode
+        app.state.vqa_mode = runtime.vqa_mode
         app.state.health_provider = _health_response_for_runtime(runtime)
         runtime.start()
         try:
@@ -338,8 +356,13 @@ def _health_response_for_runtime(runtime: OnlineRuntime) -> Callable[[], HealthR
         return HealthResponse(
             status=status_value,
             checks={
-                component.name: "healthy" if component.healthy else "unhealthy"
-                for component in health.components
+                **{
+                    component.name: "healthy" if component.healthy else "unhealthy"
+                    for component in health.components
+                },
+                "kis": "enabled",
+                "trake": "enabled" if runtime.trake_mode is not None else "disabled",
+                "vqa": "enabled" if runtime.vqa_mode is not None else "disabled",
             },
         )
 

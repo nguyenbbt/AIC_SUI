@@ -2,4 +2,15 @@
 
 from .kis import KISRankingService, KISSearchOrchestrator, KISSearchResult
 
-__all__ = ["KISRankingService", "KISSearchOrchestrator", "KISSearchResult"]
+from .trake import TRAKEModeAdapter, TRAKEServicePort
+from .vqa import VQAModeAdapter, VQAOrchestratorPort
+
+__all__ = [
+    "KISRankingService",
+    "KISSearchOrchestrator",
+    "KISSearchResult",
+    "TRAKEModeAdapter",
+    "TRAKEServicePort",
+    "VQAModeAdapter",
+    "VQAOrchestratorPort",
+]

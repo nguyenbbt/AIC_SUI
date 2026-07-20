@@ -28,12 +28,33 @@ from online.domain.errors import (
 from online.domain.identifiers import parse_canonical_frame_id
 from online.domain.query import ObjectConstraint
 from online.modes.kis import KISSearchResult
+from online.domain.trake import TRAKEQuery
+from online.domain.vqa import VQAEvidenceBudget, VQAQuestion, VQAResult
+from online.trake.service import TRAKEExecution
 from query_understanding.parser import parse_kis_query
+from retrieval_api.advanced_models import (
+    InternalTRAKERequest,
+    InternalTRAKEResponse,
+    InternalVQARequest,
+    InternalVQAResponse,
+)
 
 
 @runtime_checkable
 class SearchOrchestratorPort(Protocol):
     async def search(self, bundle: object) -> KISSearchResult: ...
+
+
+@runtime_checkable
+class TRAKEModePort(Protocol):
+    async def execute(self, query: TRAKEQuery) -> TRAKEExecution: ...
+
+
+@runtime_checkable
+class VQAModePort(Protocol):
+    async def answer(
+        self, question: VQAQuestion, budget: VQAEvidenceBudget
+    ) -> VQAResult: ...
 
 
 class SearchRequest(StrictFrozenModel):
@@ -60,11 +81,15 @@ class HealthResponse(StrictFrozenModel):
 def create_app(
     *,
     orchestrator: SearchOrchestratorPort | None = None,
+    trake_mode: TRAKEModePort | None = None,
+    vqa_mode: VQAModePort | None = None,
     health_provider: Callable[[], HealthResponse] | None = None,
     lifespan: Any | None = None,
 ) -> FastAPI:
     app = FastAPI(title="AIC Online Retrieval API", lifespan=lifespan)
     app.state.orchestrator = orchestrator
+    app.state.trake_mode = trake_mode
+    app.state.vqa_mode = vqa_mode
     app.state.health_provider = health_provider
 
     @app.exception_handler(DataInfrastructureError)
@@ -83,6 +108,19 @@ def create_app(
                     "code": "INVALID_QUERY",
                     "message": "The query is invalid for the current online contract",
                     "details": {"validation_error_count": len(exc.errors())},
+                }
+            },
+        )
+
+    @app.exception_handler(Exception)
+    async def handle_unexpected_error(_: Request, __: Exception) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "The service could not complete the request",
+                    "details": {},
                 }
             },
         )
@@ -130,6 +168,32 @@ def create_app(
             diagnostics=result.diagnostics if request.include_diagnostics else None,
         )
 
+    @app.post(
+        "/internal/unstable/trake",
+        response_model=InternalTRAKEResponse,
+        summary="Unstable internal TRAKE endpoint",
+        description="Internal integration contract; not a competition-ready API.",
+    )
+    async def trake(request: InternalTRAKERequest) -> InternalTRAKEResponse:
+        current = _get_trake_mode(app)
+        execution = await current.execute(request.to_domain())
+        return InternalTRAKEResponse(
+            query_id=execution.query_id,
+            results=execution.results,
+            diagnostics=execution.diagnostics,
+        )
+
+    @app.post(
+        "/internal/unstable/vqa",
+        response_model=InternalVQAResponse,
+        summary="Unstable internal VQA endpoint",
+        description="Internal integration contract; not a competition-ready API.",
+    )
+    async def vqa(request: InternalVQARequest) -> InternalVQAResponse:
+        current = _get_vqa_mode(app)
+        result = await current.answer(request.to_domain(), request.evidence_budget)
+        return InternalVQAResponse(question_id=result.question_id, result=result)
+
     return app
 
 
@@ -143,6 +207,28 @@ def _get_orchestrator(request: Request) -> SearchOrchestratorPort:
     if not isinstance(orchestrator, SearchOrchestratorPort):
         raise ContractMismatchError("Configured orchestrator does not implement search")
     return orchestrator
+
+
+def _get_trake_mode(app: FastAPI) -> TRAKEModePort:
+    mode = getattr(app.state, "trake_mode", None)
+    if mode is None:
+        raise ResourceUnavailableError(
+            "TRAKE mode is not configured", details={"resource": "trake_mode"}
+        )
+    if not isinstance(mode, TRAKEModePort):
+        raise ContractMismatchError("Configured TRAKE mode is invalid")
+    return mode
+
+
+def _get_vqa_mode(app: FastAPI) -> VQAModePort:
+    mode = getattr(app.state, "vqa_mode", None)
+    if mode is None:
+        raise ResourceUnavailableError(
+            "VQA mode is not configured", details={"resource": "vqa_mode"}
+        )
+    if not isinstance(mode, VQAModePort):
+        raise ContractMismatchError("Configured VQA mode is invalid")
+    return mode
 
 
 def _http_status_for_error(exc: DataInfrastructureError) -> int:
@@ -262,6 +348,8 @@ __all__ = [
     "SearchOrchestratorPort",
     "SearchRequest",
     "SearchResponse",
+    "TRAKEModePort",
+    "VQAModePort",
     "competition_candidates",
     "create_app",
 ]
