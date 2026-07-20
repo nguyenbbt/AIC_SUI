@@ -424,7 +424,11 @@ class FakeVLM:
                 confidence=VLMConfidence.LOW,
                 evidence_ids=(),
             )
-        grounded_ids = self.grounded_evidence_ids or evidence_ids[:1]
+        grounded_ids = (
+            self.grounded_evidence_ids
+            if self.grounded_evidence_ids is not None
+            else evidence_ids[:1]
+        )
         if not grounded_ids or not set(grounded_ids).issubset(evidence_ids):
             raise ContractMismatchError(
                 "fake VLM grounded evidence IDs must be a non-empty request subset"
@@ -458,7 +462,8 @@ class AdvancedModesFixture:
     images_by_frame_id: Mapping[str, ImageEvidence]
     missing_image_frame_id: str
     vqa_question: VQAQuestion
-    expected_vqa_evidence_ids: tuple[str, ...]
+    expected_vqa_selected_evidence_ids: tuple[str, ...]
+    expected_vqa_answer_evidence_ids: tuple[str, ...]
 
     def text_encoder(self) -> FakeMappedTextEncoder:
         return FakeMappedTextEncoder(self.event_vectors)
@@ -495,10 +500,27 @@ class AdvancedModesFixture:
     ) -> FakeImageResolver:
         return FakeImageResolver(self.images_by_frame_id, behavior=behavior)
 
-    def vlm(self, mode: FakeVLMMode | str = FakeVLMMode.ANSWERED) -> FakeVLM:
+    def vlm(
+        self,
+        mode: FakeVLMMode | str = FakeVLMMode.ANSWERED,
+        *,
+        grounded_evidence_ids: Sequence[str] | None = None,
+    ) -> FakeVLM:
+        if grounded_evidence_ids is None:
+            grounded_ids = self.expected_vqa_answer_evidence_ids
+        else:
+            grounded_ids = _validated_ids(
+                grounded_evidence_ids,
+                field_name="grounded_evidence_ids",
+            )
+            raw_ids = tuple(grounded_evidence_ids)
+            if len(grounded_ids) != len(raw_ids):
+                raise InvalidQueryError(
+                    "grounded_evidence_ids must not contain duplicates"
+                )
         return FakeVLM(
             mode,
-            grounded_evidence_ids=self.expected_vqa_evidence_ids[:1],
+            grounded_evidence_ids=grounded_ids,
         )
 
 
@@ -689,7 +711,18 @@ def build_advanced_modes_fixture() -> AdvancedModesFixture:
         )
         for frame in image_frames
     }
-    expected_evidence_ids = (
+    expected_selected_evidence_ids = (
+        f"image:{vqa_primary.frame_id}",
+        f"image:{vqa_secondary.frame_id}",
+        f"image:{vqa_neighbor.frame_id}",
+        f"ocr:{vqa_primary.frame_id}",
+        f"ocr:{vqa_secondary.frame_id}",
+        "asr:V001:interval-1",
+        "asr:V002:interval-1",
+        "summary:V001",
+        "summary:V002",
+    )
+    expected_answer_evidence_ids = (
         f"image:{vqa_primary.frame_id}",
         f"ocr:{vqa_primary.frame_id}",
         "asr:V001:interval-1",
@@ -717,7 +750,8 @@ def build_advanced_modes_fixture() -> AdvancedModesFixture:
             question="Người đàn ông làm gì sau khi ngồi xuống?",
             answer_type=VQAAnswerType.SHORT_TEXT,
         ),
-        expected_vqa_evidence_ids=expected_evidence_ids,
+        expected_vqa_selected_evidence_ids=expected_selected_evidence_ids,
+        expected_vqa_answer_evidence_ids=expected_answer_evidence_ids,
     )
 
 

@@ -10,7 +10,12 @@ from online.domain.errors import (
     ResourceUnavailableError,
 )
 from online.domain.identifiers import validate_canonical_frame_id
-from online.domain.vqa import VLMRequest, VLMResponse, VLMResponseStatus
+from online.domain.vqa import (
+    VLMRequest,
+    VLMResponse,
+    VLMResponseStatus,
+    VQAEvidence,
+)
 from online.ports.encoders import TextEncoderPort
 from online.ports.evidence import EvidenceHydrationPort
 from online.ports.images import ImageResolverPort
@@ -27,12 +32,29 @@ class AdvancedFixtureContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.fixture = build_advanced_modes_fixture()
 
-    def _vlm_request(self) -> VLMRequest:
-        image = next(iter(self.fixture.images_by_frame_id.values()))
+    def _evidence_by_id(self) -> dict[str, VQAEvidence]:
+        records = (
+            tuple(self.fixture.images_by_frame_id.values())
+            + self.fixture.ocr_evidence
+            + self.fixture.asr_evidence
+            + self.fixture.summary_evidence
+        )
+        return {record.evidence_id: record for record in records}
+
+    def _vlm_request(
+        self,
+        evidence_ids: tuple[str, ...] | None = None,
+    ) -> VLMRequest:
+        requested_ids = (
+            self.fixture.expected_vqa_answer_evidence_ids
+            if evidence_ids is None
+            else evidence_ids
+        )
+        evidence_by_id = self._evidence_by_id()
         return VLMRequest(
             request_id="vlm-wave2-contract",
             question=self.fixture.vqa_question,
-            evidence=(image,),
+            evidence=tuple(evidence_by_id[evidence_id] for evidence_id in requested_ids),
         )
 
     def test_all_fakes_conform_to_runtime_protocols(self) -> None:
@@ -46,6 +68,51 @@ class AdvancedFixtureContractTests(unittest.TestCase):
 
     def test_fixture_is_deterministic_across_builds(self) -> None:
         self.assertEqual(self.fixture, build_advanced_modes_fixture())
+
+    def test_expected_vqa_id_tuples_are_deterministic_unique_and_related(
+        self,
+    ) -> None:
+        rebuilt = build_advanced_modes_fixture()
+        selected = self.fixture.expected_vqa_selected_evidence_ids
+        answer = self.fixture.expected_vqa_answer_evidence_ids
+
+        self.assertEqual(
+            selected,
+            (
+                "image:V001_00004_010",
+                "image:V002_00002_010",
+                "image:V001_00003_010",
+                "ocr:V001_00004_010",
+                "ocr:V002_00002_010",
+                "asr:V001:interval-1",
+                "asr:V002:interval-1",
+                "summary:V001",
+                "summary:V002",
+            ),
+        )
+        self.assertEqual(
+            answer,
+            (
+                "image:V001_00004_010",
+                "ocr:V001_00004_010",
+                "asr:V001:interval-1",
+                "summary:V001",
+            ),
+        )
+        self.assertEqual(selected, rebuilt.expected_vqa_selected_evidence_ids)
+        self.assertEqual(answer, rebuilt.expected_vqa_answer_evidence_ids)
+        self.assertEqual(len(selected), len(set(selected)))
+        self.assertEqual(len(answer), len(set(answer)))
+        self.assertTrue(set(answer).issubset(selected))
+
+    def test_expected_vqa_ids_reference_real_fixture_evidence(self) -> None:
+        known_ids = set(self._evidence_by_id())
+        self.assertTrue(
+            set(self.fixture.expected_vqa_selected_evidence_ids).issubset(known_ids)
+        )
+        self.assertTrue(
+            set(self.fixture.expected_vqa_answer_evidence_ids).issubset(known_ids)
+        )
 
     def test_event_encoder_mapping_is_explicit_normalized_and_safe_logged(self) -> None:
         encoder = self.fixture.text_encoder()
@@ -188,9 +255,10 @@ class AdvancedFixtureContractTests(unittest.TestCase):
         answered = self.fixture.vlm(FakeVLMMode.ANSWERED).answer(request)
         self.assertIsInstance(answered, VLMResponse)
         self.assertEqual(answered.status, VLMResponseStatus.ANSWERED)
-        self.assertTrue(set(answered.evidence_ids).issubset(
-            item.evidence_id for item in request.evidence
-        ))
+        self.assertEqual(
+            answered.evidence_ids,
+            self.fixture.expected_vqa_answer_evidence_ids,
+        )
 
         insufficient = self.fixture.vlm(FakeVLMMode.INSUFFICIENT).answer(request)
         self.assertEqual(
@@ -204,6 +272,32 @@ class AdvancedFixtureContractTests(unittest.TestCase):
             self.fixture.vlm(FakeVLMMode.UNAVAILABLE).answer(request)
         malformed = self.fixture.vlm(FakeVLMMode.MALFORMED).answer(request)
         self.assertNotIsInstance(malformed, VLMResponse)
+
+    def test_fake_vlm_explicit_grounding_override_supports_image_only_request(
+        self,
+    ) -> None:
+        image_id = self.fixture.expected_vqa_selected_evidence_ids[0]
+        request = self._vlm_request((image_id,))
+        response = self.fixture.vlm(
+            grounded_evidence_ids=(image_id,),
+        ).answer(request)
+        self.assertEqual(response.evidence_ids, (image_id,))
+
+    def test_fake_vlm_rejects_explicit_empty_grounding_without_fallback(
+        self,
+    ) -> None:
+        request = self._vlm_request()
+        with self.assertRaises(ContractMismatchError):
+            self.fixture.vlm(grounded_evidence_ids=()).answer(request)
+
+    def test_fake_vlm_rejects_unknown_grounding_when_processing_request(
+        self,
+    ) -> None:
+        request = self._vlm_request()
+        with self.assertRaises(ContractMismatchError):
+            self.fixture.vlm(
+                grounded_evidence_ids=("image:unknown",),
+            ).answer(request)
 
     def test_call_logs_are_bounded_and_do_not_expose_vectors_secrets_or_local_paths(
         self,
