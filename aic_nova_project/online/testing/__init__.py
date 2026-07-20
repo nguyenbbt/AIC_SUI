@@ -1,5 +1,21 @@
 """Shared deterministic Online test support."""
 
+from .advanced_fakes import (
+    AdvancedFakeBehavior,
+    AdvancedModesFixture,
+    EncoderCall,
+    EvidenceHydrationCall,
+    FakeEvidenceHydrator,
+    FakeImageResolver,
+    FakeMappedTextEncoder,
+    FakeVLM,
+    FakeVLMMode,
+    FakeVisualCorpus,
+    ImageResolverCall,
+    VLMCall,
+    VisualCorpusCall,
+    build_advanced_modes_fixture,
+)
 from .fakes import (
     ElasticsearchCall,
     FakeBranchBehavior,
@@ -17,18 +33,32 @@ from .fakes import (
 from .sqlite_fixture import SQLITE_FIXTURE_SCHEMA_VERSION, create_sqlite_fixture
 
 __all__ = [
+    "AdvancedFakeBehavior",
+    "AdvancedModesFixture",
     "ElasticsearchCall",
+    "EncoderCall",
+    "EvidenceHydrationCall",
     "FakeBranchBehavior",
     "FakeElasticsearchSearchPort",
+    "FakeEvidenceHydrator",
+    "FakeImageResolver",
+    "FakeMappedTextEncoder",
     "FakeMetadataReaderPort",
     "FakeMilvusSearchPort",
     "FakeObjectReaderPort",
     "FakeTextEncoder",
+    "FakeVLM",
+    "FakeVLMMode",
+    "FakeVisualCorpus",
+    "ImageResolverCall",
     "IntegrationFixture",
     "MetadataCall",
     "MilvusCall",
     "ObjectCall",
     "SQLITE_FIXTURE_SCHEMA_VERSION",
+    "VLMCall",
+    "VisualCorpusCall",
+    "build_advanced_modes_fixture",
     "build_integration_fixture",
     "create_sqlite_fixture",
 ]
