@@ -1,10 +1,10 @@
-# Wave 3 — Kế hoạch code song song cho A, B, C
+# Wave 3 — Phân công chi tiết cho A, B, C
 
-## 1. Mục tiêu và phạm vi
+## 1. Mục tiêu chung
 
-Wave 3 là wave code cuối của giai đoạn **fake/integration-ready** cho phase Online. Wave này nối các khối TRAKE và VQA đã hoàn thành ở Wave 2 vào query rewrite, KIS retrieval, mode routing, composition root và API nội bộ.
+Wave 3 là wave code cuối của giai đoạn **fake/integration-ready** cho phase Online. Mục tiêu là nối các khối TRAKE và VQA đã hoàn thành trong Wave 2 vào query rewrite, KIS retrieval, mode routing, composition root và API nội bộ.
 
-Sau Wave 3, hệ thống phải chạy được hai luồng fake end-to-end sau:
+Khi Wave 3 hoàn tất, hệ thống phải chạy được hai luồng fake end-to-end:
 
 ```text
 TRAKE request
@@ -22,236 +22,143 @@ VQA question
   -> internal API response
 ```
 
-Wave 3 **không phải** bước xác nhận production với dữ liệu thật. Sau Wave 3 vẫn còn real adapters, model/index thật, benchmark hiệu năng và contract chính thức của ban tổ chức.
+Wave 3 chưa bao gồm database/index/model/provider thật. Các phần đó chỉ được kiểm chứng khi có artifact và dữ liệu runtime thật.
 
-### Tránh nhầm số wave
+## 2. Các quyết định kỹ thuật đã khóa
 
-`docs/13-ONLINE-NEXT-STEPS-ADVANCED-MODES.md` là kế hoạch lịch sử. Một số đầu việc trong đó từng được gọi là Wave 3 nhưng đã được đưa lên Wave 2 và hoàn thành. Từ thời điểm tài liệu này được chấp nhận, cách đánh số trong file này là nguồn phân công hiện hành.
+Ba người cùng tuân thủ các quyết định sau, không tự tạo contract hoặc pipeline khác:
 
-## 2. Trạng thái nền bắt buộc trước khi code
-
-Wave 2 code-complete tại commit:
-
-```text
-fdf7efd test(online): add Wave 2 shared fixture end-to-end gates
-```
-
-Kết quả kiểm tra trên máy tích hợp:
-
-- `194 passed`: toàn bộ TRAKE và VQA.
-- `381 passed`: contract, adapters, retrieval, integration, ranking, modes, TRAKE và VQA.
-- `4 passed`: shared-fixture E2E mới của TRAKE/VQA.
-- `compileall`: pass.
-- Hai test API chưa collection được trên máy tích hợp vì môi trường chưa cài `fastapi`; đây là thiếu dependency của môi trường, chưa phải bằng chứng code API bị lỗi.
-
-Tất cả thành viên phải bắt đầu Wave 3 từ **cùng một HEAD của nhánh tích hợp**, là commit chứa cả Wave 2 và tài liệu này. Không tiếp tục Wave 3 trực tiếp trên các branch Wave 1/Wave 2 cũ.
-
-## 3. Push Wave 2 và chuẩn bị branch Wave 3
-
-### 3.1 Người B — đẩy nhánh tích hợp
-
-Từ thư mục `aic_nova_project`:
-
-```powershell
-git status --short --branch
-git push origin feature/online-phase-Knguyen
-git rev-parse HEAD
-```
-
-Người B gửi giá trị `git rev-parse HEAD` cho A và C. Đó là `WAVE3_BASE_COMMIT` duy nhất mà cả nhóm dùng.
-
-### 3.2 Người A và C — lấy đúng code nền
-
-Không merge nhánh tích hợp vào branch cũ. Tạo branch Wave 3 mới từ đúng remote HEAD:
-
-```powershell
-git fetch origin
-git switch --detach origin/feature/online-phase-Knguyen
-git rev-parse HEAD
-```
-
-Đối chiếu hash vừa in với `WAVE3_BASE_COMMIT`, sau đó tạo branch cá nhân:
-
-Người A:
-
-```powershell
-git switch -c feature/online-wave3-Qluan
-```
-
-Người C:
-
-```powershell
-git switch -c feature/online-wave3-Tngoc
-```
-
-### 3.3 Người B — branch làm việc
-
-Để nhánh tích hợp luôn sạch, người B cũng nên tạo branch riêng:
-
-```powershell
-git switch -c feature/online-wave3-Knguyen
-```
-
-Nếu nhóm quyết định B tiếp tục code ngay trên `feature/online-phase-Knguyen`, A và C vẫn phải lấy đúng `WAVE3_BASE_COMMIT`; tuy nhiên branch riêng cho B an toàn hơn khi review/merge.
-
-## 4. Các quyết định đã khóa — không tự đổi contract
-
-Các thành viên không cần tự lựa chọn lại các điểm sau:
-
-1. TRAKE bám theo AIO_DANTE + QUEST đã mô tả trong references và các quyết định DD-026 đến DD-031.
-2. KIS, v-KIS và t-KIS dùng chung text-to-keyframe retrieval pipeline. v-KIS chỉ khác ở chỗ người dùng xem video rồi tự viết query text.
-3. VQA tìm evidence bằng chính KIS seven-branch retrieval/ranking; không tạo retrieval engine thứ hai.
-4. VQA rewrite tạo **mô tả evidence cần tìm**, tuyệt đối không tự đoán câu trả lời.
-5. DANTE chỉ tồn tại trong `TRAKEService`; mode/API không được cài lại thuật toán DANTE.
-6. API Wave 3 chỉ là API nội bộ, chưa phải competition API. OQ-002 vẫn mở.
-7. Route nội bộ Wave 3 được khóa là:
+1. TRAKE bám theo AIO_DANTE + QUEST và các quyết định DD-026 đến DD-031.
+2. DANTE chỉ nằm trong `TRAKEService`; mode, API và composition không cài lại thuật toán DANTE.
+3. VQA sử dụng lại KIS seven-branch retrieval/ranking để tìm evidence; không tạo retrieval engine riêng.
+4. VQA rewrite chỉ tạo mô tả evidence hình ảnh cần tìm, không được tự đoán câu trả lời.
+5. KIS, t-KIS và v-KIS dùng chung text-to-keyframe retrieval pipeline. v-KIS chỉ khác ở việc người dùng xem video rồi tự viết query text.
+6. KIS rewrite luôn giữ q0 là query gốc. q1/q2 chỉ là structured paraphrases.
+7. Rewrite timeout hoặc provider failure phải degraded về q0-only, không làm hỏng baseline retrieval.
+8. API trong Wave 3 chỉ là API nội bộ, vì competition/public schema OQ-002 vẫn chưa được chốt.
+9. Hai route nội bộ được thống nhất là:
    - `POST /internal/unstable/trake`
    - `POST /internal/unstable/vqa`
-8. Route KIS `/search` hiện tại phải giữ nguyên hành vi.
-9. Không thêm LLM/VLM provider thật, database thật, image resolver thật hoặc network call vào fake test.
-10. Stable Diffusion và QUEST enhancement không nằm trong Wave 3 baseline; chúng không được làm block merge.
-11. Không đưa secret, prompt đầy đủ, stack trace hay raw provider error ra API response/log diagnostics.
-12. Không sửa `online/domain/*` hoặc `online/ports/*` trong Wave 3. Nếu thật sự thiếu contract, báo `CONTRACT_MISMATCH` cho B trước khi sửa.
+10. Route KIS `/search` hiện tại phải giữ nguyên schema và hành vi.
+11. Không tích hợp LLM/VLM provider thật, DB thật, image resolver thật hoặc network call vào fake tests.
+12. Stable Diffusion và QUEST enhancement không thuộc Wave 3 baseline và không được làm block hoàn thành Wave 3.
+13. Không sửa `online/domain/*` hoặc `online/ports/*`. Nếu contract frozen thật sự không đủ, báo `CONTRACT_MISMATCH` trước khi thay đổi.
+14. Không trả secret, raw provider payload, filesystem path, stack trace hoặc prompt đầy đủ qua diagnostics/API.
 
-## 5. Ownership để ba người code không đè nhau
+## 3. Ranh giới ownership
 
-| Khu vực | Owner | Người khác |
+| Khu vực | Owner | Quy tắc |
 |---|---|---|
-| `online/testing/*`, advanced fake/conformance | A | Không sửa |
-| `query_understanding/rewrite.py` và rewrite support | B | Không sửa |
-| `online/retrieval/vqa.py` và VQA-to-KIS adapter | B | Không sửa |
-| `online/modes/trake.py`, `online/modes/vqa.py` | C | Không sửa |
-| `retrieval_api/advanced_models.py` | C | Không sửa |
-| `retrieval_api/search_engine.py`, `retrieval_api/composition.py` | C | Không sửa |
+| `online/testing/*` | A | B và C không sửa |
+| Advanced fake/conformance tests | A | B và C chỉ sử dụng |
+| `query_understanding/rewrite.py` | B | A và C không sửa |
+| `online/retrieval/vqa.py` | B | A và C không sửa |
+| Query rewrite/VQA retrieval tests | B | A và C không sửa |
+| `online/modes/trake.py` | C | A và B không sửa |
+| `online/modes/vqa.py` | C | A và B không sửa |
+| `retrieval_api/advanced_models.py` | C | A và B không sửa |
+| `retrieval_api/search_engine.py` | C | A và B không sửa |
+| `retrieval_api/composition.py` | C | A và B không sửa |
+| Advanced mode/API/composition tests | C | A và B không sửa |
 | `online/domain/*`, `online/ports/*` | Frozen | Không ai tự sửa |
-| Tài liệu phân công/decision | B tích hợp | A/C chỉ đề xuất |
 
-Mỗi người chỉ sửa `__init__.py` trong khu vực mình sở hữu. Không chạy formatter trên toàn repository.
+Không chạy formatter hoặc mechanical rewrite trên toàn repository. Mỗi người chỉ sửa `__init__.py` trong package mình sở hữu.
 
-## 6. Contract bàn giao giữa A, B, C
+---
 
-### 6.1 A → C: advanced fake bundle
+# 4. Người A — Advanced fakes, conformance và lifecycle support
 
-A cung cấp một factory/bundle duy nhất để C dùng trong composition và API tests. Bundle dùng các fake ports Wave 2 hiện có, tối thiểu gồm:
-
-- visual corpus/event-vector fake;
-- metadata/evidence hydrator fake;
-- image resolver fake;
-- VLM fake;
-- cấu hình deterministic và safe call log;
-- biến thể blocking/release để kiểm tra active-request shutdown;
-- biến thể timeout/unavailable/invalid reference.
-
-Bundle không import `retrieval_api` và không tự tạo app FastAPI. C là owner của composition root.
-
-### 6.2 B → C: VQA candidate retriever
-
-B cung cấp object có đúng method hiện tại:
-
-```python
-async def retrieve_candidates(
-    self,
-    question: VQAQuestion,
-) -> tuple[FusedFrameCandidate, ...]:
-    ...
-```
-
-Object phải thỏa `VQACandidateRetrievalPort` bằng structural typing. C không gọi private method, không đọc thuộc tính nội bộ và không cài lại rewrite/KIS search.
-
-B có thể cung cấp thêm `execute(...) -> VQARetrievalExecution` để unit test diagnostics của rewrite và KIS, nhưng C chỉ phụ thuộc vào `retrieve_candidates(...)`.
-
-### 6.3 B → C: TRAKE service
-
-C chỉ gọi public API của `TRAKEService` đã hoàn thành trong Wave 2. C không truy cập trực tiếp DANTE optimizer, event encoder hoặc visual corpus port.
-
-### 6.4 C → API consumer: internal-only schema
-
-C đặt request/response model trong `retrieval_api/advanced_models.py`, không đưa model API vào `online/domain`.
-
-TRAKE request nội bộ tối thiểu gồm:
-
-- request/query ID;
-- danh sách event text có thứ tự;
-- optional event IDs;
-- `top_k_videos`;
-- DANTE policy/lambda chỉ khi public service hiện tại đã hỗ trợ.
-
-VQA request nội bộ tối thiểu gồm:
-
-- question ID;
-- question text;
-- answer type;
-- optional evidence budget theo contract hiện có.
-
-Response phải dùng các domain result hiện có, giữ provenance/diagnostics và mang dấu hiệu rõ ràng rằng schema là `unstable`. Không gọi đây là competition contract.
-
-## 7. Người A — Advanced fake, conformance và lifecycle support
-
-### A3-1. Chuẩn hóa advanced fake runtime bundle
+## A3-1. Tạo advanced fake runtime bundle
 
 File dự kiến:
 
 - `online/testing/advanced_runtime.py`
 - `online/testing/__init__.py`
 
-Yêu cầu:
+A phải tạo một factory/bundle thống nhất để C dùng trong composition và API tests. Bundle dùng lại fake ports đã có từ Wave 2, tối thiểu gồm:
 
-- Dùng lại fake ports Wave 2, không nhân bản interface/domain model.
-- Factory nhận dữ liệu cấu hình rõ ràng và luôn cho kết quả deterministic.
-- Mỗi fake lưu call log an toàn để test thứ tự và số lần gọi.
-- Object/sequence trả về phải immutable hoặc copy defensively.
-- Cho phép cấu hình success, empty, timeout, unavailable và invalid-reference.
-- Không đọc file thật, không mở DB, không gọi network/model.
+- visual corpus/event-vector fake cho TRAKE;
+- metadata/evidence hydrator fake;
+- image resolver fake;
+- VLM fake;
+- deterministic configuration;
+- safe call logs;
+- timeout/unavailable/empty/invalid-reference behavior.
 
-### A3-2. Blocking/release fakes cho lifecycle
+Yêu cầu chi tiết:
 
-Thêm fake có thể:
+- Không nhân bản domain model hoặc port interface đã có.
+- Cùng input và configuration phải cho cùng output.
+- Factory nhận dependency/configuration rõ ràng, không dùng global mutable state.
+- Sequence/object trả ra phải immutable hoặc được copy defensively.
+- Call log phải ghi đủ method, request ID và thứ tự gọi nhưng không chứa secret/raw provider payload.
+- Có thể cấu hình riêng từng trạng thái: success, empty, timeout, unavailable và invalid reference.
+- Không đọc DB, không gọi model/network và không resolve đường dẫn ảnh thật.
+- Bundle không import `retrieval_api` và không tạo FastAPI app; composition thuộc C.
+
+## A3-2. Tạo blocking/release fakes cho lifecycle test
+
+A bổ sung fake hỗ trợ kiểm tra shutdown trong lúc request đang chạy.
+
+Fake phải có khả năng:
 
 1. báo hiệu request đã bắt đầu;
-2. chặn request ở giữa bằng `asyncio.Event`;
-3. cho test ra lệnh release;
-4. ghi nhận resource đã bị close hay chưa.
+2. chặn execution bằng `asyncio.Event`;
+3. cho test chủ động release request;
+4. ghi nhận thời điểm `close()` được gọi;
+5. phát hiện nếu resource bị close trước khi active request kết thúc;
+6. hỗ trợ close idempotent.
 
-Mục tiêu là C có thể chứng minh shutdown không close resource trong lúc request còn hoạt động.
+Các fake này phải sử dụng được cho TRAKE và VQA composition tests mà không phụ thuộc trực tiếp vào code API của C.
 
-### A3-3. Reusable conformance tests
+## A3-3. Viết reusable conformance tests
 
 File dự kiến:
 
 - `tests/online/contract/test_advanced_runtime_conformance.py`
 - `tests/online/contract/test_advanced_lifecycle_fakes.py`
 
-Test tối thiểu:
+Test bắt buộc:
 
-- fake thỏa runtime-checkable protocol tương ứng;
-- ID, provenance và reference không bị đổi qua port boundary;
-- success/empty/timeout/unavailable là các trạng thái phân biệt;
-- call log không chứa secret/raw payload nhạy cảm;
-- cùng input cho cùng output;
+- mỗi fake thỏa runtime-checkable protocol tương ứng;
+- input ID, video ID, frame ID, evidence ID và provenance không bị đổi qua port boundary;
+- success, empty, timeout và unavailable là các trạng thái phân biệt;
+- invalid image/evidence reference fail-safe;
+- fake không tùy tiện đọc filesystem;
+- cùng input cho kết quả deterministic;
+- concurrent calls không lẫn call log hoặc response;
 - blocking fake không bị close trước release;
-- invalid evidence/image reference fail-safe, không đọc tùy tiện từ filesystem.
+- gọi close nhiều lần không gây lỗi hoặc double-release;
+- call log và lỗi không làm lộ dữ liệu nhạy cảm.
 
-### A3-4. Bàn giao cho C
+## A3-4. Contract A bàn giao cho C
 
-A ghi trong commit message hoặc handoff:
+A phải export rõ:
 
-- factory import path;
-- tên bundle/class;
-- cách cấu hình happy path và timeout;
-- cách dùng start/release event;
-- test command đã chạy.
+- tên advanced bundle;
+- factory tạo happy-path bundle;
+- cách cấu hình timeout/unavailable;
+- cách lấy start/release event;
+- cách kiểm tra call log;
+- close/lifecycle behavior.
 
-### A3 Definition of Done
+C chỉ được sử dụng public factory/export này, không truy cập private field của fake.
 
-- Không có real adapter/network call.
-- Không sửa domain/ports hoặc composition/API.
-- Tất cả test A3 pass.
-- Các test Wave 1/Wave 2 liên quan vẫn pass.
-- Commit nhỏ, rõ ràng, push lên `feature/online-wave3-Qluan`.
+## A3-5. Điều kiện hoàn thành của A
 
-## 8. Người B — Query rewrite và VQA retrieval adapter
+- Advanced bundle dùng lại đúng ports và models của Wave 2.
+- Không có network, DB, provider hoặc image-path access thật.
+- Có deterministic behavior và safe logs.
+- Có blocking/release support cho lifecycle tests.
+- Conformance, concurrency và lifecycle tests pass.
+- Regression tests của Wave 1/Wave 2 liên quan vẫn pass.
+- Không sửa domain/ports, query rewrite, mode, API hoặc composition.
 
-### B3-1. Query rewrite core
+---
+
+# 5. Người B — Query rewrite và VQA-to-KIS retrieval
+
+## B3-1. Xây dựng query rewrite core
 
 File dự kiến:
 
@@ -259,37 +166,45 @@ File dự kiến:
 - `query_understanding/__init__.py`
 - `tests/online/retrieval/test_query_rewrite.py`
 
-Thiết kế bằng frozen dataclass/protocol nội bộ, tối thiểu có:
+B xây dựng rewrite contract nội bộ bằng frozen dataclass/protocol, tối thiểu biểu diễn được:
 
 - rewrite purpose: KIS hoặc VQA evidence;
 - original text;
 - primary rewrite;
-- optional paraphrases q1/q2;
-- status: success hoặc degraded/no-op;
+- optional q1/q2 variants;
+- rewrite status: success hoặc degraded/no-op;
 - bounded warnings/diagnostics;
-- optional provider/model/prompt version dạng định danh an toàn.
+- optional provider/model/prompt version dưới dạng định danh an toàn.
 
-Quy tắc KIS rewrite:
+Không đưa rewrite models vào `online/domain`, vì đây chưa phải shared/public contract.
 
-- q0 luôn là query gốc;
-- q1/q2 là structured paraphrase;
-- trim whitespace;
-- bỏ chuỗi rỗng;
-- deduplicate nhưng giữ thứ tự;
-- không để q1/q2 trùng q0;
-- timeout/provider failure trả q0-only và đánh dấu degraded.
+### Quy tắc KIS rewrite
 
-Quy tắc VQA rewrite:
+- q0 luôn là query gốc.
+- q1/q2 là structured paraphrases.
+- Trim whitespace.
+- Loại bỏ chuỗi rỗng.
+- Deduplicate nhưng giữ nguyên thứ tự.
+- Loại q1/q2 nếu trùng q0.
+- Giới hạn số variants đúng policy, không để provider trả danh sách vô hạn.
+- Timeout/provider unavailable/invalid output phải trả q0-only.
+- Degraded fallback phải có bounded warning, không chứa raw exception/prompt/secret.
 
-- primary output là mô tả evidence hình ảnh cần tìm;
-- không sinh đáp án;
-- không thêm fact không có trong question;
-- q1/q2 chỉ là biến thể retrieval;
-- khi rewriter không sẵn sàng, dùng question gốc làm fallback retrieval text và đánh dấu degraded.
+### Quy tắc VQA evidence rewrite
 
-Trong Wave 3 chỉ cần `NoOpQueryRewriter` và implementation deterministic/mapping cho test. Không tích hợp LLM provider thật.
+- Primary rewrite mô tả loại evidence hình ảnh cần tìm.
+- Không sinh đáp án và không thêm fact không có trong question.
+- q1/q2 chỉ là retrieval variants.
+- Nếu rewriter không hoạt động, dùng question gốc làm retrieval text fallback.
+- Fallback phải đánh dấu degraded nhưng vẫn cho phép KIS retrieval chạy.
 
-### B3-2. VQA → KIS retrieval adapter
+### Implementations cần có trong Wave 3
+
+- `NoOpQueryRewriter` cho baseline/fallback.
+- Deterministic hoặc mapping rewriter để fake integration test.
+- Không tích hợp LLM provider thật trong Wave 3.
+
+## B3-2. Xây dựng VQA-to-KIS retrieval adapter
 
 File dự kiến:
 
@@ -301,104 +216,173 @@ Luồng bắt buộc:
 
 ```text
 VQAQuestion
-  -> evidence rewrite
-  -> QueryBundle mode KIS_TEXT
+  -> evidence-query rewrite
+  -> KIS QueryBundle
   -> KISSearchOrchestrator.search(...)
   -> KISSearchResult.candidates
   -> tuple[FusedFrameCandidate, ...]
 ```
 
-Yêu cầu:
+Adapter phải:
 
-- Reuse `KISQueryBuilder`/KIS seven-branch retrieval hiện có.
-- Không tự gọi từng OCR/ASR/summary/visual branch.
-- Không tự fuse/rank lần thứ hai.
-- Không hydrate evidence và không gọi VLM; đó là trách nhiệm C orchestrator.
-- Query ID phải deterministic và truy vết được từ VQA question ID.
-- Timeout/failure rewrite không làm mất baseline retrieval.
-- Timeout/failure KIS phải tuân theo shared error policy hiện có.
-- Method `retrieve_candidates` phải đúng contract ở mục 6.2.
+- dùng lại `KISQueryBuilder` và KIS seven-branch retrieval/ranking hiện có;
+- tạo `QueryBundle` với mode KIS phù hợp;
+- tạo query ID deterministic và truy vết được từ VQA question ID;
+- gọi đúng một lần vào public KIS search orchestration;
+- trả ranked `FusedFrameCandidate` theo đúng thứ tự KIS result;
+- không tự gọi riêng OCR/ASR/summary/visual branches;
+- không fuse/rank lần thứ hai;
+- không hydrate evidence;
+- không gọi VLM;
+- không lưu kết quả request vào mutable `last_result`;
+- an toàn khi có nhiều request đồng thời.
 
-Có thể thêm `VQARetrievalExecution` nội bộ để unit test:
+Public handoff cho C phải thỏa structural contract hiện tại:
 
-- rewrite status/warnings;
-- query variants đã tạo;
+```python
+async def retrieve_candidates(
+    self,
+    question: VQAQuestion,
+) -> Sequence[FusedFrameCandidate]:
+    ...
+```
+
+B có thể trả tuple để bảo đảm bất biến.
+
+## B3-3. Cung cấp execution diagnostics nội bộ
+
+B có thể bổ sung `VQARetrievalExecution` để unit/integration test quan sát:
+
+- rewrite status;
+- bounded rewrite warnings;
+- query variants sau normalization;
 - KIS diagnostics;
 - ranked candidates.
 
-Không lưu diagnostics trong mutable `last_result`, vì object có thể phục vụ nhiều request đồng thời.
+Nếu có `execute(...)`, `retrieve_candidates(...)` chỉ là public compatibility method lấy candidates từ execution result. C không được phụ thuộc vào private diagnostics structure này.
 
-### B3-3. Integration test của phần B
+Diagnostics phải được trả theo từng request, không lưu trong shared mutable state.
+
+## B3-4. Viết integration tests của phần B
 
 File dự kiến:
 
 - `tests/online/integration/test_vqa_retrieval_handoff.py`
 
-Test tối thiểu:
+Test bắt buộc:
 
-- question → fake rewrite → real KIS orchestration với fake indexes → fused candidates;
-- no-op/degraded rewrite vẫn chạy q0;
-- q1/q2 được trim/dedup đúng;
-- empty candidates hợp lệ;
-- concurrent requests không lẫn query/diagnostics;
-- method thỏa `VQACandidateRetrievalPort` hiện có;
-- không gọi evidence hydrator/VLM.
+- VQA question → deterministic rewrite → real KIS orchestration với fake indexes → fused candidates;
+- KIS q0 luôn giữ query gốc;
+- VQA primary rewrite chỉ mô tả evidence;
+- q1/q2 được trim, loại rỗng và deduplicate;
+- no-op/degraded rewrite vẫn chạy baseline retrieval;
+- rewrite timeout không làm hỏng q0 retrieval;
+- empty candidates là kết quả hợp lệ;
+- KIS timeout/unavailable tuân theo typed error policy hiện có;
+- concurrent requests không lẫn query ID, variants hoặc diagnostics;
+- returned candidates đúng thứ tự KIS ranking;
+- adapter thỏa `VQACandidateRetrievalPort`;
+- adapter không gọi evidence hydrator hoặc VLM.
 
-### B3 Definition of Done
+## B3-5. Điều kiện hoàn thành của B
 
 - KIS q0 invariant được giữ nguyên.
-- VQA chỉ rewrite để tìm evidence, không answer.
-- Adapter trả đúng ranked `FusedFrameCandidate` cho C.
-- Không sửa VQA orchestrator, mode/API, domain/ports hoặc A fakes.
-- Tất cả test B3 và regression Wave 1/Wave 2 pass.
-- Push lên `feature/online-wave3-Knguyen`.
+- VQA rewrite chỉ phục vụ tìm evidence, không answer.
+- Rewrite failure degraded an toàn về baseline.
+- VQA adapter tái sử dụng đúng KIS retrieval/ranking.
+- Adapter trả đúng candidate contract cho C.
+- Unit, integration, concurrency và regression tests pass.
+- Không sửa VQA orchestrator, A fakes, C mode/API/composition hoặc shared domain/ports.
 
-## 9. Người C — Mode adapters, internal API và composition
+---
 
-### C3-1. TRAKE mode adapter
+# 6. Người C — TRAKE/VQA modes, internal API và composition
+
+## C3-1. Xây dựng TRAKE mode adapter
 
 File dự kiến:
 
 - `online/modes/trake.py`
+- `online/modes/__init__.py`
 - `tests/online/modes/test_trake.py`
 
-Yêu cầu:
+TRAKE mode adapter phải:
 
-- Validate request ở mode boundary.
-- Giữ nguyên thứ tự event.
-- Gọi đúng một lần vào `TRAKEService`.
-- Không cài DANTE/QUEST optimizer lần nữa.
-- Giữ video IDs, sequence, score breakdown, provenance và diagnostics.
-- Map timeout/unavailable/invalid input sang lỗi typed, không rò raw exception.
-- Cho phép concurrent requests, không mutable request-global state.
+- validate request ở mode boundary;
+- giữ nguyên thứ tự event;
+- chuyển request thành `TRAKEQuery` hiện có;
+- gọi đúng một lần vào `TRAKEService`;
+- không truy cập trực tiếp DANTE optimizer/event encoder/visual corpus;
+- không cài lại DANTE hoặc QUEST logic;
+- giữ video ID, ordered sequence, score breakdown, provenance và diagnostics;
+- không âm thầm đổi policy/lambda/top-k;
+- map invalid input, timeout và unavailable thành typed/sanitized errors;
+- không có mutable request-global state;
+- hỗ trợ concurrent requests.
 
-### C3-2. VQA mode adapter
+## C3-2. Xây dựng VQA mode adapter
 
 File dự kiến:
 
 - `online/modes/vqa.py`
+- `online/modes/__init__.py`
 - `tests/online/modes/test_vqa.py`
 
-Yêu cầu:
+VQA mode adapter phải:
 
-- Validate VQA question/request.
-- Gọi `VQAOrchestrator`; không tự retrieval, selection hoặc VLM call.
-- Orchestrator được inject candidate retriever của B qua `VQACandidateRetrievalPort`.
-- Giữ answer, evidence refs, confidence và diagnostics.
-- `INSUFFICIENT_EVIDENCE` là kết quả domain hợp lệ, không biến thành HTTP 500.
-- VLM unavailable/timeout được xử lý theo policy hiện có.
+- validate question và answer type;
+- gọi `VQAOrchestrator` hiện có;
+- inject candidate retriever của B qua `VQACandidateRetrievalPort`;
+- không tự rewrite query;
+- không tự chạy KIS retrieval/ranking;
+- không tự selection/hydration evidence;
+- không gọi VLM ngoài orchestrator;
+- giữ answer, evidence references, confidence và diagnostics;
+- coi `INSUFFICIENT_EVIDENCE` là domain result hợp lệ, không biến thành internal error;
+- map VLM timeout/unavailable theo error policy hiện có;
+- hỗ trợ concurrent requests mà không lẫn ID/diagnostics.
 
-Trong khi B chưa merge, C dùng local test double thỏa method ở mục 6.2. Không tạo implementation retrieval thứ hai.
+Trong lúc B chưa bàn giao adapter thật, C dùng local test double thỏa đúng method `retrieve_candidates(...)`. C không tạo retrieval implementation thay thế.
 
-### C3-3. Internal unstable API models và routes
+## C3-3. Tạo internal unstable API models
 
 File dự kiến:
 
 - `retrieval_api/advanced_models.py`
+
+Models chỉ dành cho API nội bộ và không được đặt vào `online/domain`.
+
+TRAKE request model tối thiểu gồm:
+
+- request/query ID;
+- ordered event texts;
+- optional event IDs nếu contract hiện có hỗ trợ;
+- `top_k_videos`;
+- DANTE configuration chỉ khi public service contract đã hỗ trợ.
+
+VQA request model tối thiểu gồm:
+
+- question ID;
+- question text;
+- answer type;
+- optional evidence budget theo domain contract hiện có.
+
+Response models phải:
+
+- dùng domain results hiện có;
+- giữ request/query ID;
+- giữ provenance và diagnostics;
+- thể hiện rõ schema là `unstable`/internal;
+- không được gọi là competition-ready contract.
+
+## C3-4. Thêm TRAKE và VQA internal routes
+
+File dự kiến:
+
 - `retrieval_api/search_engine.py`
 - `tests/online/api/test_advanced_routes.py`
 
-Routes khóa cứng:
+Routes bắt buộc:
 
 ```text
 POST /internal/unstable/trake
@@ -407,115 +391,154 @@ POST /internal/unstable/vqa
 
 Yêu cầu:
 
-- Existing `/search` không đổi schema/hành vi.
-- Route selection explicit; không dùng LLM để đoán mode.
-- Request/response models là internal-only và nằm ngoài `online/domain`.
-- Invalid request: 422.
-- Service unavailable/disabled: 503.
-- Timeout: 504.
-- Unexpected internal failure: sanitized 500.
-- Không trả stack trace, filesystem path, provider payload hoặc secret.
-- Response giữ request ID/query ID để trace.
-- OpenAPI/description phải ghi `unstable internal API`, không ghi competition-ready.
+- Existing `/search` không đổi schema hoặc hành vi.
+- Mode routing explicit; không dùng LLM để đoán mode.
+- TRAKE route chỉ gọi TRAKE mode adapter.
+- VQA route chỉ gọi VQA mode adapter.
+- Invalid request trả 422.
+- Disabled/unavailable dependency trả 503.
+- Timeout trả 504.
+- Unexpected internal failure trả sanitized 500.
+- `INSUFFICIENT_EVIDENCE` vẫn là successful domain response.
+- Không trả raw exception, stack trace, provider payload, secret hoặc filesystem path.
+- Response giữ request ID/query ID để truy vết.
+- OpenAPI description ghi rõ đây là unstable internal API.
 
-### C3-4. Composition root và readiness/lifecycle
+## C3-5. Mở rộng composition root
 
 File dự kiến:
 
 - `retrieval_api/composition.py`
 - `tests/online/api/test_advanced_composition.py`
 
-Yêu cầu:
+Composition phải wire:
 
-- Wire A advanced fake bundle, B `TRAKEService`, B VQA candidate retriever và C orchestrators/modes.
-- Advanced routes chỉ enabled khi dependency tương ứng được inject đầy đủ.
-- Không âm thầm tạo DB/model/image resolver thật.
-- Readiness phân biệt KIS, TRAKE và VQA; VQA enabled thì phải có VLM readiness probe phù hợp.
-- Không health-check VLM bằng cách gửi dummy evidence/provider request.
-- Shutdown ngừng nhận request mới, chờ request đang chạy, sau đó close theo dependency order.
-- VQA/mode resources đóng trước KIS retrieval; service đóng trước shared executor/index resource.
-- Close idempotent.
-- Dùng blocking/release fake của A để test không close resource giữa active request.
+- advanced fake bundle của A;
+- `TRAKEService` của Wave 2;
+- VQA candidate retriever của B;
+- `EvidenceSelector`/evidence hydration flow hiện có;
+- VLM port;
+- `VQAOrchestrator`;
+- TRAKE mode adapter;
+- VQA mode adapter;
+- internal routes.
 
-### C3-5. Shared fake E2E
+Quy tắc composition:
+
+- dependency được inject rõ ràng;
+- không âm thầm tạo DB/index/model/image resolver thật;
+- advanced route chỉ enabled khi đủ dependency tương ứng;
+- thiếu dependency phải thành readiness/503 rõ ràng;
+- không duplicate service/orchestrator trong mỗi request;
+- không import test module từ production code;
+- không tạo circular dependency giữa modes, API và testing.
+
+## C3-6. Readiness và lifecycle
+
+Readiness phải phân biệt:
+
+- KIS readiness;
+- TRAKE readiness;
+- VQA readiness;
+- enabled/disabled/unavailable trạng thái từng mode.
+
+Nếu VQA enabled, composition phải có VLM readiness probe phù hợp. Không kiểm tra VLM bằng cách gửi dummy image/evidence request đến provider.
+
+Shutdown phải:
+
+1. ngừng nhận request mới;
+2. chờ active request kết thúc;
+3. close VQA/mode resources;
+4. close TRAKE/KIS services;
+5. close shared executors/index resources theo dependency order;
+6. hỗ trợ gọi close nhiều lần.
+
+C dùng blocking/release fake của A để chứng minh resource không bị close khi request vẫn đang chạy.
+
+## C3-7. Viết shared fake end-to-end tests
 
 File dự kiến:
 
 - `tests/online/integration/test_trake_mode_api_e2e.py`
 - `tests/online/integration/test_vqa_rewrite_api_e2e.py`
 
-Test TRAKE:
+TRAKE E2E phải kiểm tra:
 
 ```text
-internal request -> route -> mode -> TRAKEService/DANTE -> response
-```
-
-Test VQA sau khi B merge:
-
-```text
-internal question
-  -> route/mode
-  -> VQAOrchestrator
-  -> B rewrite + KIS retrieval/ranking
-  -> evidence hydration/selection
-  -> fake VLM
+internal request
+  -> TRAKE route
+  -> TRAKE mode
+  -> TRAKEService/DANTE
+  -> ranked video results
   -> internal response
 ```
 
-Test thêm:
+VQA E2E phải kiểm tra:
 
-- rewrite degraded nhưng baseline VQA retrieval vẫn chạy;
-- empty/insufficient evidence;
-- VLM unavailable/timeout;
-- timeout mapping 504;
-- sanitized unexpected error;
-- concurrent requests không lẫn ID/diagnostics;
-- shutdown trong lúc một request đang bị block.
+```text
+internal question
+  -> VQA route/mode
+  -> VQAOrchestrator
+  -> B evidence rewrite
+  -> KIS seven-branch retrieval/ranking
+  -> evidence selection/hydration
+  -> fake VLM
+  -> VQAResult
+  -> internal response
+```
 
-### C3 Definition of Done
+Test cases bắt buộc:
 
-- Hai internal routes chạy fake E2E.
-- `/search` regression pass.
+- TRAKE happy path và ordered events;
+- TRAKE empty results;
+- TRAKE timeout/unavailable;
+- VQA happy path;
+- VQA degraded/no-op rewrite nhưng baseline retrieval vẫn chạy;
+- VQA empty/insufficient evidence;
+- VLM unavailable và timeout;
+- invalid request → 422;
+- disabled dependency → 503;
+- timeout → 504;
+- unexpected error được sanitize;
+- concurrent requests không lẫn IDs/diagnostics;
+- shutdown khi một request đang bị block;
+- existing KIS `/search` vẫn hoạt động như trước.
+
+## C3-8. Điều kiện hoàn thành của C
+
+- TRAKE và VQA internal routes chạy fake E2E.
+- VQA E2E sử dụng adapter thật của B, không dùng candidate list dựng sẵn ở final test.
+- Composition sử dụng advanced fake bundle public của A.
 - Không duplicate DANTE hoặc KIS retrieval.
-- Không real provider/database/image access.
-- Readiness, error mapping và shutdown có test.
-- Sau khi A/B đã merge vào nhánh tích hợp, C rebase/merge nền mới và chạy lại shared E2E trước khi bàn giao final commit.
-- Push lên `feature/online-wave3-Tngoc`.
+- Error mapping, readiness, concurrency và graceful shutdown có test.
+- Không có real provider, DB, model hoặc image access.
+- `/search` regression pass.
+- Không sửa shared domain/ports hoặc code thuộc ownership A/B.
 
-## 10. Cách làm song song và điểm đồng bộ
+---
 
-### Giai đoạn W3.1 — làm song song hoàn toàn
+# 7. Phần tích hợp chung của cả ba người
 
-- A làm advanced fake/conformance.
-- B làm rewrite và VQA-to-KIS adapter.
-- C làm mode adapters, internal models/routes và unit test bằng local test doubles.
+## 7.1 Handoff A → C
 
-Trong giai đoạn này không ai chờ ai, miễn là tuân thủ contract mục 6.
+C phải dùng factory/bundle public của A cho composition tests. Nếu C phải đọc private field hoặc tự dựng lại fake port, handoff A chưa hoàn tất.
 
-### Giai đoạn W3.2 — integration ngắn
+## 7.2 Handoff B → C
 
-Thứ tự merge đề nghị:
+C phải inject object của B thỏa `VQACandidateRetrievalPort`. Final VQA E2E phải đi qua rewrite và real KIS orchestration với fake indexes, không được bắt đầu từ danh sách ranked candidates dựng sẵn.
 
-1. Review và merge A.
-2. Review và merge B.
-3. C lấy nhánh tích hợp mới, thay local test double bằng dependency thật của A/B trong composition/E2E.
-4. Review và merge C.
-5. B chạy full gate trên nhánh tích hợp.
-
-C chỉ phải làm integration patch nhỏ; không được viết lại phần A/B.
-
-### Quy tắc báo lỗi khi handoff
+## 7.3 Contract mismatch handling
 
 - Sai hành vi trong file owner: `IMPLEMENTATION_BUG`.
-- Contract tài liệu khác code frozen: `CONTRACT_MISMATCH`.
-- Thiếu dependency như `fastapi`: `ENVIRONMENT_BLOCKER`.
-- Thiếu data/model/image thật: `NEED_RUNTIME_VERIFICATION`.
+- Tài liệu khác frozen code contract: `CONTRACT_MISMATCH`.
+- Thiếu dependency test: `ENVIRONMENT_BLOCKER`.
+- Thiếu data/model/provider thật: `NEED_RUNTIME_VERIFICATION`.
 
-Không sửa lén domain/ports để làm test pass.
+Không tự sửa domain/ports hoặc nới validation để né lỗi.
 
-## 11. Test gate bắt buộc trước khi công bố Wave 3 hoàn tất
+## 7.4 Full test gate
 
-Từ root `aic_nova_project`:
+Sau khi ghép A, B và C, toàn bộ các lệnh sau phải pass trong môi trường có đủ test dependencies:
 
 ```powershell
 python -m compileall online query_understanding retrieval_api tests/online
@@ -525,73 +548,35 @@ python -m pytest -q tests/online/modes
 python -m pytest -q tests/online/trake tests/online/vqa
 python -m pytest -q tests/online/integration
 python -m pytest -q tests/online/api
-```
-
-Sau đó chạy regression tổng:
-
-```powershell
 python -m pytest -q tests/online
 ```
 
-Điều kiện pass:
+Điều kiện hoàn thành Wave 3:
 
-- Không collection error.
-- Không skipped test cho critical fake E2E.
-- Không warning do coroutine/resource chưa close.
-- Không network/model/database access.
-- KIS `/search` vẫn pass.
-- TRAKE và VQA internal routes pass.
-- Concurrent/lifecycle/error-sanitization tests pass.
+- không collection error;
+- không skipped test cho critical fake E2E;
+- không coroutine/executor/resource leak warning;
+- không network/model/database access;
+- KIS regression pass;
+- TRAKE và VQA internal route tests pass;
+- concurrency/lifecycle/error-sanitization tests pass.
 
-Máy chạy final gate phải cài đủ test dependencies, bao gồm FastAPI. Không được kết luận Wave 3 hoàn tất nếu API tests chưa collection được. Nếu dependency thiếu, ghi `ENVIRONMENT_BLOCKER`, cài theo requirements của repository trong môi trường phù hợp rồi chạy lại; không sửa test để né import.
+Máy chạy final gate phải cài FastAPI và toàn bộ test dependencies. Nếu API tests chưa collection được vì thiếu dependency thì phải ghi `ENVIRONMENT_BLOCKER`; chưa được công bố Wave 3 hoàn tất.
 
-## 12. Những gì có sau Wave 3
+## 7.5 Những phần không được xem là đã hoàn thành sau Wave 3
 
-Nếu toàn bộ gate trên pass, nhóm có:
-
-- KIS text/v-KIS/t-KIS dùng chung retrieval pipeline;
-- optional KIS query rewrite với q0-safe degradation;
-- VQA evidence-query rewrite;
-- VQA reuse KIS seven-branch retrieval/ranking;
-- TRAKE/DANTE service nối vào mode và internal route;
-- VQA retrieval/evidence/VLM orchestration nối vào internal route;
-- fake composition, readiness, typed/sanitized errors và graceful shutdown;
-- deterministic fake E2E đủ để thay adapters thật về sau mà không viết lại core orchestration.
-
-## 13. Những gì vẫn còn sau Wave 3
-
-Các mục này không được báo là đã hoàn thành chỉ vì fake E2E pass:
+Ngay cả khi fake E2E pass, các mục sau vẫn còn chờ runtime thật:
 
 - competition/public API contract — OQ-002;
-- mapping database/index thật của Offline;
-- checkpoint/encoder/index compatibility với artifact thật;
-- actual image-path resolution — OQ-012;
-- LLM rewrite provider thật và prompt/runtime calibration;
+- Offline database/index mapping thật;
+- encoder/checkpoint/index compatibility;
+- image-path resolution — OQ-012;
+- LLM rewrite provider thật;
 - VLM/Gemini provider thật;
 - dữ liệu, ảnh, video, metadata và evidence thật;
-- benchmark latency, memory, concurrency và timeout trên máy thi;
-- retrieval quality evaluation và tuning;
+- latency/memory/concurrency benchmark trên máy thi;
+- retrieval-quality evaluation và tuning;
 - Stable Diffusion/QUEST enhancement nếu nhóm quyết định bật;
 - submission/competition integration test.
 
-Các mục trên phải được đánh dấu `NEED_RUNTIME_VERIFICATION` hoặc open question tương ứng, không được dùng fake test làm bằng chứng production-ready.
-
-## 14. Checklist báo cáo của mỗi người khi push
-
-Mỗi người gửi cho B đúng mẫu sau:
-
-```text
-Branch:
-Base commit:
-Final commit:
-Files changed:
-Public/internal interfaces added:
-Commands run:
-Test results:
-Known limitations:
-CONTRACT_MISMATCH (nếu có):
-ENVIRONMENT_BLOCKER (nếu có):
-NEED_RUNTIME_VERIFICATION:
-```
-
-Không chỉ nhắn “đã xong”. B chỉ review/merge khi có commit hash và test evidence.
+Các mục này phải giữ nhãn `NEED_RUNTIME_VERIFICATION` hoặc open question tương ứng, không dùng fake tests làm bằng chứng production-ready.
