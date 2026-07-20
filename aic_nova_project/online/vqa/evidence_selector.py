@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Sequence
+from typing import TypeVar
 
 from online.domain.candidates import FusedFrameCandidate
-from online.domain.errors import ContractMismatchError, DataInfrastructureError
+from online.domain.errors import (
+    BranchTimeoutError,
+    ContractMismatchError,
+    DataInfrastructureError,
+    ResourceUnavailableError,
+)
 from online.domain.vqa import (
     ASREvidence,
     EvidenceType,
@@ -20,6 +26,7 @@ from online.domain.vqa import (
 from online.ports.evidence import EvidenceHydrationPort
 from online.ports.images import ImageResolverPort
 from online.ports.metadata import MetadataReaderPort
+from online.ports.records import FrameMetadata
 
 from .budget import EvidenceBudgetPolicy
 from .selection import (
@@ -82,22 +89,29 @@ class EvidenceSelector:
     ) -> EvidenceSelectionResult:
         if not isinstance(question, VQAQuestion):
             raise ContractMismatchError("question must be a validated VQAQuestion")
-        candidates = tuple(ranked_candidates)
-        if any(not isinstance(item, FusedFrameCandidate) for item in candidates):
-            raise ContractMismatchError("ranked_candidates contains an invalid value")
+        candidates = _materialize_sequence(
+            ranked_candidates,
+            item_type=FusedFrameCandidate,
+            stage="ranked_candidates",
+        )
         policy = map_evidence_budget(budget)
         primary = select_primary_frames(candidates, policy)
         video_ids = tuple(dict.fromkeys(item.video_id for item in primary))
 
-        ordered_frames = {
-            video_id: tuple(self._metadata_reader.get_ordered_frames_by_video(video_id))
-            for video_id in video_ids
-        }
-        neighbors = select_neighbor_frames(primary, ordered_frames, policy)
+        ordered_frames = self._read_ordered_metadata(video_ids)
+        try:
+            neighbors = select_neighbor_frames(primary, ordered_frames, policy)
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ContractMismatchError(
+                "metadata port returned an invalid ordered frame stream"
+            ) from exc
         requested_frames = tuple(primary) + neighbors
         requested_ids = tuple(item.frame_id for item in requested_frames)
-        images_by_frame = self._image_resolver.resolve_images(requested_ids)
-        self._validate_image_mapping(images_by_frame, requested_ids)
+        expected_frames = {
+            item.frame_id: (item.video_id, item.shot_id, item.timestamp_sec)
+            for item in requested_frames
+        }
+        images_by_frame = self._resolve_images(requested_ids, expected_frames)
         images = tuple(
             images_by_frame[frame_id]
             for frame_id in requested_ids
@@ -109,34 +123,38 @@ class EvidenceSelector:
         attempted_text_count = 0
 
         try:
-            ocr = tuple(self._evidence_hydrator.get_ocr_evidence(tuple(item.frame_id for item in images)))
+            ocr = self._read_optional_sequence(
+                stage="ocr",
+                call=lambda: self._evidence_hydrator.get_ocr_evidence(
+                    tuple(item.frame_id for item in images)
+                ),
+                item_type=OCREvidence,
+            )
             self._validate_ocr(ocr, {item.frame_id for item in images})
             hydrated_text.extend(ocr)
             attempted_text_count += len(ocr)
-        except DataInfrastructureError as exc:
-            if isinstance(exc, ContractMismatchError):
-                raise
-            warnings.append(f"OCR_{exc.code.value}")
+        except (ResourceUnavailableError, BranchTimeoutError) as exc:
+            warnings.append(_optional_warning("OCR", exc))
 
         asr: tuple[ASREvidence, ...] = ()
         try:
             asr = self._hydrate_asr(primary, policy)
             hydrated_text.extend(asr)
             attempted_text_count += len(asr)
-        except DataInfrastructureError as exc:
-            if isinstance(exc, ContractMismatchError):
-                raise
-            warnings.append(f"ASR_{exc.code.value}")
+        except (ResourceUnavailableError, BranchTimeoutError) as exc:
+            warnings.append(_optional_warning("ASR", exc))
 
         try:
-            summaries = tuple(self._evidence_hydrator.get_summary_evidence(video_ids))
+            summaries = self._read_optional_sequence(
+                stage="summary",
+                call=lambda: self._evidence_hydrator.get_summary_evidence(video_ids),
+                item_type=SummaryEvidence,
+            )
             self._validate_summaries(summaries, set(video_ids))
             hydrated_text.extend(summaries)
             attempted_text_count += len(summaries)
-        except DataInfrastructureError as exc:
-            if isinstance(exc, ContractMismatchError):
-                raise
-            warnings.append(f"SUMMARY_{exc.code.value}")
+        except (ResourceUnavailableError, BranchTimeoutError) as exc:
+            warnings.append(_optional_warning("SUMMARY", exc))
 
         chunks, records_by_id = self._to_chunks(hydrated_text)
         budgeted = apply_text_budget(chunks, video_ids, policy)
@@ -144,9 +162,17 @@ class EvidenceSelector:
             self._replace_text(records_by_id[item.stable_id], item.text)
             for item in budgeted
         )
+        truncated_count = sum(
+            records_by_id[item.stable_id].text != item.text
+            for item in budgeted
+        )
         evidence, collision_count = self._deduplicate((*images, *selected_text))
         missing_count = len(requested_ids) - len(images)
-        dropped_count = max(0, attempted_text_count - len(selected_text)) + collision_count
+        dropped_count = (
+            max(0, attempted_text_count - len(selected_text))
+            + truncated_count
+            + collision_count
+        )
         if missing_count:
             warnings.append("MISSING_IMAGE_EVIDENCE")
         return EvidenceSelectionResult(
@@ -169,7 +195,16 @@ class EvidenceSelector:
         for frame in primary:
             start = max(0.0, frame.timestamp_sec - policy.asr_window_seconds)
             end = frame.timestamp_sec + policy.asr_window_seconds
-            for item in self._evidence_hydrator.get_asr_evidence(frame.video_id, start, end):
+            items = self._read_optional_sequence(
+                stage="asr",
+                call=lambda: self._evidence_hydrator.get_asr_evidence(
+                    frame.video_id,
+                    start,
+                    end,
+                ),
+                item_type=ASREvidence,
+            )
+            for item in items:
                 if item.video_id != frame.video_id:
                     raise ContractMismatchError("ASR hydrator returned evidence for an unrequested video")
                 if item.end_time_sec < start or item.start_time_sec > end:
@@ -179,14 +214,61 @@ class EvidenceSelector:
         filtered = filter_asr_chunks_for_windows(chunks, primary, policy)
         return tuple(by_id[item.stable_id] for item in filtered)  # type: ignore[return-value]
 
-    @staticmethod
-    def _validate_image_mapping(images: object, requested_ids: Sequence[str]) -> None:
-        if not hasattr(images, "items"):
+    def _read_ordered_metadata(
+        self,
+        video_ids: Sequence[str],
+    ) -> dict[str, tuple[FrameMetadata, ...]]:
+        output: dict[str, tuple[FrameMetadata, ...]] = {}
+        for video_id in video_ids:
+            raw = _call_port(
+                stage="metadata",
+                call=lambda video_id=video_id: self._metadata_reader.get_ordered_frames_by_video(
+                    video_id
+                ),
+            )
+            frames = _materialize_sequence(raw, item_type=FrameMetadata, stage="metadata")
+            if any(item.video_id != video_id for item in frames):
+                raise ContractMismatchError("metadata port returned a frame for the wrong video")
+            frame_ids = tuple(item.frame_id for item in frames)
+            if len(frame_ids) != len(set(frame_ids)):
+                raise ContractMismatchError("metadata port returned duplicate frame IDs")
+            order_keys = tuple((item.timestamp_sec, item.frame_id) for item in frames)
+            if order_keys != tuple(sorted(order_keys)):
+                raise ContractMismatchError("metadata port returned a non-deterministic frame order")
+            output[video_id] = frames
+        return output
+
+    def _resolve_images(
+        self,
+        requested_ids: Sequence[str],
+        expected_frames: Mapping[str, tuple[str, int, float]],
+    ) -> Mapping[str, ImageEvidence]:
+        images = _call_port(
+            stage="images",
+            call=lambda: self._image_resolver.resolve_images(requested_ids),
+        )
+        if not isinstance(images, Mapping):
             raise ContractMismatchError("image resolver returned a non-mapping value")
-        allowed = set(requested_ids)
-        for key, item in images.items():  # type: ignore[union-attr]
-            if key not in allowed or not isinstance(item, ImageEvidence) or item.frame_id != key:
-                raise ContractMismatchError("image resolver returned an invalid or unrequested image")
+        for key, item in images.items():
+            expected = expected_frames.get(key)
+            if not isinstance(key, str) or not isinstance(item, ImageEvidence) or expected is None:
+                raise ContractMismatchError("image resolver returned invalid or unrequested evidence")
+            if (
+                item.frame_id != key
+                or (item.video_id, item.shot_id, item.timestamp_sec) != expected
+            ):
+                raise ContractMismatchError("resolved image metadata does not match the requested frame")
+        return images
+
+    @staticmethod
+    def _read_optional_sequence(
+        *,
+        stage: str,
+        call: Callable[[], object],
+        item_type: type[EvidenceT],
+    ) -> tuple[EvidenceT, ...]:
+        raw = _call_port(stage=stage, call=call)
+        return _materialize_sequence(raw, item_type=item_type, stage=stage)
 
     @staticmethod
     def _validate_ocr(records: Sequence[OCREvidence], frame_ids: set[str]) -> None:
@@ -243,3 +325,47 @@ class EvidenceSelector:
 
 
 __all__ = ["EvidenceSelectionResult", "EvidenceSelector", "map_evidence_budget"]
+
+
+EvidenceT = TypeVar("EvidenceT")
+
+
+def _call_port(*, stage: str, call: Callable[[], object]) -> object:
+    try:
+        return call()
+    except DataInfrastructureError:
+        raise
+    except Exception as exc:
+        raise ResourceUnavailableError(
+            "VQA evidence port failed unexpectedly",
+            details={"stage": stage, "exception_type": type(exc).__name__, "unexpected": True},
+        ) from exc
+
+
+def _materialize_sequence(
+    value: object,
+    *,
+    item_type: type[EvidenceT],
+    stage: str,
+) -> tuple[EvidenceT, ...]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise ContractMismatchError(
+            "VQA port returned a non-sequence value",
+            details={"stage": stage},
+        )
+    output = tuple(value)
+    if any(not isinstance(item, item_type) for item in output):
+        raise ContractMismatchError(
+            "VQA port returned an invalid sequence item",
+            details={"stage": stage},
+        )
+    return output
+
+
+def _optional_warning(
+    evidence_type: str,
+    exc: ResourceUnavailableError | BranchTimeoutError,
+) -> str:
+    if exc.details.get("unexpected") is True:
+        raise exc
+    return f"{evidence_type}_{exc.code.value}"

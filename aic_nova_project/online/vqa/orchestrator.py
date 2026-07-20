@@ -4,17 +4,24 @@ from __future__ import annotations
 
 import asyncio
 import math
+from collections.abc import Sequence
 from concurrent.futures import Executor, ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
 from threading import Lock
 from time import perf_counter
-from typing import Protocol, Sequence, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from online.domain.candidates import FusedFrameCandidate
-from online.domain.errors import BranchTimeoutError, ContractMismatchError
+from online.domain.errors import (
+    BranchTimeoutError,
+    ContractMismatchError,
+    DataInfrastructureError,
+    ResourceUnavailableError,
+)
 from online.domain.vqa import (
     VLMConfidence,
+    VLMRequest,
     VLMResponse,
     VLMResponseStatus,
     VQADiagnostics,
@@ -51,23 +58,20 @@ class VQAOrchestrator:
         candidate_retriever: VQACandidateRetrievalPort,
         evidence_selector: EvidenceSelector,
         vlm: VLMPort,
-        timeout_sec: float = 30.0,
+        total_timeout_sec: float = 30.0,
+        vlm_timeout_sec: float = 15.0,
         max_workers: int = 2,
         executor: Executor | None = None,
     ) -> None:
-        if (
-            isinstance(timeout_sec, bool)
-            or not isinstance(timeout_sec, (int, float))
-            or not math.isfinite(timeout_sec)
-            or timeout_sec <= 0
-        ):
-            raise ValueError("timeout_sec must be a positive number")
+        _validate_timeout("total_timeout_sec", total_timeout_sec)
+        _validate_timeout("vlm_timeout_sec", vlm_timeout_sec)
         if isinstance(max_workers, bool) or not isinstance(max_workers, int) or max_workers < 1:
             raise ValueError("max_workers must be a positive integer")
         self._candidate_retriever = candidate_retriever
         self._evidence_selector = evidence_selector
         self._vlm = vlm
-        self._timeout_sec = float(timeout_sec)
+        self._total_timeout_sec = float(total_timeout_sec)
+        self._vlm_timeout_sec = float(vlm_timeout_sec)
         self._executor = executor or ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="aic-vqa")
         self._owns_executor = executor is None
         self._state_lock = Lock()
@@ -92,11 +96,13 @@ class VQAOrchestrator:
             if self._closed:
                 raise RuntimeError("VQAOrchestrator is closed")
             self._active += 1
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._total_timeout_sec
         started = perf_counter()
         try:
             return await asyncio.wait_for(
-                self._execute(question, budget, started),
-                timeout=self._timeout_sec,
+                self._execute(question, budget, started, deadline),
+                timeout=self._total_timeout_sec,
             )
         except TimeoutError as exc:
             raise BranchTimeoutError("VQA execution exceeded its total timeout") from exc
@@ -109,11 +115,10 @@ class VQAOrchestrator:
         question: VQAQuestion,
         budget: VQAEvidenceBudget,
         started: float,
+        deadline: float,
     ) -> VQAExecution:
         retrieval_started = perf_counter()
-        candidates = tuple(await self._candidate_retriever.retrieve_candidates(question))
-        if any(not isinstance(item, FusedFrameCandidate) for item in candidates):
-            raise ContractMismatchError("candidate retriever returned an invalid value")
+        candidates = await self._retrieve_candidates(question)
         retrieval_ms = _elapsed_ms(retrieval_started)
         if not candidates:
             result = self._insufficient_result(question, retrieved_count=0, warnings=("NO_RANKED_FRAMES",))
@@ -125,6 +130,8 @@ class VQAOrchestrator:
             self._executor,
             partial(self._evidence_selector.select, question, candidates, budget),
         )
+        if not isinstance(selection, EvidenceSelectionResult):
+            raise ContractMismatchError("evidence selector returned an invalid result")
         evidence_ms = _elapsed_ms(evidence_started)
         if selection.selected_image_count == 0:
             result = self._result_from_selection(
@@ -141,14 +148,19 @@ class VQAOrchestrator:
         vlm_started = perf_counter()
         retry_count = 0
         while True:
-            raw_response = await loop.run_in_executor(self._executor, self._vlm.answer, request)
             try:
-                response = validate_vlm_response(raw_response, request)
+                response = await self._run_vlm_attempt(request, deadline)
                 break
+            except BranchTimeoutError:
+                raise
             except ContractMismatchError:
                 if retry_count >= 1:
                     raise
-                retry_count += 1
+            except ResourceUnavailableError as exc:
+                if retry_count >= 1 or exc.details.get("retryable") is not True:
+                    raise
+            retry_count += 1
+            _remaining_time(deadline)
         vlm_ms = _elapsed_ms(vlm_started)
         result = self._result_from_selection(
             question,
@@ -158,6 +170,37 @@ class VQAOrchestrator:
             retry_count=retry_count,
         )
         return VQAExecution(result, retrieval_ms, evidence_ms, _elapsed_ms(started))
+
+    async def _retrieve_candidates(
+        self,
+        question: VQAQuestion,
+    ) -> tuple[FusedFrameCandidate, ...]:
+        try:
+            raw = await self._candidate_retriever.retrieve_candidates(question)
+        except DataInfrastructureError:
+            raise
+        except Exception as exc:
+            raise ResourceUnavailableError(
+                "VQA candidate retrieval failed unexpectedly",
+                details={"stage": "candidate_retrieval", "exception_type": type(exc).__name__},
+            ) from exc
+        if isinstance(raw, (str, bytes)) or not isinstance(raw, Sequence):
+            raise ContractMismatchError("candidate retriever returned a non-sequence value")
+        candidates = tuple(raw)
+        if any(not isinstance(item, FusedFrameCandidate) for item in candidates):
+            raise ContractMismatchError("candidate retriever returned an invalid candidate")
+        return candidates
+
+    async def _run_vlm_attempt(self, request: VLMRequest, deadline: float) -> VLMResponse:
+        remaining = _remaining_time(deadline)
+        attempt_timeout = min(self._vlm_timeout_sec, remaining)
+        loop = asyncio.get_running_loop()
+        future = loop.run_in_executor(self._executor, self._vlm.answer, request)
+        try:
+            raw_response = await asyncio.wait_for(future, timeout=attempt_timeout)
+        except TimeoutError as exc:
+            raise BranchTimeoutError("VLM request exceeded its per-attempt timeout") from exc
+        return validate_vlm_response(raw_response, request)
 
     @staticmethod
     def _insufficient_response(question: VQAQuestion) -> VLMResponse:
@@ -226,6 +269,23 @@ class VQAOrchestrator:
 
 def _elapsed_ms(started: float) -> float:
     return max(0.0, (perf_counter() - started) * 1000.0)
+
+
+def _validate_timeout(name: str, value: object) -> None:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise ValueError(f"{name} must be a positive finite number")
+
+
+def _remaining_time(deadline: float) -> float:
+    remaining = deadline - asyncio.get_running_loop().time()
+    if remaining <= 0:
+        raise BranchTimeoutError("VQA execution exceeded its total timeout")
+    return remaining
 
 
 __all__ = ["VQACandidateRetrievalPort", "VQAExecution", "VQAOrchestrator"]
