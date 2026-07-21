@@ -31,6 +31,12 @@ from .service import (
     RetrievalService,
     RetrievalServicePort,
 )
+from .vqa import (
+    KISSearchPort,
+    KISSearchResultPort,
+    VQACandidateRetriever,
+    VQARetrievalExecution,
+)
 
 __all__ = [
     "ASR_DENSE_SOURCE_RESOURCE",
@@ -41,6 +47,8 @@ __all__ = [
     "BranchInvocationDiagnostics",
     "build_retrieval_service",
     "KISQueryBuilder",
+    "KISSearchPort",
+    "KISSearchResultPort",
     "OCR_DENSE_SOURCE_RESOURCE",
     "OCR_LEXICAL_SOURCE_RESOURCE",
     "OCRLexicalBranch",
@@ -59,4 +67,6 @@ __all__ = [
     "VietnameseTextEncoder",
     "VISUAL_SOURCE_RESOURCE",
     "VisualSemanticBranch",
+    "VQACandidateRetriever",
+    "VQARetrievalExecution",
 ]
