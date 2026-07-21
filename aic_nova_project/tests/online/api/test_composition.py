@@ -10,14 +10,17 @@ from online.config import OnlineDataConfig
 from online.domain.enums import RetrievalBranch
 from online.ports.records import FrameMetadata, FrameSearchHit
 from online.testing import (
+    AdvancedRuntimeState,
     FakeElasticsearchSearchPort,
     FakeMetadataReaderPort,
     FakeMilvusSearchPort,
     FakeObjectReaderPort,
     FakeTextEncoder,
+    build_advanced_runtime_bundle,
 )
 from retrieval_api.composition import (
     RuntimeCompositionConfig,
+    attach_advanced_modes,
     build_invocation_configs,
     build_online_runtime,
     create_runtime_app_from_env,
@@ -216,6 +219,22 @@ class RuntimeCompositionTests(unittest.TestCase):
             with self.subTest(invalid_timeout=invalid_timeout):
                 with self.assertRaises(ValueError):
                     RuntimeCompositionConfig(default_timeout_sec=invalid_timeout)
+
+    def test_advanced_readiness_is_mode_specific_and_does_not_call_vlm(self) -> None:
+        runtime, _, _ = runtime_with_fakes()
+        bundle = build_advanced_runtime_bundle(
+            vlm_state=AdvancedRuntimeState.UNAVAILABLE,
+        )
+        attach_advanced_modes(runtime, bundle=bundle)
+
+        health = runtime.start()
+        runtime.close()
+
+        components = {component.name: component for component in health.components}
+        self.assertTrue(components["trake"].healthy)
+        self.assertFalse(components["vqa"].healthy)
+        self.assertFalse(any(call.operation == "answer" for call in bundle.calls))
+        self.assertTrue(bundle.closed)
 
 
 if __name__ == "__main__":

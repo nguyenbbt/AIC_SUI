@@ -18,6 +18,11 @@ from online.adapters.milvus import MilvusSearchAdapter
 from online.adapters.sqlite import SQLiteReadAdapter
 from online.config import OnlineDataConfig
 from online.domain.enums import RetrievalBranch
+from online.domain.errors import (
+    BranchTimeoutError,
+    ContractMismatchError,
+    ResourceUnavailableError,
+)
 from online.lifecycle import (
     ComponentHealth,
     HealthStatus,
@@ -45,6 +50,11 @@ from online.retrieval.encoders import PECoreTextEncoder, VietnameseTextEncoder
 from online.retrieval.factory import build_retrieval_service
 from online.retrieval.query_builder import BASELINE_KIS_BRANCHES
 from online.retrieval.service import RetrievalInvocationConfig, RetrievalService
+from online.retrieval.vqa import VQACandidateRetriever
+from online.testing.advanced_runtime import AdvancedRuntimeBundle, AdvancedRuntimeState
+from online.trake import TRAKEService
+from online.vqa import EvidenceSelector, VQAOrchestrator
+from query_understanding.rewrite import NoOpQueryRewriter, QueryRewriteService
 from retrieval_api.search_engine import HealthResponse, create_app
 
 
@@ -147,6 +157,7 @@ class OnlineRuntime:
     ranking_executor: ThreadPoolExecutor
     trake_mode: TRAKEModeAdapter | None = None
     vqa_mode: VQAModeAdapter | None = None
+    advanced_resources: tuple[Any, ...] = ()
     readiness_probes: tuple["RuntimeReadinessProbe", ...] = ()
     readiness_components: tuple[ComponentHealth, ...] = ()
     last_health: InfrastructureHealth | None = None
@@ -179,7 +190,11 @@ class OnlineRuntime:
                         try:
                             self.ranking_executor.shutdown(wait=True, cancel_futures=True)
                         finally:
-                            self.lifecycle.close()
+                            try:
+                                self.lifecycle.close()
+                            finally:
+                                for resource in reversed(self.advanced_resources):
+                                    resource.close(wait=True)
 
 
 @dataclass(frozen=True)
@@ -324,6 +339,116 @@ def build_online_runtime(
             ),
         ),
     )
+
+
+def attach_advanced_modes(
+    runtime: OnlineRuntime,
+    *,
+    bundle: AdvancedRuntimeBundle,
+    rewriter: QueryRewriteService | None = None,
+    trake_readiness: Callable[[], None] | None = None,
+    vqa_readiness: Callable[[], None] | None = None,
+) -> OnlineRuntime:
+    """Attach fake-ready TRAKE/VQA services to one existing KIS runtime.
+
+    The caller supplies a coherent A bundle whose metadata/evidence IDs match
+    the KIS fake indexes. This consumes only A/B public handoffs and never
+    creates a real provider, database, image resolver, or network client.
+    """
+
+    if not isinstance(runtime, OnlineRuntime):
+        raise TypeError("runtime must be an OnlineRuntime")
+    if not isinstance(bundle, AdvancedRuntimeBundle):
+        raise TypeError("bundle must be an AdvancedRuntimeBundle")
+    if runtime.trake_mode is not None or runtime.vqa_mode is not None:
+        raise ValueError("advanced modes are already configured")
+    active_rewriter = rewriter or QueryRewriteService(NoOpQueryRewriter())
+    if not isinstance(active_rewriter, QueryRewriteService):
+        raise TypeError("rewriter must be a QueryRewriteService")
+
+    trake_service = TRAKEService(
+        corpus=bundle.visual_corpus,
+        encoder=bundle.text_encoder,
+    )
+    candidate_retriever = VQACandidateRetriever(
+        rewriter=active_rewriter,
+        kis_search=runtime.orchestrator,
+    )
+    selector = EvidenceSelector(
+        metadata_reader=bundle.metadata_reader,
+        image_resolver=bundle.image_resolver,
+        evidence_hydrator=bundle.evidence_hydrator,
+    )
+    vqa_orchestrator = VQAOrchestrator(
+        candidate_retriever=candidate_retriever,
+        evidence_selector=selector,
+        vlm=bundle.vlm,
+    )
+    runtime.trake_mode = TRAKEModeAdapter(trake_service)
+    runtime.vqa_mode = VQAModeAdapter(vqa_orchestrator)
+    runtime.readiness_probes = (
+        *runtime.readiness_probes,
+        RuntimeReadinessProbe(
+            name="trake",
+            required=True,
+            check=trake_readiness
+            or _advanced_bundle_readiness(bundle, mode="trake"),
+        ),
+        RuntimeReadinessProbe(
+            name="vqa",
+            required=True,
+            check=vqa_readiness or _advanced_bundle_readiness(bundle, mode="vqa"),
+        ),
+    )
+    runtime.advanced_resources = (*runtime.advanced_resources, bundle)
+    return runtime
+
+
+def _advanced_bundle_readiness(
+    bundle: AdvancedRuntimeBundle,
+    *,
+    mode: str,
+) -> Callable[[], None]:
+    """Probe configured fake state without sending encoder/VLM requests."""
+
+    if mode == "trake":
+        components = (
+            ("event_encoder", bundle.config.encoder_state),
+            ("visual_corpus", bundle.config.visual_state),
+        )
+    elif mode == "vqa":
+        components = (
+            ("metadata_reader", bundle.config.metadata_state),
+            ("ocr_evidence", bundle.config.ocr_state),
+            ("asr_evidence", bundle.config.asr_state),
+            ("summary_evidence", bundle.config.summary_state),
+            ("image_resolver", bundle.config.image_state),
+            ("vlm", bundle.config.vlm_state),
+        )
+    else:
+        raise ValueError("mode must be trake or vqa")
+
+    def check() -> None:
+        if bundle.closed:
+            raise ResourceUnavailableError(f"{mode} fake runtime is closed")
+        for component, state in components:
+            if state is AdvancedRuntimeState.TIMEOUT:
+                raise BranchTimeoutError(
+                    f"{mode} readiness probe timed out",
+                    details={"component": component},
+                )
+            if state is AdvancedRuntimeState.UNAVAILABLE:
+                raise ResourceUnavailableError(
+                    f"{mode} resource is unavailable",
+                    details={"component": component},
+                )
+            if state is AdvancedRuntimeState.INVALID_REFERENCE:
+                raise ContractMismatchError(
+                    f"{mode} resource has an invalid reference",
+                    details={"component": component},
+                )
+
+    return check
 
 
 def create_runtime_app_from_env(
@@ -484,5 +609,6 @@ __all__ = [
     "VARIANT_IDS",
     "build_invocation_configs",
     "build_online_runtime",
+    "attach_advanced_modes",
     "create_runtime_app_from_env",
 ]
