@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 import os
 from collections.abc import Callable, Mapping
@@ -9,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Protocol
 
 from fastapi import FastAPI
 
@@ -18,11 +19,6 @@ from online.adapters.milvus import MilvusSearchAdapter
 from online.adapters.sqlite import SQLiteReadAdapter
 from online.config import OnlineDataConfig
 from online.domain.enums import RetrievalBranch
-from online.domain.errors import (
-    BranchTimeoutError,
-    ContractMismatchError,
-    ResourceUnavailableError,
-)
 from online.lifecycle import (
     ComponentHealth,
     HealthStatus,
@@ -34,10 +30,14 @@ from online.modes.trake import TRAKEModeAdapter
 from online.modes.vqa import VQAModeAdapter
 from online.ports import (
     ElasticsearchSearchPort,
+    EvidenceHydrationPort,
+    ImageResolverPort,
     MetadataReaderPort,
     MilvusSearchPort,
     ObjectReaderPort,
     TextEncoderPort,
+    VLMPort,
+    VisualCorpusPort,
 )
 from online.ranking.aggregation import QueryVariantAggregationConfig, RRFQueryVariantAggregator
 from online.ranking.asr_mapper import ASRIntervalFrameMapper, ASRMappingConfig
@@ -51,7 +51,6 @@ from online.retrieval.factory import build_retrieval_service
 from online.retrieval.query_builder import BASELINE_KIS_BRANCHES
 from online.retrieval.service import RetrievalInvocationConfig, RetrievalService
 from online.retrieval.vqa import VQACandidateRetriever
-from online.testing.advanced_runtime import AdvancedRuntimeBundle, AdvancedRuntimeState
 from online.trake import TRAKEService
 from online.vqa import EvidenceSelector, VQAOrchestrator
 from query_understanding.rewrite import NoOpQueryRewriter, QueryRewriteService
@@ -204,6 +203,23 @@ class RuntimeReadinessProbe:
     check: Callable[[], None]
 
 
+class AdvancedManagedResourcePort(Protocol):
+    def close(self, *, wait: bool = True) -> None: ...
+
+
+@dataclass(frozen=True)
+class AdvancedModeDependencies:
+    """Production-only public ports required by TRAKE and VQA composition."""
+
+    visual_corpus: VisualCorpusPort
+    event_encoder: TextEncoderPort
+    metadata_reader: MetadataReaderPort
+    image_resolver: ImageResolverPort
+    evidence_hydrator: EvidenceHydrationPort
+    vlm: VLMPort
+    managed_resources: tuple[AdvancedManagedResourcePort, ...] = ()
+
+
 def build_invocation_configs(
     config: RuntimeCompositionConfig,
 ) -> Mapping[tuple[RetrievalBranch, str], RetrievalInvocationConfig]:
@@ -344,22 +360,18 @@ def build_online_runtime(
 def attach_advanced_modes(
     runtime: OnlineRuntime,
     *,
-    bundle: AdvancedRuntimeBundle,
+    dependencies: AdvancedModeDependencies,
     rewriter: QueryRewriteService | None = None,
     trake_readiness: Callable[[], None] | None = None,
     vqa_readiness: Callable[[], None] | None = None,
 ) -> OnlineRuntime:
-    """Attach fake-ready TRAKE/VQA services to one existing KIS runtime.
-
-    The caller supplies a coherent A bundle whose metadata/evidence IDs match
-    the KIS fake indexes. This consumes only A/B public handoffs and never
-    creates a real provider, database, image resolver, or network client.
-    """
+    """Attach TRAKE/VQA services using only production public ports."""
 
     if not isinstance(runtime, OnlineRuntime):
         raise TypeError("runtime must be an OnlineRuntime")
-    if not isinstance(bundle, AdvancedRuntimeBundle):
-        raise TypeError("bundle must be an AdvancedRuntimeBundle")
+    if not isinstance(dependencies, AdvancedModeDependencies):
+        raise TypeError("dependencies must be AdvancedModeDependencies")
+    _validate_advanced_dependencies(dependencies)
     if runtime.trake_mode is not None or runtime.vqa_mode is not None:
         raise ValueError("advanced modes are already configured")
     active_rewriter = rewriter or QueryRewriteService(NoOpQueryRewriter())
@@ -367,22 +379,22 @@ def attach_advanced_modes(
         raise TypeError("rewriter must be a QueryRewriteService")
 
     trake_service = TRAKEService(
-        corpus=bundle.visual_corpus,
-        encoder=bundle.text_encoder,
+        corpus=dependencies.visual_corpus,
+        encoder=dependencies.event_encoder,
     )
     candidate_retriever = VQACandidateRetriever(
         rewriter=active_rewriter,
         kis_search=runtime.orchestrator,
     )
     selector = EvidenceSelector(
-        metadata_reader=bundle.metadata_reader,
-        image_resolver=bundle.image_resolver,
-        evidence_hydrator=bundle.evidence_hydrator,
+        metadata_reader=dependencies.metadata_reader,
+        image_resolver=dependencies.image_resolver,
+        evidence_hydrator=dependencies.evidence_hydrator,
     )
     vqa_orchestrator = VQAOrchestrator(
         candidate_retriever=candidate_retriever,
         evidence_selector=selector,
-        vlm=bundle.vlm,
+        vlm=dependencies.vlm,
     )
     runtime.trake_mode = TRAKEModeAdapter(trake_service)
     runtime.vqa_mode = VQAModeAdapter(vqa_orchestrator)
@@ -391,64 +403,38 @@ def attach_advanced_modes(
         RuntimeReadinessProbe(
             name="trake",
             required=True,
-            check=trake_readiness
-            or _advanced_bundle_readiness(bundle, mode="trake"),
+            check=trake_readiness or _configured_dependency_readiness,
         ),
         RuntimeReadinessProbe(
             name="vqa",
             required=True,
-            check=vqa_readiness or _advanced_bundle_readiness(bundle, mode="vqa"),
+            check=vqa_readiness or _configured_dependency_readiness,
         ),
     )
-    runtime.advanced_resources = (*runtime.advanced_resources, bundle)
+    runtime.advanced_resources = (*runtime.advanced_resources, *dependencies.managed_resources)
     return runtime
 
 
-def _advanced_bundle_readiness(
-    bundle: AdvancedRuntimeBundle,
-    *,
-    mode: str,
-) -> Callable[[], None]:
-    """Probe configured fake state without sending encoder/VLM requests."""
+def _configured_dependency_readiness() -> None:
+    """The dependency container itself is the default configuration proof."""
 
-    if mode == "trake":
-        components = (
-            ("event_encoder", bundle.config.encoder_state),
-            ("visual_corpus", bundle.config.visual_state),
-        )
-    elif mode == "vqa":
-        components = (
-            ("metadata_reader", bundle.config.metadata_state),
-            ("ocr_evidence", bundle.config.ocr_state),
-            ("asr_evidence", bundle.config.asr_state),
-            ("summary_evidence", bundle.config.summary_state),
-            ("image_resolver", bundle.config.image_state),
-            ("vlm", bundle.config.vlm_state),
-        )
-    else:
-        raise ValueError("mode must be trake or vqa")
 
-    def check() -> None:
-        if bundle.closed:
-            raise ResourceUnavailableError(f"{mode} fake runtime is closed")
-        for component, state in components:
-            if state is AdvancedRuntimeState.TIMEOUT:
-                raise BranchTimeoutError(
-                    f"{mode} readiness probe timed out",
-                    details={"component": component},
-                )
-            if state is AdvancedRuntimeState.UNAVAILABLE:
-                raise ResourceUnavailableError(
-                    f"{mode} resource is unavailable",
-                    details={"component": component},
-                )
-            if state is AdvancedRuntimeState.INVALID_REFERENCE:
-                raise ContractMismatchError(
-                    f"{mode} resource has an invalid reference",
-                    details={"component": component},
-                )
-
-    return check
+def _validate_advanced_dependencies(dependencies: AdvancedModeDependencies) -> None:
+    ports = (
+        ("visual_corpus", dependencies.visual_corpus, VisualCorpusPort),
+        ("event_encoder", dependencies.event_encoder, TextEncoderPort),
+        ("metadata_reader", dependencies.metadata_reader, MetadataReaderPort),
+        ("image_resolver", dependencies.image_resolver, ImageResolverPort),
+        ("evidence_hydrator", dependencies.evidence_hydrator, EvidenceHydrationPort),
+        ("vlm", dependencies.vlm, VLMPort),
+    )
+    for name, value, protocol in ports:
+        if not isinstance(value, protocol):
+            raise TypeError(f"dependencies.{name} must implement {protocol.__name__}")
+    if not isinstance(dependencies.managed_resources, tuple):
+        raise TypeError("dependencies.managed_resources must be a tuple")
+    if any(not callable(getattr(resource, "close", None)) for resource in dependencies.managed_resources):
+        raise TypeError("advanced managed resources must provide close()")
 
 
 def create_runtime_app_from_env(
@@ -469,7 +455,7 @@ def create_runtime_app_from_env(
         try:
             yield
         finally:
-            runtime.close()
+            await asyncio.to_thread(runtime.close)
 
     return create_app(lifespan=lifespan)
 
@@ -478,16 +464,30 @@ def _health_response_for_runtime(runtime: OnlineRuntime) -> Callable[[], HealthR
     def provider() -> HealthResponse:
         health = runtime.health()
         status_value = "ready" if health.status is HealthStatus.HEALTHY else health.status.value
+        components = {component.name: component for component in health.components}
+        kis_components = tuple(
+            component for component in health.components if component.name not in {"trake", "vqa"}
+        )
+
+        def readiness(mode: str, *, enabled: bool) -> str:
+            if not enabled:
+                return "disabled"
+            component = components.get(mode)
+            if component is not None:
+                return "ready" if component.healthy else "unavailable"
+            return "ready" if all(item.healthy for item in kis_components if item.required) else "unavailable"
+
+        trake_enabled = runtime.trake_mode is not None
+        vqa_enabled = runtime.vqa_mode is not None
         return HealthResponse(
             status=status_value,
             checks={
-                **{
-                    component.name: "healthy" if component.healthy else "unhealthy"
-                    for component in health.components
-                },
-                "kis": "enabled",
-                "trake": "enabled" if runtime.trake_mode is not None else "disabled",
-                "vqa": "enabled" if runtime.vqa_mode is not None else "disabled",
+                "kis.enabled": "true",
+                "kis.readiness": readiness("kis", enabled=True),
+                "trake.enabled": str(trake_enabled).lower(),
+                "trake.readiness": readiness("trake", enabled=trake_enabled),
+                "vqa.enabled": str(vqa_enabled).lower(),
+                "vqa.readiness": readiness("vqa", enabled=vqa_enabled),
             },
         )
 
@@ -604,6 +604,8 @@ def _merge_health(
 
 __all__ = [
     "OnlineRuntime",
+    "AdvancedModeDependencies",
+    "AdvancedManagedResourcePort",
     "RuntimeReadinessProbe",
     "RuntimeCompositionConfig",
     "VARIANT_IDS",

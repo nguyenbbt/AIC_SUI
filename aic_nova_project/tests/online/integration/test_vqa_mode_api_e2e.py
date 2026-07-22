@@ -13,12 +13,12 @@ from online.testing import (
     FakeEvidenceHydrator,
     FakeImageResolver,
     FakeTextEncoder,
+    attach_advanced_fake_modes,
     build_advanced_runtime_bundle,
     build_integration_fixture,
 )
 from retrieval_api.composition import (
     RuntimeCompositionConfig,
-    attach_advanced_modes,
     build_online_runtime,
 )
 from retrieval_api.search_engine import create_app
@@ -65,7 +65,7 @@ def test_vqa_internal_route_uses_real_rewrite_and_seven_branch_kis_handoff() -> 
         visual_encoder=FakeTextEncoder(dimension=4),
         vietnamese_encoder=FakeTextEncoder(dimension=6),
     )
-    attach_advanced_modes(runtime, bundle=bundle)
+    attach_advanced_fake_modes(runtime, bundle)
 
     try:
         question = bundle.fixture.vqa_question

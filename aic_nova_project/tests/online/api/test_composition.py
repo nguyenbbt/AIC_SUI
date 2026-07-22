@@ -16,11 +16,11 @@ from online.testing import (
     FakeMilvusSearchPort,
     FakeObjectReaderPort,
     FakeTextEncoder,
+    attach_advanced_fake_modes,
     build_advanced_runtime_bundle,
 )
 from retrieval_api.composition import (
     RuntimeCompositionConfig,
-    attach_advanced_modes,
     build_invocation_configs,
     build_online_runtime,
     create_runtime_app_from_env,
@@ -177,6 +177,17 @@ class RuntimeCompositionTests(unittest.TestCase):
             ready = client.get("/health/ready")
             self.assertEqual(ready.status_code, 200)
             self.assertEqual(ready.json()["status"], "ready")
+            self.assertEqual(
+                ready.json()["checks"],
+                {
+                    "kis.enabled": "true",
+                    "kis.readiness": "ready",
+                    "trake.enabled": "false",
+                    "trake.readiness": "disabled",
+                    "vqa.enabled": "false",
+                    "vqa.readiness": "disabled",
+                },
+            )
 
             response = client.post(
                 "/search",
@@ -225,14 +236,16 @@ class RuntimeCompositionTests(unittest.TestCase):
         bundle = build_advanced_runtime_bundle(
             vlm_state=AdvancedRuntimeState.UNAVAILABLE,
         )
-        attach_advanced_modes(runtime, bundle=bundle)
+        attach_advanced_fake_modes(runtime, bundle)
 
-        health = runtime.start()
-        runtime.close()
-
-        components = {component.name: component for component in health.components}
-        self.assertTrue(components["trake"].healthy)
-        self.assertFalse(components["vqa"].healthy)
+        with TestClient(create_runtime_app_from_env(runtime_factory=lambda: runtime)) as client:
+            ready = client.get("/health/ready")
+            self.assertEqual(ready.status_code, 503)
+            checks = ready.json()["checks"]
+            self.assertEqual(checks["trake.enabled"], "true")
+            self.assertEqual(checks["trake.readiness"], "ready")
+            self.assertEqual(checks["vqa.enabled"], "true")
+            self.assertEqual(checks["vqa.readiness"], "unavailable")
         self.assertFalse(any(call.operation == "answer" for call in bundle.calls))
         self.assertTrue(bundle.closed)
 

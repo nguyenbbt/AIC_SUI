@@ -255,7 +255,7 @@ class VQAOrchestrator:
             ),
         )
 
-    def close(self, *, wait: bool = False) -> None:
+    def close(self, *, wait: bool = True) -> None:
         with self._state:
             if self._closed:
                 return

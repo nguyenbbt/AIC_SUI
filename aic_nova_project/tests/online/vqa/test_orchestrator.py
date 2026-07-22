@@ -177,7 +177,7 @@ def test_close_rejects_active_execution_then_drains_cleanly() -> None:
         task = asyncio.create_task(service.answer(QUESTION))
         await retriever.started.wait()
         with pytest.raises(RuntimeError, match="active execution"):
-            service.close()
+            service.close(wait=False)
         retriever.release.set()
         await task
         service.close()
