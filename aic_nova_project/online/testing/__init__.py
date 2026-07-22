@@ -37,7 +37,6 @@ from .advanced_runtime import (
     build_happy_path_advanced_runtime_bundle,
     create_advanced_runtime_bundle,
 )
-from .advanced_composition import attach_advanced_fake_modes
 from .fakes import (
     ElasticsearchCall,
     FakeBranchBehavior,
@@ -97,7 +96,6 @@ __all__ = [
     "VLMCall",
     "VisualCorpusCall",
     "build_advanced_modes_fixture",
-    "attach_advanced_fake_modes",
     "build_advanced_runtime_bundle",
     "build_happy_path_advanced_runtime_bundle",
     "build_integration_fixture",
