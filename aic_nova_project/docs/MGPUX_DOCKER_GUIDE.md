@@ -1,5 +1,8 @@
 # Chạy AI Challenge Offline với Docker và M-GPUX
 
+Để chạy toàn bộ Module 1–7 bằng một lệnh, xem
+[`OFFLINE_MODAL_DOCKER_PIPELINE.md`](OFFLINE_MODAL_DOCKER_PIPELINE.md).
+
 Tài liệu này áp dụng cho cấu hình đã kiểm tra ngày 2026-08-04:
 
 - M-GPUX CLI `2.9.4` trong `venv`.
