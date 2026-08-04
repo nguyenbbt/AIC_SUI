@@ -79,8 +79,9 @@ function Ensure-ModalVolume {
     if ($LASTEXITCODE -ne 0) {
         throw "Unable to list Modal volumes."
     }
-    $volumes = @($volumeJson | ConvertFrom-Json)
-    if ($VolumeName -notin $volumes.name) {
+    $volumes = $volumeJson | ConvertFrom-Json
+    $volumeNames = @($volumes | ForEach-Object { $_.name })
+    if ($VolumeName -notin $volumeNames) {
         Invoke-CheckedCommand "modal" @("volume", "create", $VolumeName)
     } else {
         Write-Host "Modal volume already exists: $VolumeName"

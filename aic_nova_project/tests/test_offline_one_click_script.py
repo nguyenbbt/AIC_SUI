@@ -79,3 +79,11 @@ def test_force_and_reset_flags_are_explicitly_forwarded():
     )
     assert module2_command.endswith("--force")
     assert indexing_command.endswith("--force --reset-all")
+
+
+def test_modal_volume_json_array_is_flattened_before_name_lookup():
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "$volumes = @($volumeJson | ConvertFrom-Json)" not in script
+    assert "$volumeNames = @($volumes | ForEach-Object { $_.name })" in script
+    assert "$VolumeName -notin $volumeNames" in script
