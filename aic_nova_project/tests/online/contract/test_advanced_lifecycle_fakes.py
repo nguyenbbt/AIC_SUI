@@ -41,7 +41,7 @@ class AdvancedLifecycleFakeTests(unittest.IsolatedAsyncioTestCase):
             task = asyncio.create_task(
                 asyncio.to_thread(
                     bundle.visual_corpus.iter_ordered_frame_embedding_batches,
-                    "V001",
+                    "L21_V001",
                     2,
                 )
             )
@@ -52,7 +52,7 @@ class AdvancedLifecycleFakeTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(bundle.trake_lifecycle.close_attempted_while_active)
             bundle.trake_release_event.set()
             batches = await asyncio.wait_for(task, timeout=1.0)
-            self.assertEqual(batches[0][0].video_id, "V001")
+            self.assertEqual(batches[0][0].video_id, "L21_V001")
             bundle.close()
             bundle.close()
             self.assertEqual(bundle.close_count, 1)
@@ -72,7 +72,7 @@ class AdvancedLifecycleFakeTests(unittest.IsolatedAsyncioTestCase):
             task = asyncio.create_task(
                 asyncio.to_thread(
                     child.visual_corpus.iter_ordered_frame_embedding_batches,
-                    "V001",
+                    "L21_V001",
                     2,
                 )
             )

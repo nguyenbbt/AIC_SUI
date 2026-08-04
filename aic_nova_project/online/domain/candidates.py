@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Annotated, Generic, Literal, TypeVar
 
-from pydantic import AfterValidator, Field, PlainSerializer, model_validator
+from pydantic import AfterValidator, Field, PlainSerializer, field_validator, model_validator
 
 from .base import (
     FiniteFloat,
@@ -17,6 +17,8 @@ from .base import (
     serialize_mapping,
 )
 from .enums import BranchStatus, CandidateLevel, RetrievalBranch
+from .errors import ContractMismatchError
+from .identifiers import validate_canonical_frame_id
 
 
 NormalizedScore = Annotated[FiniteFloat, Field(ge=0.0, le=1.0)]
@@ -47,12 +49,24 @@ class CandidateProvenance(StrictFrozenModel):
 class FrameCandidate(StrictFrozenModel):
     frame_id: NonEmptyStr
     video_id: NonEmptyStr
-    shot_id: StrictIntValue = Field(ge=0)
+    keyframe_no: StrictIntValue = Field(ge=1)
+    local_index: StrictIntValue = Field(ge=0)
     timestamp_sec: Annotated[FiniteFloat, Field(ge=0.0)]
+    source_frame_idx: StrictIntValue = Field(ge=0)
     rank: StrictIntValue = Field(ge=1)
     raw_score: FiniteFloat
     normalized_score: NormalizedScore | None = None
     provenance: CandidateProvenance
+
+    @model_validator(mode="after")
+    def validate_frame_identity(self) -> "FrameCandidate":
+        _validate_organizer_frame_identity(
+            self.frame_id,
+            self.video_id,
+            self.keyframe_no,
+            self.local_index,
+        )
+        return self
 
 
 class ASRIntervalCandidate(StrictFrozenModel):
@@ -125,13 +139,23 @@ class BranchResult(StrictFrozenModel, Generic[CandidateT]):
 
 
 class ObjectDetection(StrictFrozenModel):
-    label: NonEmptyStr
+    label_display: NonEmptyStr
+    label_normalized: NonEmptyStr
+    class_mid: NonEmptyStr | None = None
+    class_label_id: NonEmptyStr | None = None
     confidence: Annotated[FiniteFloat, Field(ge=0.0, le=1.0)]
-    x_min: Annotated[FiniteFloat, Field(ge=0.0)]
-    y_min: Annotated[FiniteFloat, Field(ge=0.0)]
-    x_max: Annotated[FiniteFloat, Field(ge=0.0)]
-    y_max: Annotated[FiniteFloat, Field(ge=0.0)]
-    model_source: NonEmptyStr | None = None
+    x_min: Annotated[FiniteFloat, Field(ge=0.0, le=1.0)]
+    y_min: Annotated[FiniteFloat, Field(ge=0.0, le=1.0)]
+    x_max: Annotated[FiniteFloat, Field(ge=0.0, le=1.0)]
+    y_max: Annotated[FiniteFloat, Field(ge=0.0, le=1.0)]
+    model_source: NonEmptyStr
+
+    @field_validator("label_normalized")
+    @classmethod
+    def validate_normalized_label(cls, value: str) -> str:
+        if value != value.casefold():
+            raise ValueError("label_normalized must already be casefold-normalized")
+        return value
 
     _ordered = model_validator(mode="after")(ensure_bbox_order)
 
@@ -174,8 +198,10 @@ class CandidateDiagnostics(StrictFrozenModel):
 class FusedFrameCandidate(StrictFrozenModel):
     frame_id: NonEmptyStr
     video_id: NonEmptyStr
-    shot_id: StrictIntValue = Field(ge=0)
+    keyframe_no: StrictIntValue = Field(ge=1)
+    local_index: StrictIntValue = Field(ge=0)
     timestamp_sec: Annotated[FiniteFloat, Field(ge=0.0)]
+    source_frame_idx: StrictIntValue = Field(ge=0)
     final_score: FiniteFloat
     branch_scores: Annotated[
         Mapping[RetrievalBranch, NormalizedScore],
@@ -189,9 +215,33 @@ class FusedFrameCandidate(StrictFrozenModel):
 
     @model_validator(mode="after")
     def validate_near_frames(self) -> "FusedFrameCandidate":
+        _validate_organizer_frame_identity(
+            self.frame_id,
+            self.video_id,
+            self.keyframe_no,
+            self.local_index,
+        )
         near_ids = [frame.frame_id for frame in self.near_frames]
         if self.frame_id in near_ids:
             raise ValueError("near_frames must not contain the representative frame")
         if len(near_ids) != len(set(near_ids)):
             raise ValueError("near_frames must not contain duplicates")
         return self
+
+
+def _validate_organizer_frame_identity(
+    frame_id: str,
+    video_id: str,
+    keyframe_no: int,
+    local_index: int,
+) -> None:
+    try:
+        validate_canonical_frame_id(
+            frame_id,
+            video_id=video_id,
+            keyframe_no=keyframe_no,
+        )
+    except ContractMismatchError as exc:
+        raise ValueError(exc.message) from exc
+    if local_index != keyframe_no - 1:
+        raise ValueError("local_index must equal keyframe_no - 1")

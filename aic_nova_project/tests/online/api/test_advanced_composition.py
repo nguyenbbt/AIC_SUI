@@ -8,7 +8,8 @@ from fastapi.testclient import TestClient
 from online.domain.diagnostics import QueryDiagnostics
 from online.lifecycle import InfrastructureLifecycle
 from online.modes.kis import KISSearchResult
-from online.testing import attach_advanced_fake_modes, build_advanced_runtime_bundle
+from online.testing import build_advanced_runtime_bundle
+from online.testing.advanced_composition import attach_advanced_fake_modes
 from retrieval_api.composition import OnlineRuntime, create_runtime_app_from_env
 
 

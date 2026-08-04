@@ -79,24 +79,24 @@ class AdvancedFixtureContractTests(unittest.TestCase):
         self.assertEqual(
             selected,
             (
-                "image:V001_00004_010",
-                "image:V002_00002_010",
-                "image:V001_00003_010",
-                "ocr:V001_00004_010",
-                "ocr:V002_00002_010",
-                "asr:V001:interval-1",
-                "asr:V002:interval-1",
-                "summary:V001",
-                "summary:V002",
+                "image:L21_V001_005",
+                "image:L21_V002_003",
+                "image:L21_V001_004",
+                "ocr:L21_V001_005",
+                "ocr:L21_V002_003",
+                "asr:L21_V001:interval-1",
+                "asr:L21_V002:interval-1",
+                "summary:L21_V001",
+                "summary:L21_V002",
             ),
         )
         self.assertEqual(
             answer,
             (
-                "image:V001_00004_010",
-                "ocr:V001_00004_010",
-                "asr:V001:interval-1",
-                "summary:V001",
+                "image:L21_V001_005",
+                "ocr:L21_V001_005",
+                "asr:L21_V001:interval-1",
+                "summary:L21_V001",
             ),
         )
         self.assertEqual(selected, rebuilt.expected_vqa_selected_evidence_ids)
@@ -134,7 +134,7 @@ class AdvancedFixtureContractTests(unittest.TestCase):
                 validate_canonical_frame_id(
                     frame.frame_id,
                     video_id=video_id,
-                    shot_id=frame.shot_id,
+                    keyframe_no=frame.keyframe_no,
                 )
                 dimensions.add(len(frame.vector))
                 self.assertTrue(
@@ -147,7 +147,10 @@ class AdvancedFixtureContractTests(unittest.TestCase):
 
     def test_visual_batches_reconstruct_complete_local_order(self) -> None:
         corpus = self.fixture.visual_corpus()
-        self.assertEqual(corpus.list_video_ids(), ("V001", "V002", "V003", "V004"))
+        self.assertEqual(
+            corpus.list_video_ids(),
+            ("L21_V001", "L21_V002", "L21_V003", "L21_V004"),
+        )
         for video_id in corpus.list_video_ids():
             frames = validate_ordered_visual_stream(
                 video_id,
@@ -158,17 +161,17 @@ class AdvancedFixtureContractTests(unittest.TestCase):
                 tuple(range(len(frames))),
             )
         with self.assertRaises(InvalidQueryError):
-            corpus.iter_ordered_frame_embedding_batches("V001", True)
+            corpus.iter_ordered_frame_embedding_batches("L21_V001", True)
         with self.assertRaises(InvalidQueryError):
             corpus.iter_ordered_frame_embedding_batches("unknown", 2)
 
     def test_trake_edge_cases_are_distinct_and_expected_score_is_hand_computable(self) -> None:
         frames = self.fixture.visual_frames_by_video
-        self.assertGreaterEqual(len(frames["V001"]), 6)
-        self.assertGreaterEqual(len(frames["V002"]), 6)
-        self.assertGreaterEqual(len(frames["V003"]), 6)
-        self.assertLess(len(frames["V004"]), len(self.fixture.trake_query.events))
-        self.assertEqual(self.fixture.expected_dante_video_id, "V001")
+        self.assertGreaterEqual(len(frames["L21_V001"]), 6)
+        self.assertGreaterEqual(len(frames["L21_V002"]), 6)
+        self.assertGreaterEqual(len(frames["L21_V003"]), 6)
+        self.assertLess(len(frames["L21_V004"]), len(self.fixture.trake_query.events))
+        self.assertEqual(self.fixture.expected_dante_video_id, "L21_V001")
         self.assertEqual(self.fixture.expected_dante_positions, (0, 2, 4))
         expected = 1.0 + 1.0 + 1.0 - 0.001 * ((2 - 0) + (4 - 2))
         self.assertAlmostEqual(self.fixture.expected_dante_score, expected)
@@ -176,11 +179,11 @@ class AdvancedFixtureContractTests(unittest.TestCase):
             self.fixture.tied_sequence_positions,
             ((1, 2, 4), (1, 3, 4)),
         )
-        # V002 contains the same perfect event vectors, but in reverse order.
-        self.assertEqual(frames["V002"][0].vector, self.fixture.event_vectors[
+        # L21_V002 contains the same perfect event vectors, but in reverse order.
+        self.assertEqual(frames["L21_V002"][0].vector, self.fixture.event_vectors[
             self.fixture.trake_query.events[2].text
         ])
-        self.assertEqual(frames["V002"][4].vector, self.fixture.event_vectors[
+        self.assertEqual(frames["L21_V002"][4].vector, self.fixture.event_vectors[
             self.fixture.trake_query.events[0].text
         ])
 
@@ -192,11 +195,11 @@ class AdvancedFixtureContractTests(unittest.TestCase):
         ):
             corpus = self.fixture.visual_corpus(
                 video_behaviors={
-                    "V001": AdvancedFakeBehavior(error_type("simulated"))
+                    "L21_V001": AdvancedFakeBehavior(error_type("simulated"))
                 }
             )
             with self.assertRaises(error_type):
-                corpus.iter_ordered_frame_embedding_batches("V001", 2)
+                corpus.iter_ordered_frame_embedding_batches("L21_V001", 2)
         unavailable = self.fixture.visual_corpus(
             list_behavior=AdvancedFakeBehavior(
                 ResourceUnavailableError("simulated list failure")
@@ -208,21 +211,21 @@ class AdvancedFixtureContractTests(unittest.TestCase):
     def test_evidence_hydration_never_returns_records_outside_request(self) -> None:
         hydrator = self.fixture.evidence_hydrator()
         requested_frame = self.fixture.ocr_evidence[0].frame_id
-        ocr = hydrator.get_ocr_evidence((requested_frame, "V001_00005_010"))
+        ocr = hydrator.get_ocr_evidence((requested_frame, "L21_V001_006"))
         self.assertEqual(tuple(item.frame_id for item in ocr), (requested_frame,))
 
-        asr = hydrator.get_asr_evidence("V001", 7.0, 8.0)
-        self.assertEqual(tuple(item.video_id for item in asr), ("V001",))
+        asr = hydrator.get_asr_evidence("L21_V001", 7.0, 8.0)
+        self.assertEqual(tuple(item.video_id for item in asr), ("L21_V001",))
         self.assertTrue(
             all(item.end_time_sec >= 7.0 and item.start_time_sec <= 8.0 for item in asr)
         )
 
-        summaries = hydrator.get_summary_evidence(("V002",))
-        self.assertEqual(tuple(item.video_id for item in summaries), ("V002",))
+        summaries = hydrator.get_summary_evidence(("L21_V002",))
+        self.assertEqual(tuple(item.video_id for item in summaries), ("L21_V002",))
 
     def test_empty_success_is_distinct_from_backend_failure(self) -> None:
         hydrator = self.fixture.evidence_hydrator()
-        self.assertEqual(hydrator.get_ocr_evidence(("V004_00000_010",)), ())
+        self.assertEqual(hydrator.get_ocr_evidence(("L21_V004_001",)), ())
 
         failed = self.fixture.evidence_hydrator(
             behaviors={
@@ -232,7 +235,7 @@ class AdvancedFixtureContractTests(unittest.TestCase):
             }
         )
         with self.assertRaises(ResourceUnavailableError):
-            failed.get_ocr_evidence(("V004_00000_010",))
+            failed.get_ocr_evidence(("L21_V004_001",))
 
     def test_missing_image_is_distinct_from_resolver_unavailable(self) -> None:
         resolver = self.fixture.image_resolver()
@@ -307,9 +310,9 @@ class AdvancedFixtureContractTests(unittest.TestCase):
             tuple(event.text for event in self.fixture.trake_query.events)
         )
         corpus = self.fixture.visual_corpus()
-        corpus.iter_ordered_frame_embedding_batches("V001", 2)
+        corpus.iter_ordered_frame_embedding_batches("L21_V001", 2)
         hydrator = self.fixture.evidence_hydrator()
-        hydrator.get_summary_evidence(("V001",))
+        hydrator.get_summary_evidence(("L21_V001",))
         resolver = self.fixture.image_resolver()
         resolver.resolve_images((next(iter(self.fixture.images_by_frame_id)),))
         vlm = self.fixture.vlm()

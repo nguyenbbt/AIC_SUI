@@ -9,21 +9,21 @@ from .errors import ContractMismatchError
 
 
 _FRAME_ID_PATTERN = re.compile(
-    r"^(?P<video_id>.+)_(?P<shot_id>[0-9]{5})_(?P<position>[0-9]{3})$"
+    r"^(?P<video_id>L[0-9]+_V[0-9]+)_(?P<keyframe_no>[0-9]{3})$"
 )
 
 
 class CanonicalFrameId(NamedTuple):
     video_id: str
-    shot_id: int
-    position: int
+    keyframe_no: int
 
 
 def parse_canonical_frame_id(frame_id: str) -> CanonicalFrameId:
-    """Parse ``{video_id}_{shot_id:05d}_{position:03d}`` from the right.
+    """Parse an organizer-v1 ``{video_id}_{keyframe_no:03d}`` identifier.
 
-    ``video_id`` may itself contain underscores. Local image stems such as
-    ``shot_00000_pos_015`` are deliberately rejected and never rewritten.
+    Organizer video IDs contain an underscore (for example ``L21_V001``), so
+    the three-digit keyframe suffix is parsed from the right. Legacy shot IDs
+    and local image stems are deliberately rejected and never rewritten.
     """
 
     if not isinstance(frame_id, str) or not frame_id.strip():
@@ -38,12 +38,17 @@ def parse_canonical_frame_id(frame_id: str) -> CanonicalFrameId:
     ):
         raise ContractMismatchError(
             "frame_id is not canonical",
-            details={"expected_format": "{video_id}_{shot_id:05d}_{position:03d}"},
+            details={"expected_format": "L<batch>_V<video-number>_<keyframe_no:03d>"},
+        )
+    keyframe_no = int(match.group("keyframe_no"))
+    if keyframe_no < 1:
+        raise ContractMismatchError(
+            "frame_id keyframe suffix must be at least 001",
+            details={"field": "keyframe_no"},
         )
     return CanonicalFrameId(
         video_id=match.group("video_id"),
-        shot_id=int(match.group("shot_id")),
-        position=int(match.group("position")),
+        keyframe_no=keyframe_no,
     )
 
 
@@ -51,7 +56,7 @@ def validate_canonical_frame_id(
     frame_id: str,
     *,
     video_id: str | None = None,
-    shot_id: int | None = None,
+    keyframe_no: int | None = None,
 ) -> CanonicalFrameId:
     """Validate canonical syntax and any semantic fields supplied by a backend."""
 
@@ -61,9 +66,9 @@ def validate_canonical_frame_id(
             "frame_id video suffix does not match video_id",
             details={"field": "video_id"},
         )
-    if shot_id is not None and parsed.shot_id != shot_id:
+    if keyframe_no is not None and parsed.keyframe_no != keyframe_no:
         raise ContractMismatchError(
-            "frame_id shot suffix does not match shot_id",
-            details={"field": "shot_id"},
+            "frame_id keyframe suffix does not match keyframe_no",
+            details={"field": "keyframe_no"},
         )
     return parsed

@@ -13,10 +13,10 @@ from online.testing import (
     FakeEvidenceHydrator,
     FakeImageResolver,
     FakeTextEncoder,
-    attach_advanced_fake_modes,
     build_advanced_runtime_bundle,
     build_integration_fixture,
 )
+from online.testing.advanced_composition import attach_advanced_fake_modes
 from retrieval_api.composition import (
     RuntimeCompositionConfig,
     build_online_runtime,

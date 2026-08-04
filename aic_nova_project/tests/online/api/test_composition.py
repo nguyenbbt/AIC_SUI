@@ -16,9 +16,9 @@ from online.testing import (
     FakeMilvusSearchPort,
     FakeObjectReaderPort,
     FakeTextEncoder,
-    attach_advanced_fake_modes,
     build_advanced_runtime_bundle,
 )
+from online.testing.advanced_composition import attach_advanced_fake_modes
 from retrieval_api.composition import (
     RuntimeCompositionConfig,
     build_invocation_configs,

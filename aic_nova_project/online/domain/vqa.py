@@ -122,13 +122,18 @@ class EvidenceReference(StrictFrozenModel):
 class ImageEvidence(EvidenceReference):
     evidence_type: Literal[EvidenceType.IMAGE] = EvidenceType.IMAGE
     frame_id: NonEmptyStr
-    shot_id: StrictIntValue = Field(ge=0)
+    keyframe_no: StrictIntValue = Field(ge=1)
     timestamp_sec: Annotated[FiniteFloat, Field(ge=0.0)]
+    source_frame_idx: StrictIntValue = Field(ge=0)
     image_reference: ImageReference
 
     @model_validator(mode="after")
     def validate_frame_identity(self) -> "ImageEvidence":
-        _validate_frame_identity(self.frame_id, self.video_id, self.shot_id)
+        _validate_frame_identity(
+            self.frame_id,
+            self.video_id,
+            keyframe_no=self.keyframe_no,
+        )
         return self
 
 
@@ -239,8 +244,16 @@ class VQAResult(StrictFrozenModel):
         return self
 
 
-def _validate_frame_identity(frame_id: str, video_id: str, shot_id: int | None = None) -> None:
+def _validate_frame_identity(
+    frame_id: str,
+    video_id: str,
+    keyframe_no: int | None = None,
+) -> None:
     try:
-        validate_canonical_frame_id(frame_id, video_id=video_id, shot_id=shot_id)
+        validate_canonical_frame_id(
+            frame_id,
+            video_id=video_id,
+            keyframe_no=keyframe_no,
+        )
     except ContractMismatchError as exc:
         raise ValueError(exc.message) from exc
