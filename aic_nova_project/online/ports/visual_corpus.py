@@ -14,13 +14,14 @@ from online.domain.identifiers import validate_canonical_frame_id
 
 
 class OrderedVisualFrame(StrictFrozenModel):
-    """One PE-Core visual vector at its local ordered position in a video."""
+    """One organizer CLIP vector at its local ordered position in a video."""
 
     frame_id: NonEmptyStr
     video_id: NonEmptyStr
-    shot_id: StrictIntValue = Field(ge=0)
+    keyframe_no: StrictIntValue = Field(ge=1)
     local_index: StrictIntValue = Field(ge=0)
     timestamp_sec: Annotated[FiniteFloat, Field(ge=0.0)]
+    source_frame_idx: StrictIntValue = Field(ge=0)
     vector: tuple[FiniteFloat, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -29,10 +30,12 @@ class OrderedVisualFrame(StrictFrozenModel):
             validate_canonical_frame_id(
                 self.frame_id,
                 video_id=self.video_id,
-                shot_id=self.shot_id,
+                keyframe_no=self.keyframe_no,
             )
         except ContractMismatchError as exc:
             raise ValueError(exc.message) from exc
+        if self.local_index != self.keyframe_no - 1:
+            raise ValueError("local_index must equal keyframe_no - 1")
         norm = math.sqrt(sum(value * value for value in self.vector))
         if not math.isclose(norm, 1.0, rel_tol=1e-4, abs_tol=1e-4):
             raise ValueError("visual vector must be L2-normalized")

@@ -52,6 +52,11 @@ from .fakes import (
     build_integration_fixture,
 )
 from .sqlite_fixture import SQLITE_FIXTURE_SCHEMA_VERSION, create_sqlite_fixture
+from .organizer_fixtures import (
+    ORGANIZER_FIXTURE_SCHEMA_VERSION,
+    ORGANIZER_FRAME_METADATA,
+    build_organizer_frame_metadata,
+)
 
 __all__ = [
     "AdvancedFakeBehavior",
@@ -91,6 +96,8 @@ __all__ = [
     "MetadataCall",
     "MilvusCall",
     "ObjectCall",
+    "ORGANIZER_FIXTURE_SCHEMA_VERSION",
+    "ORGANIZER_FRAME_METADATA",
     "RuntimeCall",
     "SQLITE_FIXTURE_SCHEMA_VERSION",
     "VLMCall",
@@ -99,6 +106,7 @@ __all__ = [
     "build_advanced_runtime_bundle",
     "build_happy_path_advanced_runtime_bundle",
     "build_integration_fixture",
+    "build_organizer_frame_metadata",
     "create_advanced_runtime_bundle",
     "create_sqlite_fixture",
 ]

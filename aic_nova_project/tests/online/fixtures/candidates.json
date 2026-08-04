@@ -1,10 +1,12 @@
 {
-  "_schema_version": "person-a-online-domain-v2",
+  "_schema_version": "organizer-v1",
   "frame": {
-    "frame_id": "V001_00000_015",
-    "video_id": "V001",
-    "shot_id": 0,
-    "timestamp_sec": 1.5,
+    "frame_id": "L21_V001_001",
+    "video_id": "L21_V001",
+    "keyframe_no": 1,
+    "local_index": 0,
+    "timestamp_sec": 0.0,
+    "source_frame_idx": 0,
     "rank": 1,
     "raw_score": 0.92,
     "normalized_score": null,
@@ -17,7 +19,7 @@
     }
   },
   "asr_interval": {
-    "video_id": "V001",
+    "video_id": "L21_V001",
     "interval_id": "interval_0001",
     "start_time_sec": 1.0,
     "end_time_sec": 6.0,
@@ -34,7 +36,7 @@
     }
   },
   "video": {
-    "video_id": "V001",
+    "video_id": "L21_V001",
     "rank": 1,
     "raw_score": 0.8,
     "normalized_score": null,
