@@ -7,6 +7,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MODAL_RUNNER = PROJECT_ROOT / "scripts" / "offline_modal_runner.py"
 NUMPY_REQUIREMENT = "numpy==1.26.4"
 OPENCV_REQUIREMENT = "opencv-python-headless==4.9.0.80"
+SETUPTOOLS_REQUIREMENT = "setuptools==81.0.0"
 
 
 def _offline_modules(source: str) -> dict:
@@ -68,7 +69,12 @@ def test_modal_requirements_use_one_numpy_opencv_binary_contract() -> None:
 
 def test_modal_image_reasserts_and_import_checks_binary_dependencies() -> None:
     source = MODAL_RUNNER.read_text(encoding="utf-8")
+    ocr_requirements = (
+        PROJECT_ROOT / "feature_extraction" / "ocr" / "requirements.txt"
+    ).read_text(encoding="utf-8")
 
     assert f'"{NUMPY_REQUIREMENT}"' in source
     assert f'"{OPENCV_REQUIREMENT}"' in source
-    assert "import cv2, numpy" in source
+    assert f'"{SETUPTOOLS_REQUIREMENT}"' in source
+    assert SETUPTOOLS_REQUIREMENT in ocr_requirements
+    assert "import cv2, gdown, numpy, pkg_resources" in source

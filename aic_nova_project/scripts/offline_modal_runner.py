@@ -29,6 +29,7 @@ REMOTE_REPOSITORY_ROOT = "/workspace"
 REMOTE_DATA_ROOT = "/data"
 NUMPY_BINARY_REQUIREMENT = "numpy==1.26.4"
 OPENCV_BINARY_REQUIREMENT = "opencv-python-headless==4.9.0.80"
+SETUPTOOLS_RUNTIME_REQUIREMENT = "setuptools==81.0.0"
 
 OFFLINE_MODULES = {
     "module1": {
@@ -104,8 +105,9 @@ def _build_image() -> modal.Image:
         image.pip_install(
             NUMPY_BINARY_REQUIREMENT,
             OPENCV_BINARY_REQUIREMENT,
+            SETUPTOOLS_RUNTIME_REQUIREMENT,
         ).run_commands(
-            "python -c \"import cv2, numpy; "
+            "python -c \"import cv2, gdown, numpy, pkg_resources; "
             "assert numpy.__version__ == '1.26.4', numpy.__version__; "
             "print(numpy.__version__, cv2.__version__)\""
         )

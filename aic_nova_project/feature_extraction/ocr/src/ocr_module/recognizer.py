@@ -1,7 +1,18 @@
-from PIL import Image
-from vietocr.tool.predictor import Predictor
-from vietocr.tool.config import Cfg
 from typing import List, Tuple
+
+from PIL import Image
+from vietocr.tool.config import Cfg
+from vietocr.tool.predictor import Predictor
+
+
+def _ensure_vietocr_pillow_compatibility() -> None:
+    """Restore the Pillow alias still used by VietOCR 0.3.12."""
+    if not hasattr(Image, "ANTIALIAS"):
+        setattr(Image, "ANTIALIAS", Image.Resampling.LANCZOS)
+
+
+_ensure_vietocr_pillow_compatibility()
+
 
 class TextRecognizer:
     """Wrapper around VietOCR to perform text recognition on cropped images."""

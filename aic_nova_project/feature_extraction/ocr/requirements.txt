@@ -4,5 +4,6 @@ opencv-python-headless==4.9.0.80
 pydantic>=2.6.4
 tqdm==4.66.2
 numpy==1.26.4
+setuptools==81.0.0
 torch>=2.0.0
 torchvision>=0.15.0

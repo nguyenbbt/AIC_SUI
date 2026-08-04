@@ -3,9 +3,14 @@ import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
+from PIL import Image
 
 from ocr_module.pipeline import run_pipeline
 from ocr_module.recognizer import TextRecognizer
+
+
+def test_vietocr_legacy_antialias_uses_pillow_resampling_lanczos():
+    assert Image.ANTIALIAS == Image.Resampling.LANCZOS
 
 
 def test_recognizer_uses_vietocr_batch_api():
