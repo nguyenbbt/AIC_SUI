@@ -42,9 +42,10 @@ chạy Module 1–6.
    docker compose config --quiet
    ```
 
-Module 3 mặc định dùng local model `Qwen/Qwen2.5-1.5B-Instruct` trên A10G, vì
-vậy one-click runner không cần `GEMINI_API_KEY` và không gửi transcript tới API
-LLM bên ngoài.
+Module 3 mặc định dùng local model `Qwen/Qwen2.5-7B-Instruct` trên A10G.
+Model 7B tốn nhiều thời gian tải và GPU hơn 1.5B, nhưng tuân thủ contract
+tóm tắt tiếng Việt và dữ kiện ổn định hơn. One-click runner không cần
+`GEMINI_API_KEY` và không gửi transcript tới API LLM bên ngoài.
 
 ## Chạy one-click
 

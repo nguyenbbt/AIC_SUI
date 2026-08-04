@@ -51,7 +51,7 @@ def test_one_click_dry_run_contains_ordered_offline_stages():
     offsets = [output.index(stage) for stage in expected_stages]
     assert offsets == sorted(offsets)
     assert "ViT-B-32::openai" in output
-    assert "Qwen/Qwen2.5-1.5B-Instruct" in output
+    assert "Qwen/Qwen2.5-7B-Instruct" in output
     assert "modal volume get" in output
     assert "python -m src.indexing.cli" in output
     indexing_command = next(

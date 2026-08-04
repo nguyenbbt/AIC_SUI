@@ -137,7 +137,7 @@ try {
         "--metadata-dir /data/processed/metadata " +
         "--caption-dir /data/captions --output-dir /data/processed " +
         "--whisper-size medium --llm-provider local " +
-        "--llm-model Qwen/Qwen2.5-1.5B-Instruct --device cuda " +
+        "--llm-model Qwen/Qwen2.5-7B-Instruct --device cuda " +
         "--concurrency 1$forceArgument"
     )
     Invoke-ModalModule "module4" (

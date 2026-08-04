@@ -3,15 +3,27 @@ import torch
 import re
 from transformers import pipeline
 from .base import TranscriptLLM
+from .summary_prompt import (
+    SummaryContractError,
+    SUMMARY_SYSTEM_PROMPT,
+    build_summary_contract_repair_prompt,
+    build_summary_language_repair_prompt,
+    build_summary_prompt,
+    validate_summary_contract,
+)
 
 logger = logging.getLogger(__name__)
 
 class LocalTranscriptLLM(TranscriptLLM):
     """
-    Implementation of TranscriptLLM using a local open-source model (e.g. Qwen2.5-1.5B-Instruct).
+    Implementation using a local open-source model (e.g. Qwen2.5-7B-Instruct).
     Requires transformers and accelerate. Runs completely offline.
     """
-    def __init__(self, model_name: str = "Qwen/Qwen2.5-1.5B-Instruct", device: str = "auto"):
+    def __init__(
+        self,
+        model_name: str = "Qwen/Qwen2.5-7B-Instruct",
+        device: str = "auto",
+    ):
         self.model_name = model_name
         
         if device == "auto":
@@ -107,26 +119,81 @@ class LocalTranscriptLLM(TranscriptLLM):
         if not full_cleaned_text.strip():
             return ""
             
-        system_prompt = (
-            "You are an expert summarizer. Summarize the following video transcript. "
-            "Output ONLY valid JSON with a single key 'summary'."
-        )
-        
         messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Transcript:\n{full_cleaned_text}"}
+            {
+                "role": "system",
+                "content": SUMMARY_SYSTEM_PROMPT,
+            },
+            {
+                "role": "user",
+                "content": build_summary_prompt(full_cleaned_text),
+            },
         ]
         
         try:
-            outputs = self.generator(
-                messages,
-                max_new_tokens=512,
-                temperature=0.3,
-                do_sample=True
-            )
-            
-            generated_text = outputs[0]["generated_text"][-1]["content"]
-            return self._extract_json_field(generated_text, "summary")
+            for attempt in range(2):
+                outputs = self.generator(
+                    messages,
+                    max_new_tokens=512,
+                    do_sample=False,
+                )
+
+                generated_text = outputs[0]["generated_text"][-1][
+                    "content"
+                ]
+                summary = self._extract_json_field(
+                    generated_text,
+                    "summary",
+                )
+                try:
+                    return validate_summary_contract(
+                        summary,
+                        full_cleaned_text,
+                    )
+                except SummaryContractError as error:
+                    normalized_summary = summary.strip()
+                    summary_preview = " ".join(
+                        normalized_summary.split()
+                    )[:240]
+                    logger.warning(
+                        "summary_contract_validation_failed "
+                        "attempt=%d violation=%s summary_chars=%d "
+                        "summary_preview=%r",
+                        attempt + 1,
+                        error.code,
+                        len(normalized_summary),
+                        summary_preview,
+                        extra={
+                            "attempt": attempt + 1,
+                            "violation": error.code,
+                            "summary_chars": len(normalized_summary),
+                            "summary_preview": summary_preview,
+                        },
+                    )
+                    if attempt == 1:
+                        raise
+                    logger.warning(
+                        "Local LLM returned an invalid summary; "
+                        "requesting one targeted rewrite."
+                    )
+                    messages = [
+                        {
+                            "role": "system",
+                            "content": SUMMARY_SYSTEM_PROMPT,
+                        },
+                        {
+                            "role": "user",
+                            "content": (
+                                build_summary_language_repair_prompt(summary)
+                                if error.code == "language"
+                                else build_summary_contract_repair_prompt(
+                                    summary,
+                                    full_cleaned_text,
+                                    str(error),
+                                )
+                            ),
+                        },
+                    ]
             
         except Exception as e:
             logger.error(f"Local LLM error during summarize: {e}")

@@ -4,6 +4,11 @@ import logging
 from tenacity import retry, wait_exponential, stop_after_attempt
 from openai import AzureOpenAI
 from .base import TranscriptLLM
+from .summary_prompt import (
+    SUMMARY_SYSTEM_PROMPT,
+    build_summary_prompt,
+    validate_summary_contract,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +65,13 @@ class AzureTranscriptLLM(TranscriptLLM):
             response = self.client.chat.completions.create(
                 model=self.deployment_name,
                 messages=[
-                    {"role": "system", "content": "You are a helpful assistant that always outputs valid JSON."},
+                    {
+                        "role": "system",
+                        "content": (
+                            "You clean ASR transcripts and return valid JSON "
+                            "with exactly one key named cleaned_text."
+                        ),
+                    },
                     {"role": "user", "content": prompt}
                 ],
                 response_format={"type": "json_object"},
@@ -85,18 +96,13 @@ class AzureTranscriptLLM(TranscriptLLM):
         if not full_cleaned_text.strip():
             return ""
             
-        prompt = (
-            "You are an expert content summarizer. Based on the following complete video transcript, "
-            "generate a concise and accurate summary of the main events and topics discussed.\n\n"
-            f"Transcript:\n{full_cleaned_text}\n\n"
-            "Return the result as a JSON object with a single key 'summary'."
-        )
+        prompt = build_summary_prompt(full_cleaned_text)
         
         try:
             response = self.client.chat.completions.create(
                 model=self.deployment_name,
                 messages=[
-                    {"role": "system", "content": "You are a helpful assistant that always outputs valid JSON."},
+                    {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
                     {"role": "user", "content": prompt}
                 ],
                 response_format={"type": "json_object"},
@@ -106,7 +112,10 @@ class AzureTranscriptLLM(TranscriptLLM):
             
             result_text = response.choices[0].message.content
             data = json.loads(result_text)
-            return data.get("summary", "")
+            return validate_summary_contract(
+                data.get("summary", ""),
+                full_cleaned_text,
+            )
                 
         except Exception as e:
             logger.error(f"Azure API error during summarize: {e}")

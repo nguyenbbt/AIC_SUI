@@ -5,6 +5,10 @@ from google import genai
 from google.genai import types
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 from .base import TranscriptLLM
+from .summary_prompt import (
+    build_summary_prompt,
+    validate_summary_contract,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +17,11 @@ class CleanedTranscriptSchema(BaseModel):
     cleaned_text: str = Field(description="The cleaned transcript text with corrected punctuation, spelling, and grammar.")
 
 class SummarySchema(BaseModel):
-    summary: str = Field(description="A concise summary of the main events and topics in the video.")
+    summary: str = Field(
+        description=(
+            "Một đoạn văn tiếng Việt tóm tắt chính xác nội dung video."
+        )
+    )
 
 
 class GeminiTranscriptLLM(TranscriptLLM):
@@ -90,11 +98,7 @@ class GeminiTranscriptLLM(TranscriptLLM):
         if not full_cleaned_text.strip():
             return ""
             
-        prompt = (
-            "You are an expert content summarizer. Based on the following complete video transcript, "
-            "generate a concise and accurate summary of the main events and topics discussed.\n\n"
-            f"Transcript:\n{full_cleaned_text}"
-        )
+        prompt = build_summary_prompt(full_cleaned_text)
         
         try:
             response = self.client.models.generate_content(
@@ -109,11 +113,12 @@ class GeminiTranscriptLLM(TranscriptLLM):
             self._update_usage(response)
             
             if hasattr(response, 'parsed') and response.parsed is not None:
-                return response.parsed.summary
+                summary = response.parsed.summary
             else:
                 import json
                 data = json.loads(response.text)
-                return data.get("summary", "")
+                summary = data.get("summary", "")
+            return validate_summary_contract(summary, full_cleaned_text)
                 
         except Exception as e:
             logger.error(f"Gemini API error during summarize: {e}")
