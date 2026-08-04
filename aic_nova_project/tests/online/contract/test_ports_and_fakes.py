@@ -51,16 +51,19 @@ class PortConformanceTests(unittest.TestCase):
 
     def test_fixture_has_two_videos_asr_edges_objects_and_missing_metadata(self) -> None:
         fixture = build_integration_fixture()
-        self.assertEqual({frame.video_id for frame in fixture.frames}, {"V001", "V002"})
+        self.assertEqual(
+            {frame.video_id for frame in fixture.frames},
+            {"L21_V001", "L21_V002"},
+        )
         self.assertEqual({hit.interval_id for hit in fixture.asr_hits}, {"overlap", "boundary", "no_overlap"})
         self.assertNotIn(
             fixture.missing_metadata_hit.frame_id,
             fixture.metadata().get_frames_by_ids([fixture.missing_metadata_hit.frame_id]),
         )
         filtered = fixture.object_reader().get_objects_by_frame_ids(
-            ["V001_00001_050"], label="person", min_confidence=0.5
+            ["L21_V001_003"], label="person", min_confidence=0.5
         )
-        self.assertEqual(len(filtered["V001_00001_050"]), 1)
+        self.assertEqual(len(filtered["L21_V001_003"]), 1)
 
     def test_fakes_validate_inputs_record_calls_and_preserve_empty_success(self) -> None:
         fixture = build_integration_fixture()
@@ -97,14 +100,14 @@ class PortConformanceTests(unittest.TestCase):
         metadata = fixture.metadata()
         objects = fixture.object_reader()
         with self.assertRaises(InvalidQueryError):
-            metadata.get_frames_by_ids("V001_00000_015")  # type: ignore[arg-type]
+            metadata.get_frames_by_ids("L21_V001_001")  # type: ignore[arg-type]
         with self.assertRaises(InvalidQueryError):
             objects.get_objects_by_frame_ids(
-                ["V001_00000_015"], label=123  # type: ignore[arg-type]
+                ["L21_V001_001"], label=123  # type: ignore[arg-type]
             )
         with self.assertRaises(InvalidQueryError):
             objects.get_objects_by_frame_ids(
-                ["V001_00000_015"], min_confidence="bad"  # type: ignore[arg-type]
+                ["L21_V001_001"], min_confidence="bad"  # type: ignore[arg-type]
             )
         with self.assertRaises(InvalidQueryError):
             fixture.milvus().search_visual((True, 0.0), 1)

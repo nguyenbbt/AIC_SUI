@@ -62,9 +62,9 @@ class AdvancedRuntimeConformanceTests(unittest.TestCase):
         self.assertIsInstance(self.bundle.vlm, VLMPort)
 
     def test_happy_path_preserves_ids_and_returns_defensive_snapshots(self) -> None:
-        frame = self.fixture.visual_frames_by_video["V001"][0]
+        frame = self.fixture.visual_frames_by_video["L21_V001"][0]
         batches = self.bundle.visual_corpus.iter_ordered_frame_embedding_batches(
-            "V001",
+            "L21_V001",
             2,
         )
         self.assertEqual(batches[0][0].frame_id, frame.frame_id)
@@ -289,7 +289,7 @@ class AdvancedRuntimeConformanceTests(unittest.TestCase):
         )
         self.addCleanup(bundle.close)
         with self.assertRaises(ContractMismatchError):
-            bundle.image_resolver.resolve_images(("V001_00004_010",))
+            bundle.image_resolver.resolve_images(("L21_V001_005",))
 
     def test_invalid_image_and_evidence_provenance_fail_safe(self) -> None:
         wrong_ocr = self.fixture.ocr_evidence[0]
@@ -319,10 +319,10 @@ class AdvancedRuntimeConformanceTests(unittest.TestCase):
         self.addCleanup(image_bundle.close)
         with self.assertRaises(ContractMismatchError):
             evidence_bundle.evidence_hydrator.get_ocr_evidence(
-                ("V004_00000_010",)
+                ("L21_V004_001",)
             )
         with self.assertRaises(ContractMismatchError):
-            image_bundle.image_resolver.resolve_images(("V004_00000_010",))
+            image_bundle.image_resolver.resolve_images(("L21_V004_001",))
 
     def test_encoder_dimension_is_guarded_and_sanitized(self) -> None:
         class LeakyEncoder:
@@ -391,7 +391,7 @@ class AdvancedRuntimeConformanceTests(unittest.TestCase):
         self.addCleanup(second.close)
 
         def run(bundle):
-            return bundle.visual_corpus.iter_ordered_frame_embedding_batches("V001", 2)
+            return bundle.visual_corpus.iter_ordered_frame_embedding_batches("L21_V001", 2)
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             first_result, second_result = tuple(
@@ -411,7 +411,7 @@ class AdvancedRuntimeConformanceTests(unittest.TestCase):
 
     def test_call_log_is_ordered_bounded_and_safe(self) -> None:
         self.bundle.visual_corpus.list_video_ids()
-        self.bundle.visual_corpus.iter_ordered_frame_embedding_batches("V001", 2)
+        self.bundle.visual_corpus.iter_ordered_frame_embedding_batches("L21_V001", 2)
         self.bundle.image_resolver.resolve_images(
             (next(iter(self.fixture.images_by_frame_id)),)
         )
@@ -481,11 +481,11 @@ class AdvancedRuntimeConformanceTests(unittest.TestCase):
         )
 
     def test_lazy_port_iteration_stays_active_and_sanitizes_errors(self) -> None:
-        frame = self.fixture.visual_frames_by_video["V001"][0]
+        frame = self.fixture.visual_frames_by_video["L21_V001"][0]
 
         class LazyCorpus:
             def list_video_ids(self):
-                return ("V001",)
+                return ("L21_V001",)
 
             def iter_ordered_frame_embedding_batches(self, video_id, batch_size):
                 def batches():
@@ -497,7 +497,7 @@ class AdvancedRuntimeConformanceTests(unittest.TestCase):
         bundle = build_advanced_runtime_bundle(visual_corpus=LazyCorpus())
         self.addCleanup(bundle.close)
         with self.assertRaises(ResourceUnavailableError) as caught:
-            bundle.visual_corpus.iter_ordered_frame_embedding_batches("V001", 1)
+            bundle.visual_corpus.iter_ordered_frame_embedding_batches("L21_V001", 1)
         self.assertNotIn("must-not-escape", str(caught.exception))
         self.assertEqual(bundle.trake_lifecycle.active_count, 0)
         self.assertFalse(bundle.closed)

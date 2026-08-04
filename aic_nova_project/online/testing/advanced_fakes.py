@@ -542,12 +542,14 @@ def _visual_frame(
     local_index: int,
     vector: tuple[float, ...],
 ) -> OrderedVisualFrame:
+    keyframe_no = local_index + 1
     return OrderedVisualFrame(
-        frame_id=f"{video_id}_{local_index:05d}_010",
+        frame_id=f"{video_id}_{keyframe_no:03d}",
         video_id=video_id,
-        shot_id=local_index,
+        keyframe_no=keyframe_no,
         local_index=local_index,
         timestamp_sec=float(local_index * 2),
+        source_frame_idx=local_index * 60,
         vector=vector,
     )
 
@@ -556,8 +558,14 @@ def _metadata(frame: OrderedVisualFrame) -> FrameMetadata:
     return FrameMetadata(
         frame_id=frame.frame_id,
         video_id=frame.video_id,
-        shot_id=frame.shot_id,
+        keyframe_no=frame.keyframe_no,
+        local_index=frame.local_index,
         timestamp_sec=frame.timestamp_sec,
+        fps=30.0,
+        source_frame_idx=frame.source_frame_idx,
+        image_rel_path=(
+            f"keyframes/{frame.video_id}/{frame.keyframe_no:03d}.jpg"
+        ),
     )
 
 
@@ -565,8 +573,10 @@ def _fused(frame: OrderedVisualFrame, score: float) -> FusedFrameCandidate:
     return FusedFrameCandidate(
         frame_id=frame.frame_id,
         video_id=frame.video_id,
-        shot_id=frame.shot_id,
+        keyframe_no=frame.keyframe_no,
+        local_index=frame.local_index,
         timestamp_sec=frame.timestamp_sec,
+        source_frame_idx=frame.source_frame_idx,
         final_score=score,
         branch_scores={RetrievalBranch.VISUAL_DENSE: score},
         evidence=(
@@ -597,8 +607,8 @@ def build_advanced_modes_fixture() -> AdvancedModesFixture:
         top_k_videos=3,
     )
     frames = {
-        "V001": tuple(
-            _visual_frame("V001", index, vector)
+        "L21_V001": tuple(
+            _visual_frame("L21_V001", index, vector)
             for index, vector in enumerate(
                 (
                     _EVENT_VECTORS[0],
@@ -610,8 +620,8 @@ def build_advanced_modes_fixture() -> AdvancedModesFixture:
                 )
             )
         ),
-        "V002": tuple(
-            _visual_frame("V002", index, vector)
+        "L21_V002": tuple(
+            _visual_frame("L21_V002", index, vector)
             for index, vector in enumerate(
                 (
                     _EVENT_VECTORS[2],
@@ -623,8 +633,8 @@ def build_advanced_modes_fixture() -> AdvancedModesFixture:
                 )
             )
         ),
-        "V003": tuple(
-            _visual_frame("V003", index, vector)
+        "L21_V003": tuple(
+            _visual_frame("L21_V003", index, vector)
             for index, vector in enumerate(
                 (
                     (0.8, 0.0, 0.0, 0.6),
@@ -636,8 +646,8 @@ def build_advanced_modes_fixture() -> AdvancedModesFixture:
                 )
             )
         ),
-        "V004": tuple(
-            _visual_frame("V004", index, vector)
+        "L21_V004": tuple(
+            _visual_frame("L21_V004", index, vector)
             for index, vector in enumerate(_EVENT_VECTORS[:2])
         ),
     }
@@ -647,13 +657,13 @@ def build_advanced_modes_fixture() -> AdvancedModesFixture:
         for frame in frames[video_id]
     )
 
-    vqa_primary = frames["V001"][4]
-    vqa_neighbor = frames["V001"][3]
-    vqa_secondary = frames["V002"][2]
+    vqa_primary = frames["L21_V001"][4]
+    vqa_neighbor = frames["L21_V001"][3]
+    vqa_secondary = frames["L21_V002"][2]
     ranked_candidates = (
         _fused(vqa_primary, 0.95),
         _fused(vqa_secondary, 0.85),
-        _fused(frames["V001"][2], 0.75),
+        _fused(frames["L21_V001"][2], 0.75),
     )
     ocr = (
         OCREvidence(
@@ -671,16 +681,16 @@ def build_advanced_modes_fixture() -> AdvancedModesFixture:
     )
     asr = (
         ASREvidence(
-            evidence_id="asr:V001:interval-1",
-            video_id="V001",
+            evidence_id="asr:L21_V001:interval-1",
+            video_id="L21_V001",
             interval_id="interval-1",
             start_time_sec=6.0,
             end_time_sec=10.0,
             text="Anh ấy nâng chiếc cốc lên.",
         ),
         ASREvidence(
-            evidence_id="asr:V002:interval-1",
-            video_id="V002",
+            evidence_id="asr:L21_V002:interval-1",
+            video_id="L21_V002",
             interval_id="interval-1",
             start_time_sec=3.0,
             end_time_sec=6.0,
@@ -689,13 +699,13 @@ def build_advanced_modes_fixture() -> AdvancedModesFixture:
     )
     summaries = (
         SummaryEvidence(
-            evidence_id="summary:V001",
-            video_id="V001",
+            evidence_id="summary:L21_V001",
+            video_id="L21_V001",
             text="Một người bước vào, ngồi xuống rồi nâng một chiếc cốc.",
         ),
         SummaryEvidence(
-            evidence_id="summary:V002",
-            video_id="V002",
+            evidence_id="summary:L21_V002",
+            video_id="L21_V002",
             text="Các hành động tương tự xuất hiện theo thứ tự ngược.",
         ),
     )
@@ -705,8 +715,9 @@ def build_advanced_modes_fixture() -> AdvancedModesFixture:
             evidence_id=f"image:{frame.frame_id}",
             video_id=frame.video_id,
             frame_id=frame.frame_id,
-            shot_id=frame.shot_id,
+            keyframe_no=frame.keyframe_no,
             timestamp_sec=frame.timestamp_sec,
+            source_frame_idx=frame.source_frame_idx,
             image_reference=f"fixture://advanced-images/{frame.frame_id}",
         )
         for frame in image_frames
@@ -717,26 +728,26 @@ def build_advanced_modes_fixture() -> AdvancedModesFixture:
         f"image:{vqa_neighbor.frame_id}",
         f"ocr:{vqa_primary.frame_id}",
         f"ocr:{vqa_secondary.frame_id}",
-        "asr:V001:interval-1",
-        "asr:V002:interval-1",
-        "summary:V001",
-        "summary:V002",
+        "asr:L21_V001:interval-1",
+        "asr:L21_V002:interval-1",
+        "summary:L21_V001",
+        "summary:L21_V002",
     )
     expected_answer_evidence_ids = (
         f"image:{vqa_primary.frame_id}",
         f"ocr:{vqa_primary.frame_id}",
-        "asr:V001:interval-1",
-        "summary:V001",
+        "asr:L21_V001:interval-1",
+        "summary:L21_V001",
     )
 
     return AdvancedModesFixture(
         trake_query=trake_query,
         event_vectors=MappingProxyType(dict(zip(_EVENT_TEXTS, _EVENT_VECTORS))),
         visual_frames_by_video=MappingProxyType(frames),
-        expected_dante_video_id="V001",
+        expected_dante_video_id="L21_V001",
         expected_dante_positions=(0, 2, 4),
         expected_dante_score=2.996,
-        tie_video_id="V003",
+        tie_video_id="L21_V003",
         tied_sequence_positions=((1, 2, 4), (1, 3, 4)),
         ranked_vqa_candidates=ranked_candidates,
         frame_metadata=all_metadata,
@@ -744,7 +755,7 @@ def build_advanced_modes_fixture() -> AdvancedModesFixture:
         asr_evidence=asr,
         summary_evidence=summaries,
         images_by_frame_id=MappingProxyType(images),
-        missing_image_frame_id=frames["V001"][5].frame_id,
+        missing_image_frame_id=frames["L21_V001"][5].frame_id,
         vqa_question=VQAQuestion(
             question_id="vqa-wave2-fixture",
             question="Người đàn ông làm gì sau khi ngồi xuống?",

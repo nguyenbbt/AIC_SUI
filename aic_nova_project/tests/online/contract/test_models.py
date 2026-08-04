@@ -10,12 +10,21 @@ from online.domain.candidates import (
     ASRIntervalCandidate,
     BranchResult,
     FrameCandidate,
+    FusedFrameCandidate,
     VideoCandidate,
 )
 from online.domain.enums import BranchStatus, CandidateLevel, QueryMode, RetrievalBranch
-from online.domain.identifiers import parse_canonical_frame_id
+from online.domain.identifiers import (
+    parse_canonical_frame_id,
+    validate_canonical_frame_id,
+)
 from online.domain.errors import ResourceUnavailableError
 from online.domain.query import ObjectConstraint
+from online.domain.trake import TRAKEFrameMatch
+from online.domain.vqa import ImageEvidence
+from online.ports.records import FrameMetadata, FrameSearchHit
+from online.ports.visual_corpus import OrderedVisualFrame
+from online.testing.organizer_fixtures import build_organizer_frame_metadata
 
 
 FIXTURE_PATH = Path(__file__).parents[1] / "fixtures" / "candidates.json"
@@ -95,19 +104,100 @@ class DomainContractTests(unittest.TestCase):
             candidate.rank = 2  # type: ignore[misc]
 
     def test_canonical_id_parser_handles_underscored_video_id(self) -> None:
-        parsed = parse_canonical_frame_id("camera_north_V001_00012_105")
-        self.assertEqual(parsed.video_id, "camera_north_V001")
-        self.assertEqual(parsed.shot_id, 12)
-        self.assertEqual(parsed.position, 105)
+        for frame_id, video_id, keyframe_no in (
+            ("L21_V001_001", "L21_V001", 1),
+            ("L26_V498_123", "L26_V498", 123),
+        ):
+            parsed = parse_canonical_frame_id(frame_id)
+            self.assertEqual(parsed.video_id, video_id)
+            self.assertEqual(parsed.keyframe_no, keyframe_no)
+        validate_canonical_frame_id(
+            "L21_V001_123",
+            video_id="L21_V001",
+            keyframe_no=123,
+        )
+        for invalid in (
+            "shot_00012_pos_105",
+            "L21_V001_000",
+            "L21_V001_00012_105",
+            " L21_V001_001",
+            "L21_V001_001 ",
+        ):
+            with self.assertRaises(Exception):
+                parse_canonical_frame_id(invalid)
         with self.assertRaises(Exception):
-            parse_canonical_frame_id("shot_00012_pos_105")
+            validate_canonical_frame_id("L21_V001_001", video_id="L21_V002")
+        with self.assertRaises(Exception):
+            validate_canonical_frame_id("L21_V001_001", keyframe_no=2)
+
+    def test_shared_frame_models_expose_only_organizer_identity(self) -> None:
+        for model in (
+            FrameSearchHit,
+            FrameMetadata,
+            FrameCandidate,
+            FusedFrameCandidate,
+            OrderedVisualFrame,
+            TRAKEFrameMatch,
+            ImageEvidence,
+        ):
+            self.assertNotIn("shot_id", model.model_fields)
+        self.assertEqual(
+            set(FrameMetadata.model_fields),
+            {
+                "frame_id",
+                "video_id",
+                "keyframe_no",
+                "local_index",
+                "timestamp_sec",
+                "fps",
+                "source_frame_idx",
+                "image_rel_path",
+            },
+        )
+        self.assertEqual(
+            set(FrameSearchHit.model_fields),
+            {"frame_id", "video_id", "raw_score"},
+        )
+
+    def test_organizer_metadata_rejects_semantic_and_ordering_mismatches(self) -> None:
+        base = build_organizer_frame_metadata()[0].model_dump()
+        for field, value in (
+            ("frame_id", "L21_V001_002"),
+            ("video_id", "L21_V002"),
+            ("keyframe_no", 2),
+            ("local_index", 1),
+            ("fps", 0.0),
+            ("source_frame_idx", -1),
+        ):
+            with self.assertRaises(ValidationError):
+                FrameMetadata.model_validate({**base, field: value})
+        with self.assertRaises(ValidationError):
+            FrameSearchHit(
+                frame_id="L21_V001_001",
+                video_id="L21_V002",
+                raw_score=0.5,
+            )
+
+    def test_organizer_base_fixture_preserves_duplicate_source_frame(self) -> None:
+        frames = build_organizer_frame_metadata()
+        self.assertEqual(
+            tuple(frame.frame_id for frame in frames),
+            (
+                "L21_V001_001",
+                "L21_V001_002",
+                "L21_V001_003",
+                "L21_V002_001",
+            ),
+        )
+        self.assertEqual(frames[0].source_frame_idx, frames[1].source_frame_idx)
+        self.assertNotEqual(frames[0].frame_id, frames[1].frame_id)
+        self.assertEqual(
+            tuple(type(frame).model_validate_json(frame.model_dump_json()) for frame in frames),
+            frames,
+        )
 
     def test_nested_result_mapping_is_immutable_and_serializable(self) -> None:
-        from online.domain.candidates import (
-            CandidateDiagnostics,
-            CandidateEvidence,
-            FusedFrameCandidate,
-        )
+        from online.domain.candidates import CandidateDiagnostics, CandidateEvidence
 
         evidence = CandidateEvidence(
             branch=RetrievalBranch.VISUAL_DENSE,
@@ -116,10 +206,12 @@ class DomainContractTests(unittest.TestCase):
             normalized_score=0.8,
         )
         result = FusedFrameCandidate(
-            frame_id="V001_00000_015",
-            video_id="V001",
-            shot_id=0,
-            timestamp_sec=1.5,
+            frame_id="L21_V001_001",
+            video_id="L21_V001",
+            keyframe_no=1,
+            local_index=0,
+            timestamp_sec=0.0,
+            source_frame_idx=0,
             final_score=0.8,
             branch_scores={RetrievalBranch.VISUAL_DENSE: 0.8},
             evidence=(evidence,),
@@ -135,17 +227,17 @@ class DomainContractTests(unittest.TestCase):
 
     def test_strict_strings_canonical_ids_and_numeric_scores_reject_ambiguous_input(self) -> None:
         with self.assertRaises(Exception):
-            parse_canonical_frame_id(" V001_00000_015")
+            parse_canonical_frame_id(" L21_V001_001")
         with self.assertRaises(Exception):
-            parse_canonical_frame_id("V001_00000_015 ")
+            parse_canonical_frame_id("L21_V001_001 ")
         with self.assertRaises(ValidationError):
             FrameCandidate.model_validate({**self.fixture["frame"], "raw_score": True})
         with self.assertRaises(ValidationError):
             FrameCandidate.model_validate({**self.fixture["frame"], "rank": True})
         with self.assertRaises(ValidationError):
-            FrameCandidate.model_validate({**self.fixture["frame"], "shot_id": True})
+            FrameCandidate.model_validate({**self.fixture["frame"], "keyframe_no": True})
         with self.assertRaises(ValidationError):
-            FrameCandidate.model_validate({**self.fixture["frame"], "video_id": " V001"})
+            FrameCandidate.model_validate({**self.fixture["frame"], "video_id": " L21_V001"})
         with self.assertRaises(ValidationError):
             ObjectConstraint(
                 label="person",
