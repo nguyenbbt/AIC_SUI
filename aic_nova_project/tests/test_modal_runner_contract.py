@@ -5,6 +5,8 @@ import re
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MODAL_RUNNER = PROJECT_ROOT / "scripts" / "offline_modal_runner.py"
+NUMPY_REQUIREMENT = "numpy==1.26.4"
+OPENCV_REQUIREMENT = "opencv-python-headless==4.9.0.80"
 
 
 def _offline_modules(source: str) -> dict:
@@ -35,3 +37,38 @@ def test_modal_runner_is_portable_and_registers_modules_1_to_7() -> None:
         "module6",
         "module7",
     }
+
+
+def test_modal_requirements_use_one_numpy_opencv_binary_contract() -> None:
+    requirement_paths = [
+        PROJECT_ROOT / "data_pipeline" / "shot_keyframe" / "requirements.txt",
+        PROJECT_ROOT
+        / "feature_extraction"
+        / "visual_embedding"
+        / "requirements.txt",
+        PROJECT_ROOT / "feature_extraction" / "ocr" / "requirements.txt",
+    ]
+    requirements = [
+        line.strip()
+        for path in requirement_paths
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+    numpy_requirements = [
+        item for item in requirements if item.lower().startswith("numpy")
+    ]
+    opencv_requirements = [
+        item for item in requirements if item.lower().startswith("opencv-")
+    ]
+
+    assert set(numpy_requirements) == {NUMPY_REQUIREMENT}
+    assert set(opencv_requirements) == {OPENCV_REQUIREMENT}
+
+
+def test_modal_image_reasserts_and_import_checks_binary_dependencies() -> None:
+    source = MODAL_RUNNER.read_text(encoding="utf-8")
+
+    assert f'"{NUMPY_REQUIREMENT}"' in source
+    assert f'"{OPENCV_REQUIREMENT}"' in source
+    assert "import cv2, numpy" in source

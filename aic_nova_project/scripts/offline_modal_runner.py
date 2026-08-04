@@ -27,6 +27,8 @@ import modal
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 REMOTE_REPOSITORY_ROOT = "/workspace"
 REMOTE_DATA_ROOT = "/data"
+NUMPY_BINARY_REQUIREMENT = "numpy==1.26.4"
+OPENCV_BINARY_REQUIREMENT = "opencv-python-headless==4.9.0.80"
 
 OFFLINE_MODULES = {
     "module1": {
@@ -98,6 +100,16 @@ def _build_image() -> modal.Image:
         image = image.pip_install_from_requirements(
             REPOSITORY_ROOT / relative_path
         )
+    image = (
+        image.pip_install(
+            NUMPY_BINARY_REQUIREMENT,
+            OPENCV_BINARY_REQUIREMENT,
+        ).run_commands(
+            "python -c \"import cv2, numpy; "
+            "assert numpy.__version__ == '1.26.4', numpy.__version__; "
+            "print(numpy.__version__, cv2.__version__)\""
+        )
+    )
     return image.add_local_dir(
         REPOSITORY_ROOT,
         remote_path=REMOTE_REPOSITORY_ROOT,
