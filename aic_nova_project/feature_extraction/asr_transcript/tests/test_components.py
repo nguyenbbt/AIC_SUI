@@ -70,11 +70,13 @@ def test_segment_grouper():
     intervals = SegmentGrouper.group_segments(segments, group_size=2)
     
     assert len(intervals) == 2
+    assert intervals[0]["interval_id"] == "0"
     assert intervals[0]["start_time_sec"] == 0.0
     assert intervals[0]["end_time_sec"] == 4.0
     assert intervals[0]["raw_text"] == "A B"
     assert intervals[0]["segment_ids"] == [0, 1]
     
+    assert intervals[1]["interval_id"] == "1"
     assert intervals[1]["start_time_sec"] == 4.0
     assert intervals[1]["end_time_sec"] == 8.0
     assert intervals[1]["raw_text"] == "C D"

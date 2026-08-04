@@ -1,7 +1,25 @@
 import os
 from typing import List, Dict, Any
+import numpy as np
 from PIL import Image
 from .base import BaseDetector
+
+
+def _tensor_scalar(value: Any, field_name: str) -> float:
+    """Extract exactly one scalar from a Torch-like tensor value."""
+    cpu_value = value.cpu() if hasattr(value, "cpu") else value
+    raw_value = (
+        cpu_value.numpy()
+        if hasattr(cpu_value, "numpy")
+        else cpu_value
+    )
+    array = np.asarray(raw_value)
+    if array.size != 1:
+        raise ValueError(
+            f"YOLO-World {field_name} must contain exactly one value; "
+            f"received shape {array.shape}."
+        )
+    return float(array.item())
 
 class YOLOWorldDetector(BaseDetector):
     def __init__(
@@ -49,8 +67,8 @@ class YOLOWorldDetector(BaseDetector):
                 for box in boxes:
                     # coords are [x_min, y_min, x_max, y_max]
                     coords = box.xyxy[0].cpu().numpy()
-                    conf = float(box.conf[0].cpu().numpy())
-                    cls_idx = int(box.cls[0].cpu().numpy())
+                    conf = _tensor_scalar(box.conf[0], "confidence")
+                    cls_idx = int(_tensor_scalar(box.cls[0], "class index"))
                     label = result.names[cls_idx]
                     
                     # Absolute integer coordinates, clipped to image boundaries

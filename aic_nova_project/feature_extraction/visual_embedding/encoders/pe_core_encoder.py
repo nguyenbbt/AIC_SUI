@@ -19,6 +19,7 @@ class PECoreEncoder(VisualEncoder):
         """
         Initialize the PE-Core model.
         """
+        self.model_id = model_id
         if device == "auto":
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
         else:

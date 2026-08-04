@@ -65,6 +65,6 @@ class ASREngine:
                 })
                 
             return segments
-        except Exception as e:
-            logger.error(f"Error during transcription of {audio_path}: {e}")
-            return []
+        except Exception:
+            logger.exception("Error during transcription of %s", audio_path)
+            raise

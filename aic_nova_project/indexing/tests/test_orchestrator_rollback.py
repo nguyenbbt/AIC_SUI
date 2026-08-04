@@ -23,6 +23,9 @@ def mock_clients():
     """Create mock instances of all 3 clients."""
     milvus = MagicMock()
     es = MagicMock()
+    es.bulk_index.side_effect = (
+        lambda index_name, documents, id_field: len(documents)
+    )
     tabular = MagicMock()
     return milvus, es, tabular
 
@@ -52,7 +55,10 @@ class TestRollbackOnEsFailure:
     ])
     @patch("src.indexing.orchestrator.load_asr_transcripts", return_value=[])
     @patch("src.indexing.orchestrator.load_video_summary", return_value=[])
-    @patch("src.indexing.orchestrator.load_metadata_and_objects", return_value=([], []))
+    @patch("src.indexing.orchestrator.load_metadata_and_objects", return_value=(
+        [{"frame_id": "f1", "video_id": "V1", "shot_id": 0, "timestamp": 1.0}],
+        [],
+    ))
     def test_milvus_rollback_on_es_failure(
         self,
         mock_meta,
@@ -89,7 +95,9 @@ class TestRollbackOnEsFailure:
 class TestRollbackOnSqliteFailure:
     """Test: If SQLite fails after both Milvus and ES succeed, both are rolled back."""
 
-    @patch("src.indexing.orchestrator.load_visual_embeddings", return_value=[])
+    @patch("src.indexing.orchestrator.load_visual_embeddings", return_value=[
+        {"frame_id": "f1", "video_id": "V1", "shot_id": 0, "embedding": [1.0] + [0.0] * 511}
+    ])
     @patch("src.indexing.orchestrator.load_text_asr_embeddings", return_value=[])
     @patch("src.indexing.orchestrator.load_text_summary_embeddings", return_value=[])
     @patch("src.indexing.orchestrator.load_ocr_texts", return_value=[])
@@ -138,7 +146,7 @@ class TestSuccessfulProcessing:
     """Test: All inserts succeed → process_video returns True."""
 
     @patch("src.indexing.orchestrator.load_visual_embeddings", return_value=[
-        {"frame_id": "f1", "video_id": "V1", "shot_id": 0, "embedding": [0.1] * 512}
+        {"frame_id": "f1", "video_id": "V1", "shot_id": 0, "embedding": [1.0] + [0.0] * 511}
     ])
     @patch("src.indexing.orchestrator.load_text_asr_embeddings", return_value=[])
     @patch("src.indexing.orchestrator.load_text_summary_embeddings", return_value=[])
@@ -164,6 +172,48 @@ class TestSuccessfulProcessing:
         mock_clients,
     ):
         milvus, es, tabular = mock_clients
+        visual_record = {
+            "frame_id": "f1",
+            "video_id": "V1",
+            "shot_id": 0,
+            "embedding": [1.0] + [0.0] * 511,
+        }
+        metadata_record = {
+            "frame_id": "f1",
+            "video_id": "V1",
+            "shot_id": 0,
+            "timestamp": 1.0,
+        }
+        milvus.snapshot_by_video_id.side_effect = [
+            [],
+            [],
+            [],
+            [],
+            [visual_record],
+            [],
+            [],
+            [],
+        ]
+        es.snapshot_by_video_id.side_effect = [
+            [],
+            [],
+            [],
+            [{
+                "_id": "f1",
+                "_source": {
+                    "frame_id": "f1",
+                    "video_id": "V1",
+                    "shot_id": "0",
+                    "ocr_text_concat": "xin chao",
+                },
+            }],
+            [],
+            [],
+        ]
+        tabular.snapshot_by_video_id.side_effect = [
+            ([], []),
+            ([metadata_record], []),
+        ]
 
         result = orchestrator.process_video("V1", Path("/fake"), visual_dim=512, text_dim=768)
 
@@ -173,7 +223,7 @@ class TestSuccessfulProcessing:
         assert tabular.insert_metadata_batch.called
 
 
-class TestGracefulDegradation:
+class TestMissingCoreArtifacts:
     """Test: Missing data streams don't crash the pipeline."""
 
     @patch("src.indexing.orchestrator.load_visual_embeddings", return_value=[])
@@ -183,7 +233,7 @@ class TestGracefulDegradation:
     @patch("src.indexing.orchestrator.load_asr_transcripts", return_value=[])
     @patch("src.indexing.orchestrator.load_video_summary", return_value=[])
     @patch("src.indexing.orchestrator.load_metadata_and_objects", return_value=([], []))
-    def test_empty_data_still_succeeds(
+    def test_empty_data_fails_before_mutation(
         self,
         mock_meta,
         mock_sum_text,
@@ -200,4 +250,45 @@ class TestGracefulDegradation:
         result = orchestrator.process_video("V1", Path("/fake"), visual_dim=512, text_dim=768)
 
         # Should succeed even with zero data — graceful degradation
-        assert result is True
+        assert result is False
+        milvus.delete_by_video_id.assert_not_called()
+        es.delete_by_video_id.assert_not_called()
+        tabular.delete_by_video_id.assert_not_called()
+
+
+class TestMissingEmbeddingDimension:
+    @patch("src.indexing.orchestrator.load_visual_embeddings", return_value=[
+        {"frame_id": "f1", "video_id": "V1", "shot_id": 0, "embedding": [1.0, 0.0]}
+    ])
+    @patch("src.indexing.orchestrator.load_text_asr_embeddings", return_value=[])
+    @patch("src.indexing.orchestrator.load_text_summary_embeddings", return_value=[])
+    @patch("src.indexing.orchestrator.load_text_ocr_embeddings", return_value=[])
+    @patch("src.indexing.orchestrator.load_ocr_texts", return_value=[])
+    @patch("src.indexing.orchestrator.load_asr_transcripts", return_value=[])
+    @patch("src.indexing.orchestrator.load_video_summary", return_value=[])
+    @patch("src.indexing.orchestrator.load_metadata_and_objects", return_value=(
+        [{"frame_id": "f1", "video_id": "V1", "shot_id": 0, "timestamp": 1.0}],
+        [],
+    ))
+    def test_visual_records_without_dimension_fail_before_mutation(
+        self,
+        mock_meta,
+        mock_sum_text,
+        mock_asr_text,
+        mock_ocr,
+        mock_ocr_emb,
+        mock_sum_emb,
+        mock_asr_emb,
+        mock_vis,
+        orchestrator,
+        mock_clients,
+    ):
+        milvus, es, tabular = mock_clients
+
+        assert not orchestrator.process_video(
+            "V1",
+            Path("/fake"),
+            visual_dim=None,
+            text_dim=768,
+        )
+        milvus.delete_by_video_id.assert_not_called()

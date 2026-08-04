@@ -10,16 +10,13 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Copy requirements and install them
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# The supported build context is the project root.
+COPY data_pipeline/shot_keyframe/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
-# Copy source code
-COPY . /app/data_pipeline/shot_keyframe/
-
-# Copy weights (assuming they are downloaded locally before docker build)
-# If the directory doesn't exist, it won't fail if we just copy the whole weights dir
-COPY weights/ /app/weights/
+# Copy only the package required by the service.
+COPY data_pipeline/__init__.py /app/data_pipeline/__init__.py
+COPY data_pipeline/shot_keyframe /app/data_pipeline/shot_keyframe
 
 # Set Python path so `data_pipeline.shot_keyframe` package is importable
 ENV PYTHONPATH=/app

@@ -46,7 +46,7 @@ class SegmentGrouper:
             segment_ids = list(range(i, i + len(chunk)))
             
             intervals.append({
-                "interval_id": interval_id,
+                "interval_id": str(interval_id),
                 "start_time_sec": start_time,
                 "end_time_sec": end_time,
                 "raw_text": raw_text,

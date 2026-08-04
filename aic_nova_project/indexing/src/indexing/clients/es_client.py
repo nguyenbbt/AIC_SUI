@@ -14,7 +14,7 @@ import logging
 from typing import List, Dict, Any
 
 from elasticsearch import Elasticsearch
-from elasticsearch.helpers import bulk
+from elasticsearch.helpers import bulk, scan
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +53,8 @@ ASR_MAPPING = {
     "properties": {
         "interval_id": {"type": "keyword"},
         "video_id": {"type": "keyword"},
-        "start_time": {"type": "float"},
-        "end_time": {"type": "float"},
+        "start_time_sec": {"type": "float"},
+        "end_time_sec": {"type": "float"},
         "cleaned_text": {
             "type": "text",
             "analyzer": "vietnamese_analyzer",
@@ -98,7 +98,11 @@ class ESClient:
     ):
         """Creates an index with Vietnamese analyzer settings if it does not exist."""
         if self.client.indices.exists(index=index_name):
-            logger.info(f"Index '{index_name}' already exists.")
+            self._audit_index(index_name, mapping)
+            logger.info(
+                "Index '%s' already exists and passed schema audit.",
+                index_name,
+            )
             return
 
         body = {
@@ -107,6 +111,81 @@ class ESClient:
         }
         self.client.indices.create(index=index_name, body=body)
         logger.info(f"Created index '{index_name}' with Vietnamese analyzer.")
+
+    @staticmethod
+    def _contains_contract(
+        actual: Dict[str, Any],
+        expected: Dict[str, Any],
+    ) -> bool:
+        """Return whether actual recursively contains the expected contract."""
+        for key, expected_value in expected.items():
+            if key not in actual:
+                return False
+            actual_value = actual[key]
+            if isinstance(expected_value, dict):
+                if not isinstance(actual_value, dict):
+                    return False
+                if not ESClient._contains_contract(
+                    actual_value,
+                    expected_value,
+                ):
+                    return False
+            elif actual_value != expected_value:
+                return False
+        return True
+
+    def _audit_index(
+        self,
+        index_name: str,
+        mapping: Dict[str, Any],
+    ) -> None:
+        mapping_response = self.client.indices.get_mapping(
+            index=index_name
+        )
+        actual_mapping = mapping_response.get(index_name, {}).get(
+            "mappings",
+            {},
+        )
+        if not self._contains_contract(actual_mapping, mapping):
+            raise ValueError(
+                f"Elasticsearch mapping contract mismatch for "
+                f"'{index_name}'."
+            )
+
+        settings_response = self.client.indices.get_settings(
+            index=index_name
+        )
+        index_settings = settings_response.get(index_name, {}).get(
+            "settings",
+            {},
+        )
+        actual_analysis = index_settings.get("index", {}).get(
+            "analysis",
+            index_settings.get("analysis", {}),
+        )
+        expected_analysis = VIETNAMESE_ANALYSIS_SETTINGS["analysis"]
+        if not self._contains_contract(
+            actual_analysis,
+            expected_analysis,
+        ):
+            raise ValueError(
+                f"Elasticsearch analyzer contract mismatch for "
+                f"'{index_name}'."
+            )
+
+        try:
+            self.client.indices.analyze(
+                index=index_name,
+                body={
+                    "analyzer": "vietnamese_analyzer",
+                    "text": "người",
+                },
+            )
+        except Exception as exc:
+            raise ValueError(
+                f"Elasticsearch analyzer/plugin audit failed for "
+                f"'{index_name}': {exc}"
+            ) from exc
 
     def create_indices(self):
         """Create all managed indices."""
@@ -140,9 +219,14 @@ class ESClient:
 
         success_count, errors = bulk(self.client, actions, raise_on_error=False)
         if errors:
-            logger.warning(
-                f"Bulk index to '{index_name}' had {len(errors)} error(s). "
-                f"First error: {errors[0]}"
+            raise RuntimeError(
+                f"Bulk index to '{index_name}' had {len(errors)} error(s); "
+                f"first error: {errors[0]}"
+            )
+        if success_count != len(documents):
+            raise RuntimeError(
+                f"Bulk index to '{index_name}' indexed "
+                f"{success_count}/{len(documents)} documents."
             )
         return success_count
 
@@ -159,6 +243,48 @@ class ESClient:
         logger.info(
             f"Deleted records for video_id='{video_id}' from index '{index_name}'."
         )
+
+    def snapshot_by_video_id(
+        self,
+        index_name: str,
+        video_id: str,
+    ) -> List[Dict[str, Any]]:
+        """Read all documents needed to restore a failed replacement."""
+        if not self.client.indices.exists(index=index_name):
+            return []
+
+        hits = scan(
+            self.client,
+            index=index_name,
+            query={"query": {"term": {"video_id": video_id}}},
+        )
+        return [
+            {
+                "_id": hit["_id"],
+                "_source": hit["_source"],
+            }
+            for hit in hits
+        ]
+
+    def restore_snapshot(
+        self,
+        index_name: str,
+        documents: List[Dict[str, Any]],
+    ) -> None:
+        """Restore documents with their original Elasticsearch IDs."""
+        if not documents:
+            return
+
+        actions = [
+            {
+                "_index": index_name,
+                "_id": document["_id"],
+                "_source": document["_source"],
+            }
+            for document in documents
+        ]
+        bulk(self.client, actions, raise_on_error=True)
+        self.client.indices.refresh(index=index_name)
 
     def reset(self):
         """Delete all managed indices."""

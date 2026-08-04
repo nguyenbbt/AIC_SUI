@@ -47,16 +47,16 @@ class TransNetPredictor:
         logger.info(f"Running TransNetV2 inference on {video_path}")
         try:
             with torch.no_grad():
-                # TransNetV2's detect_scenes function might take a threshold argument depending on the version.
-                # If it doesn't, we just call it directly.
-                # According to docs, it returns a numpy array or list of [start, end] frames.
-                
-                # In transnetv2_pytorch 1.0.5, we can use predict_video to get raw frames or detect_scenes
                 try:
-                    scenes = self.model.detect_scenes(video_path)
-                except TypeError:
-                    # In case threshold is supported
                     scenes = self.model.detect_scenes(video_path, threshold=threshold)
+                except TypeError as exc:
+                    message = str(exc)
+                    if (
+                        "unexpected keyword" not in message
+                        or "threshold" not in message
+                    ):
+                        raise
+                    scenes = self.model.detect_scenes(video_path)
                     
             shots = []
             for scene in scenes:

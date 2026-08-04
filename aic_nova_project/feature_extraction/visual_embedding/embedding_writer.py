@@ -23,6 +23,7 @@ def write_embeddings_to_parquet(
     
     # Define output path
     output_path = os.path.join(output_dir, f"{video_id}.parquet")
+    temporary_path = f"{output_path}.tmp"
     
     # Convert list of dicts to DataFrame
     df = pd.DataFrame(records)
@@ -32,5 +33,10 @@ def write_embeddings_to_parquet(
     # pyarrow can handle lists/numpy arrays. We'll ensure it's a list for compatibility.
     df['embedding'] = df['embedding'].apply(lambda x: x.tolist() if hasattr(x, 'tolist') else x)
     
-    # Write to Parquet using PyArrow backend
-    df.to_parquet(output_path, engine='pyarrow', index=False)
+    # Publish only a completely written Parquet artifact.
+    try:
+        df.to_parquet(temporary_path, engine='pyarrow', index=False)
+        os.replace(temporary_path, output_path)
+    finally:
+        if os.path.exists(temporary_path):
+            os.remove(temporary_path)

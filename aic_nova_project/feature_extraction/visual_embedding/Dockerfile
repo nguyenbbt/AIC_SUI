@@ -14,7 +14,7 @@ COPY feature_extraction/visual_embedding/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy source code and scripts
-COPY feature_extraction/visual_embedding/ /app/
+COPY feature_extraction/visual_embedding /app/feature_extraction/visual_embedding
 COPY scripts/download_pe_core.py /app/scripts/
 
 # Set Python path so our module is importable
@@ -24,4 +24,4 @@ ENV PYTHONPATH=/app
 RUN python scripts/download_pe_core.py
 
 # Default entrypoint to the CLI
-ENTRYPOINT ["python", "-m", "cli"]
+ENTRYPOINT ["python", "-m", "feature_extraction.visual_embedding.cli"]

@@ -72,15 +72,35 @@ Example for Data Pipeline:
 docker build -f data_pipeline/shot_keyframe/Dockerfile -t shot_keyframe .
 ```
 
+### Running Offline modules on Modal
+
+`scripts/offline_modal_runner.py` exposes the real CLI entrypoints for Modules 1-7. Inputs and
+outputs live in the `aic-nova-offline-data` Volume mounted at `/data`:
+
+```bash
+modal run scripts/offline_modal_runner.py --module module1 --arguments="--input /data/raw_videos --output /data/processed"
+```
+
+Select `module2` through `module7` and pass that module's normal CLI arguments
+in `--arguments`. The runner does not start an HTTP service; Offline modules are
+batch jobs.
+
+For the checked Docker Desktop, VS Code extension, Modal Volume, and M-GPUX
+Sandbox workflow, see [docs/MGPUX_DOCKER_GUIDE.md](docs/MGPUX_DOCKER_GUIDE.md).
+
 ## Testing
 
-Each module contains its own self-contained test suite located in its `tests/` subdirectory.
-To run all tests from the root:
+Each module contains its own self-contained test suite located in its `tests/`
+subdirectory. To run every Offline module suite plus root cross-module and
+Online contract tests from the repository root:
 ```bash
-# Add current directory to PYTHONPATH so packages can be resolved locally
-$env:PYTHONPATH="."
-pytest data_pipeline/shot_keyframe/tests feature_extraction/visual_embedding/tests feature_extraction/asr_transcript/tests feature_extraction/ocr/tests feature_extraction/object_detection/tests
+python scripts/run_all_tests.py -q
 ```
+
+The runner discovers every repository `tests/` directory and executes each in
+an isolated pytest process. This prevents collisions between modules that use
+independent `src/` package layouts. Use `python scripts/run_all_tests.py --list`
+to inspect the discovered suites without running them.
 
 * `feature_extraction/visual_embedding`: Generates feature vectors from keyframes.
 * `feature_extraction/ocr`: Extracts and recognizes text overlay (subtitles, banners) in keyframes.

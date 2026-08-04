@@ -68,7 +68,13 @@ python -m src.text_embedding.cli \
 | `--ocr-dir` | Thư mục chứa JSON của OCR | |
 | `--output-dir` | Thư mục gốc để lưu kết quả Parquet | **Bắt buộc** |
 | `--model-name` | Tên mô hình HuggingFace | `dangvantuan/vietnamese-embedding` |
+| `--model-revision` | Commit/tag Hugging Face bất biến; nếu bỏ trống pipeline ghi resolved commit khi SDK cung cấp | `None` |
 | `--batch-size` | Số lượng mẫu chạy trong một batch | `128` |
 | `--max-length` | Số lượng token tối đa (cho truncation/chunking)| `256` |
 | `--device` | Thiết bị (`cuda` hoặc `cpu`). Tự nhận diện nếu bỏ trống | `None` |
 | `--force` | Ghi đè file nếu đã tồn tại | `False` |
+
+Mỗi row Parquet lưu `model_name`, `model_revision`, `pooling_strategy`,
+`max_length`, `embedding_dimension`, `normalized`, `source_sha256`, và
+`artifact_schema_version`. Resume chỉ skip khi provenance, input fingerprint,
+IDs, dimension và norm vẫn khớp.

@@ -9,9 +9,12 @@ Implements per-video transactional semantics:
 """
 
 import logging
+from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
+import numpy as np
 from tqdm import tqdm
 
 from .clients.milvus_client import (
@@ -37,6 +40,16 @@ from .data_loader import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class VideoSnapshot:
+    """Restorable last-known-good state for one video across all backends."""
+
+    milvus: Dict[str, list]
+    elasticsearch: Dict[str, list]
+    metadata: list
+    objects: list
 
 
 class IndexingOrchestrator:
@@ -73,30 +86,353 @@ class IndexingOrchestrator:
         # SQLite
         self.tabular.delete_by_video_id(video_id)
 
-    def _rollback_milvus(self, video_id: str):
-        """Rollback Milvus records for a video."""
-        try:
-            self.milvus.delete_by_video_id(VISUAL_COLLECTION, video_id)
-            self.milvus.delete_by_video_id(ASR_COLLECTION, video_id)
-            self.milvus.delete_by_video_id(SUMMARY_COLLECTION, video_id)
-            self.milvus.delete_by_video_id(OCR_COLLECTION, video_id)
-        except Exception as e:
-            logger.error(f"Failed to rollback Milvus for {video_id}: {e}")
+    @staticmethod
+    def _snapshot_records(value) -> list:
+        """Normalize real client results while keeping legacy mocks harmless."""
+        return value if isinstance(value, list) else []
 
-    def _rollback_es(self, video_id: str):
-        """Rollback Elasticsearch records for a video."""
-        try:
-            self.es.delete_by_video_id(OCR_INDEX, video_id)
-            self.es.delete_by_video_id(ASR_INDEX, video_id)
-            self.es.delete_by_video_id(SUMMARY_INDEX, video_id)
-        except Exception as e:
-            logger.error(f"Failed to rollback ES for {video_id}: {e}")
+    def _capture_snapshot(self, video_id: str) -> VideoSnapshot:
+        """Capture every backend before the first destructive mutation."""
+        milvus_snapshot = {
+            collection: self._snapshot_records(
+                self.milvus.snapshot_by_video_id(collection, video_id)
+            )
+            for collection in (
+                VISUAL_COLLECTION,
+                ASR_COLLECTION,
+                SUMMARY_COLLECTION,
+                OCR_COLLECTION,
+            )
+        }
+        es_snapshot = {
+            index_name: self._snapshot_records(
+                self.es.snapshot_by_video_id(index_name, video_id)
+            )
+            for index_name in (OCR_INDEX, ASR_INDEX, SUMMARY_INDEX)
+        }
+        tabular_snapshot = self.tabular.snapshot_by_video_id(video_id)
+        if (
+            isinstance(tabular_snapshot, tuple)
+            and len(tabular_snapshot) == 2
+        ):
+            metadata = self._snapshot_records(tabular_snapshot[0])
+            objects = self._snapshot_records(tabular_snapshot[1])
+        else:
+            metadata = []
+            objects = []
+
+        return VideoSnapshot(
+            milvus=milvus_snapshot,
+            elasticsearch=es_snapshot,
+            metadata=metadata,
+            objects=objects,
+        )
+
+    def _restore_snapshot(
+        self,
+        video_id: str,
+        snapshot: VideoSnapshot,
+    ) -> None:
+        """Remove partial writes and restore the captured cross-DB state."""
+        self._delete_video_from_all(video_id)
+
+        for collection_name, records in snapshot.milvus.items():
+            if not records:
+                continue
+            dimension = len(records[0]["embedding"])
+            self._insert_batched(
+                records,
+                lambda batch, name=collection_name, dim=dimension: (
+                    self.milvus.insert_batch(name, batch, dim)
+                ),
+                self.batch_size,
+            )
+
+        for index_name, documents in snapshot.elasticsearch.items():
+            if documents:
+                self.es.restore_snapshot(index_name, documents)
+
+        self.tabular.restore_snapshot(
+            snapshot.metadata,
+            snapshot.objects,
+        )
+
+    @staticmethod
+    def _same_record_keys(
+        existing: list,
+        expected: list,
+        fields: tuple[str, ...],
+    ) -> bool:
+        """Compare record identity as a multiset, preserving duplicates."""
+        def keys(records: list) -> Counter:
+            return Counter(
+                tuple(str(record.get(field, "")) for field in fields)
+                for record in records
+            )
+
+        return keys(existing) == keys(expected)
+
+    def _snapshot_matches_inputs(
+        self,
+        snapshot: VideoSnapshot,
+        *,
+        visual_records: list,
+        asr_emb_records: list,
+        summary_emb_records: list,
+        ocr_emb_records: list,
+        ocr_text_records: list,
+        asr_text_records: list,
+        summary_text_records: list,
+        metadata_records: list,
+        object_records: list,
+    ) -> bool:
+        """Return whether every persisted stream has the expected identities."""
+        es_sources = {
+            index_name: [
+                document.get("_source", {})
+                for document in documents
+            ]
+            for index_name, documents in snapshot.elasticsearch.items()
+        }
+        comparisons = (
+            (
+                snapshot.milvus[VISUAL_COLLECTION],
+                visual_records,
+                ("frame_id",),
+            ),
+            (
+                snapshot.milvus[ASR_COLLECTION],
+                asr_emb_records,
+                ("video_id", "interval_id"),
+            ),
+            (
+                snapshot.milvus[SUMMARY_COLLECTION],
+                summary_emb_records,
+                ("video_id",),
+            ),
+            (
+                snapshot.milvus[OCR_COLLECTION],
+                ocr_emb_records,
+                ("frame_id",),
+            ),
+            (
+                es_sources[OCR_INDEX],
+                ocr_text_records,
+                ("frame_id",),
+            ),
+            (
+                es_sources[ASR_INDEX],
+                asr_text_records,
+                ("video_id", "interval_id"),
+            ),
+            (
+                es_sources[SUMMARY_INDEX],
+                summary_text_records,
+                ("video_id",),
+            ),
+            (snapshot.metadata, metadata_records, ("frame_id",)),
+            (
+                snapshot.objects,
+                object_records,
+                (
+                    "frame_id",
+                    "label",
+                    "confidence",
+                    "x_min",
+                    "y_min",
+                    "x_max",
+                    "y_max",
+                    "model_source",
+                ),
+            ),
+        )
+        return all(
+            self._same_record_keys(existing, expected, fields)
+            for existing, expected, fields in comparisons
+        )
+
+    @staticmethod
+    def _validate_vector_snapshot(
+        records: list,
+        expected_dimension: Optional[int],
+        stream_name: str,
+    ) -> None:
+        if not records:
+            return
+        if expected_dimension is None or expected_dimension <= 0:
+            raise ValueError(
+                f"{stream_name} has records but no valid dimension."
+            )
+        for index, record in enumerate(records):
+            try:
+                vector = np.asarray(
+                    record["embedding"],
+                    dtype=np.float32,
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"{stream_name} record {index} has invalid embedding."
+                ) from exc
+            if vector.shape != (expected_dimension,):
+                raise ValueError(
+                    f"{stream_name} record {index} has dimension "
+                    f"{vector.size}, expected {expected_dimension}."
+                )
+            if not np.isfinite(vector).all():
+                raise ValueError(
+                    f"{stream_name} record {index} is non-finite."
+                )
+            if not np.isclose(
+                np.linalg.norm(vector),
+                1.0,
+                atol=1e-3,
+                rtol=1e-3,
+            ):
+                raise ValueError(
+                    f"{stream_name} record {index} is not L2-normalized."
+                )
+
+    def _validate_post_index(
+        self,
+        snapshot: VideoSnapshot,
+        *,
+        visual_records: list,
+        asr_emb_records: list,
+        summary_emb_records: list,
+        ocr_emb_records: list,
+        ocr_text_records: list,
+        asr_text_records: list,
+        summary_text_records: list,
+        metadata_records: list,
+        object_records: list,
+        visual_dim: Optional[int],
+        text_dim: Optional[int],
+        ocr_dim: Optional[int],
+    ) -> None:
+        """Validate counts, join IDs, vector shape, and norm after inserts."""
+        if not self._snapshot_matches_inputs(
+            snapshot,
+            visual_records=visual_records,
+            asr_emb_records=asr_emb_records,
+            summary_emb_records=summary_emb_records,
+            ocr_emb_records=ocr_emb_records,
+            ocr_text_records=ocr_text_records,
+            asr_text_records=asr_text_records,
+            summary_text_records=summary_text_records,
+            metadata_records=metadata_records,
+            object_records=object_records,
+        ):
+            raise ValueError(
+                "Post-index record counts or identifiers do not match "
+                "the producer artifacts."
+            )
+
+        visual_ids = {
+            record["frame_id"]
+            for record in snapshot.milvus[VISUAL_COLLECTION]
+        }
+        metadata_ids = {
+            record["frame_id"]
+            for record in snapshot.metadata
+        }
+        if not visual_ids or visual_ids != metadata_ids:
+            raise ValueError(
+                "Post-index visual and metadata frame IDs do not match."
+            )
+
+        ocr_ids = {
+            record["frame_id"]
+            for record in snapshot.milvus[OCR_COLLECTION]
+        }
+        ocr_text_ids = {
+            document["_source"]["frame_id"]
+            for document in snapshot.elasticsearch[OCR_INDEX]
+        }
+        object_ids = {
+            record["frame_id"]
+            for record in snapshot.objects
+        }
+        if not (ocr_ids | ocr_text_ids | object_ids).issubset(
+            metadata_ids
+        ):
+            raise ValueError(
+                "Post-index OCR/object frame IDs are not a subset of "
+                "metadata frame IDs."
+            )
+
+        asr_vector_ids = {
+            (record["video_id"], str(record["interval_id"]))
+            for record in snapshot.milvus[ASR_COLLECTION]
+        }
+        asr_text_ids = {
+            (
+                document["_source"]["video_id"],
+                str(document["_source"]["interval_id"]),
+            )
+            for document in snapshot.elasticsearch[ASR_INDEX]
+        }
+        if asr_vector_ids != asr_text_ids:
+            raise ValueError(
+                "Post-index ASR vector and text interval IDs do not match."
+            )
+
+        summary_vector_ids = {
+            record["video_id"]
+            for record in snapshot.milvus[SUMMARY_COLLECTION]
+        }
+        summary_text_ids = {
+            document["_source"]["video_id"]
+            for document in snapshot.elasticsearch[SUMMARY_INDEX]
+        }
+        if summary_vector_ids != summary_text_ids:
+            raise ValueError(
+                "Post-index summary vector and text video IDs do not match."
+            )
+
+        self._validate_vector_snapshot(
+            snapshot.milvus[VISUAL_COLLECTION],
+            visual_dim,
+            "visual",
+        )
+        self._validate_vector_snapshot(
+            snapshot.milvus[ASR_COLLECTION],
+            text_dim,
+            "ASR",
+        )
+        self._validate_vector_snapshot(
+            snapshot.milvus[SUMMARY_COLLECTION],
+            text_dim,
+            "summary",
+        )
+        self._validate_vector_snapshot(
+            snapshot.milvus[OCR_COLLECTION],
+            ocr_dim or text_dim,
+            "OCR",
+        )
 
     def _insert_batched(self, items: list, insert_fn, batch_size: int):
         """Helper to insert items in batches."""
         for i in range(0, len(items), batch_size):
             batch = items[i : i + batch_size]
             insert_fn(batch)
+
+    def _bulk_index_exact(
+        self,
+        index_name: str,
+        documents: list,
+        id_field: str,
+    ) -> None:
+        """Require Elasticsearch to acknowledge every document in a batch."""
+        inserted_count = self.es.bulk_index(
+            index_name,
+            documents,
+            id_field=id_field,
+        )
+        if inserted_count != len(documents):
+            raise RuntimeError(
+                f"Elasticsearch indexed {inserted_count}/"
+                f"{len(documents)} documents into {index_name}."
+            )
 
     def process_video(
         self,
@@ -105,6 +441,7 @@ class IndexingOrchestrator:
         visual_dim: Optional[int],
         text_dim: Optional[int],
         ocr_dim: Optional[int] = None,
+        force: bool = False,
     ) -> bool:
         """
         Process a single video: load data → delete old → insert Milvus →
@@ -124,11 +461,67 @@ class IndexingOrchestrator:
         summary_text_records = load_video_summary(data_dir, video_id)
         metadata_records, object_records = load_metadata_and_objects(data_dir, video_id)
 
-        # ===== PHASE 1: Delete old records (idempotent cleanup) =====
-        self._delete_video_from_all(video_id)
+        core_errors = []
+        if not visual_records:
+            core_errors.append("visual embeddings are missing")
+        if not metadata_records:
+            core_errors.append("frame metadata is missing")
+        if visual_records and (visual_dim is None or visual_dim <= 0):
+            core_errors.append("visual embedding dimension is missing")
+        if (
+            (asr_emb_records or summary_emb_records)
+            and (text_dim is None or text_dim <= 0)
+        ):
+            core_errors.append("text embedding dimension is missing")
+        effective_ocr_dim = ocr_dim or text_dim
+        if (
+            ocr_emb_records
+            and (effective_ocr_dim is None or effective_ocr_dim <= 0)
+        ):
+            core_errors.append("OCR embedding dimension is missing")
+        if core_errors:
+            logger.error(
+                "Core artifact validation failed for %s: %s",
+                video_id,
+                "; ".join(core_errors),
+            )
+            return False
 
-        # ===== PHASE 2: Insert into Milvus =====
         try:
+            # A complete snapshot is mandatory before any destructive cleanup.
+            snapshot = self._capture_snapshot(video_id)
+        except Exception:
+            logger.exception(
+                "Could not snapshot existing data for %s; replacement "
+                "was aborted before delete.",
+                video_id,
+            )
+            return False
+
+        if not force and self._snapshot_matches_inputs(
+            snapshot,
+            visual_records=visual_records,
+            asr_emb_records=asr_emb_records,
+            summary_emb_records=summary_emb_records,
+            ocr_emb_records=ocr_emb_records,
+            ocr_text_records=ocr_text_records,
+            asr_text_records=asr_text_records,
+            summary_text_records=summary_text_records,
+            metadata_records=metadata_records,
+            object_records=object_records,
+        ):
+            logger.info(
+                "Skipping %s because all indexed record identities match. "
+                "Use --force to replace them.",
+                video_id,
+            )
+            return True
+
+        try:
+            # ===== PHASE 1: Delete old records (idempotent cleanup) =====
+            self._delete_video_from_all(video_id)
+
+            # ===== PHASE 2: Insert into Milvus =====
             if visual_records and visual_dim:
                 self._insert_batched(
                     visual_records,
@@ -151,7 +544,6 @@ class IndexingOrchestrator:
                 )
 
             # OCR embeddings — use ocr_dim if detected, fallback to text_dim
-            effective_ocr_dim = ocr_dim or text_dim
             if ocr_emb_records and effective_ocr_dim:
                 self._insert_batched(
                     ocr_emb_records,
@@ -159,17 +551,15 @@ class IndexingOrchestrator:
                     self.batch_size,
                 )
 
-        except Exception as e:
-            logger.error(f"Milvus insert failed for {video_id}: {e}")
-            self._rollback_milvus(video_id)
-            return False
-
-        # ===== PHASE 3: Insert into Elasticsearch =====
-        try:
+            # ===== PHASE 3: Insert into Elasticsearch =====
             if ocr_text_records:
                 self._insert_batched(
                     ocr_text_records,
-                    lambda batch: self.es.bulk_index(OCR_INDEX, batch, id_field="frame_id"),
+                    lambda batch: self._bulk_index_exact(
+                        OCR_INDEX,
+                        batch,
+                        id_field="frame_id",
+                    ),
                     self.batch_size,
                 )
 
@@ -179,24 +569,26 @@ class IndexingOrchestrator:
                     rec["_doc_id"] = f"{rec['video_id']}_{rec['interval_id']}"
                 self._insert_batched(
                     asr_text_records,
-                    lambda batch: self.es.bulk_index(ASR_INDEX, batch, id_field="_doc_id"),
+                    lambda batch: self._bulk_index_exact(
+                        ASR_INDEX,
+                        batch,
+                        id_field="_doc_id",
+                    ),
                     self.batch_size,
                 )
 
             if summary_text_records:
                 self._insert_batched(
                     summary_text_records,
-                    lambda batch: self.es.bulk_index(SUMMARY_INDEX, batch, id_field="video_id"),
+                    lambda batch: self._bulk_index_exact(
+                        SUMMARY_INDEX,
+                        batch,
+                        id_field="video_id",
+                    ),
                     self.batch_size,
                 )
 
-        except Exception as e:
-            logger.error(f"Elasticsearch insert failed for {video_id}: {e}. Rolling back Milvus.")
-            self._rollback_milvus(video_id)
-            return False
-
-        # ===== PHASE 4: Insert into SQLite =====
-        try:
+            # ===== PHASE 4: Insert into SQLite =====
             if metadata_records:
                 self._insert_batched(
                     metadata_records,
@@ -211,18 +603,76 @@ class IndexingOrchestrator:
                     self.batch_size,
                 )
 
-        except Exception as e:
-            logger.error(
-                f"SQLite insert failed for {video_id}: {e}. Rolling back Milvus + ES."
+            # ===== PHASE 5: Read-after-write commit gate =====
+            indexed_snapshot = self._capture_snapshot(video_id)
+            self._validate_post_index(
+                indexed_snapshot,
+                visual_records=visual_records,
+                asr_emb_records=asr_emb_records,
+                summary_emb_records=summary_emb_records,
+                ocr_emb_records=ocr_emb_records,
+                ocr_text_records=ocr_text_records,
+                asr_text_records=asr_text_records,
+                summary_text_records=summary_text_records,
+                metadata_records=metadata_records,
+                object_records=object_records,
+                visual_dim=visual_dim,
+                text_dim=text_dim,
+                ocr_dim=effective_ocr_dim,
             )
-            self._rollback_milvus(video_id)
-            self._rollback_es(video_id)
+
+        except Exception:
+            logger.exception(
+                "Replacement failed for %s; restoring last-known-good "
+                "snapshot.",
+                video_id,
+            )
+            try:
+                self._restore_snapshot(video_id, snapshot)
+            except Exception:
+                logger.critical(
+                    "Snapshot restore failed for %s.",
+                    video_id,
+                    exc_info=True,
+                )
             return False
 
         logger.info(f"Successfully processed video: {video_id}")
         return True
 
-    def run(self, data_dir: Path, force: bool = False, reset_all: bool = False):
+    def run(
+        self,
+        data_dir: Path,
+        force: bool = False,
+        reset_all: bool = False,
+    ):
+        """Connect all backends, run indexing, and always release clients."""
+        attempted_clients = []
+        try:
+            for client in (self.milvus, self.es, self.tabular):
+                attempted_clients.append(client)
+                client.connect()
+            return self._run_connected(
+                data_dir,
+                force=force,
+                reset_all=reset_all,
+            )
+        finally:
+            for client in reversed(attempted_clients):
+                try:
+                    client.disconnect()
+                except Exception:
+                    logger.exception(
+                        "Failed to disconnect %s.",
+                        client.__class__.__name__,
+                    )
+
+    def _run_connected(
+        self,
+        data_dir: Path,
+        force: bool = False,
+        reset_all: bool = False,
+    ):
         """
         Run the full indexing pipeline for all discovered videos.
 
@@ -231,11 +681,6 @@ class IndexingOrchestrator:
             force: If True, re-process all videos (delete + re-insert).
             reset_all: If True, drop all DBs and recreate schemas first.
         """
-        # Connect all clients
-        self.milvus.connect()
-        self.es.connect()
-        self.tabular.connect()
-
         if reset_all:
             logger.warning("Resetting all databases...")
             self.milvus.reset()
@@ -280,6 +725,28 @@ class IndexingOrchestrator:
             ocr_dim = text_dim
         logger.info(f"Detected OCR embedding dim: {ocr_dim}")
 
+        # Provision new collections or audit every existing vector contract
+        # before any per-video snapshot/delete/insert transaction begins.
+        if visual_dim:
+            self.milvus.create_collection_if_not_exists(
+                VISUAL_COLLECTION,
+                visual_dim,
+            )
+        if text_dim:
+            self.milvus.create_collection_if_not_exists(
+                ASR_COLLECTION,
+                text_dim,
+            )
+            self.milvus.create_collection_if_not_exists(
+                SUMMARY_COLLECTION,
+                text_dim,
+            )
+        if ocr_dim:
+            self.milvus.create_collection_if_not_exists(
+                OCR_COLLECTION,
+                ocr_dim,
+            )
+
         # Discover and process videos
         video_ids = discover_video_ids(data_dir)
 
@@ -287,7 +754,14 @@ class IndexingOrchestrator:
         failed = []
 
         for video_id in tqdm(video_ids, desc="Indexing videos"):
-            ok = self.process_video(video_id, data_dir, visual_dim, text_dim, ocr_dim)
+            ok = self.process_video(
+                video_id,
+                data_dir,
+                visual_dim,
+                text_dim,
+                ocr_dim,
+                force=force,
+            )
             if ok:
                 succeeded.append(video_id)
             else:
@@ -297,3 +771,7 @@ class IndexingOrchestrator:
         logger.info(f"Indexing complete. Success: {len(succeeded)}, Failed: {len(failed)}")
         if failed:
             logger.warning(f"Failed video IDs: {failed}")
+            raise RuntimeError(
+                "Indexing failed for video IDs: "
+                + ", ".join(failed)
+            )

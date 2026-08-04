@@ -1,7 +1,15 @@
 import pytest
 import os
+import sys
 import cv2
 import numpy as np
+from unittest.mock import MagicMock
+
+
+try:
+    import transnetv2_pytorch  # noqa: F401
+except ModuleNotFoundError:
+    sys.modules["transnetv2_pytorch"] = MagicMock()
 
 @pytest.fixture(scope="session")
 def fixture_dir():

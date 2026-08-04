@@ -29,7 +29,7 @@ def parse_args():
     parser.add_argument("--device", type=str, default="cuda:0",
                         help="Device to use for inference (e.g., cuda:0 or cpu)")
     parser.add_argument("--batch-size", type=int, default=1,
-                        help="Batch size (currently unutilized, processing frame-by-frame)")
+                        help="VietOCR recognition crops per inference batch")
     parser.add_argument("--workers", type=int, default=1,
                         help="Number of parallel workers to process videos")
     parser.add_argument("--force", action="store_true",
@@ -52,7 +52,8 @@ def main():
         backbone=args.vietocr_backbone,
         use_gpu=use_gpu,
         force=args.force,
-        workers=args.workers
+        workers=args.workers,
+        batch_size=args.batch_size,
     )
 
 if __name__ == "__main__":

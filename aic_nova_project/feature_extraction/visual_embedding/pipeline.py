@@ -12,6 +12,7 @@ from datetime import timedelta
 from .encoders import PECoreEncoder
 from .metadata_reader import read_metadata
 from .embedding_writer import write_embeddings_to_parquet
+from .resume_validation import visual_output_is_valid
 
 # Setup basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
@@ -96,7 +97,12 @@ def process_video_batch(
                     
                     for i in range(len(sub_records)):
                         record_out = sub_records[i].copy()
-                        record_out["model_name"] = "PE-Core-bigG-14-448"
+                        source_stat = os.stat(record_out["file_path"])
+                        record_out["model_name"] = encoder.model_id
+                        record_out["model_id"] = encoder.model_id
+                        record_out["precision"] = encoder.precision
+                        record_out["source_size_bytes"] = source_stat.st_size
+                        record_out["source_mtime_ns"] = source_stat.st_mtime_ns
                         record_out["embedding_dim"] = embeddings.shape[1]
                         record_out["embedding"] = embeddings[i]
                         batch_encoded_records.append(record_out)
@@ -130,7 +136,12 @@ def process_video_batch(
                 else:
                     raise e
                     
-    # Write to Parquet if we have encoded records
+    if len(encoded_records) != len(records):
+        raise RuntimeError(
+            f"Visual embedding output is incomplete for {video_id}: "
+            f"encoded {len(encoded_records)} of {len(records)} frames"
+        )
+
     if encoded_records:
         write_embeddings_to_parquet(video_id, encoded_records, output_dir)
         
@@ -190,16 +201,19 @@ def run_pipeline(
         
         # Check if already processed
         if not force and os.path.exists(output_file):
-            try:
-                # Basic verify: check if row count matches
-                import pyarrow.parquet as pq
-                meta = pq.read_metadata(output_file)
-                if meta.num_rows == len(v_records):
-                    logger.info(f"Skipping {video_id} (already processed {len(v_records)} frames).")
-                    total_processed += len(v_records)
-                    continue
-            except Exception as e:
-                logger.warning(f"Failed to verify existing parquet for {video_id}, will re-process. Error: {e}")
+            if visual_output_is_valid(
+                output_file,
+                v_records,
+                model_id=encoder.model_id,
+                precision=encoder.precision,
+            ):
+                logger.info(f"Skipping {video_id} (already processed {len(v_records)} frames).")
+                total_processed += len(v_records)
+                continue
+            logger.warning(
+                f"Existing visual artifact for {video_id} is stale or invalid; "
+                "re-processing."
+            )
                 
         logger.info(f"Processing video {video_id} ({idx+1}/{total_videos}) with {len(v_records)} frames...")
         

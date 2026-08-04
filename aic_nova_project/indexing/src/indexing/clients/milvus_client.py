@@ -119,8 +119,13 @@ class MilvusVectorClient:
         if it does not already exist. Dimension is a runtime parameter.
         """
         if utility.has_collection(name, using=self.alias):
-            logger.info(f"Collection '{name}' already exists.")
-            return Collection(name, using=self.alias)
+            collection = Collection(name, using=self.alias)
+            self._audit_collection(collection, name, dim)
+            logger.info(
+                "Collection '%s' already exists and passed schema audit.",
+                name,
+            )
+            return collection
 
         schema_builders = {
             VISUAL_COLLECTION: _build_visual_schema,
@@ -141,6 +146,69 @@ class MilvusVectorClient:
         logger.info(f"Created collection '{name}' with dim={dim} and HNSW index.")
 
         return collection
+
+    @staticmethod
+    def _field_contract(field: FieldSchema) -> Dict[str, Any]:
+        """Extract stable field properties for exact schema comparison."""
+        return {
+            "name": field.name,
+            "dtype": field.dtype,
+            "is_primary": bool(getattr(field, "is_primary", False)),
+            "auto_id": bool(getattr(field, "auto_id", False)),
+            "params": dict(getattr(field, "params", {}) or {}),
+        }
+
+    def _audit_collection(
+        self,
+        collection: Collection,
+        name: str,
+        dim: int,
+    ) -> None:
+        schema_builders = {
+            VISUAL_COLLECTION: _build_visual_schema,
+            ASR_COLLECTION: _build_asr_schema,
+            SUMMARY_COLLECTION: _build_summary_schema,
+            OCR_COLLECTION: _build_ocr_schema,
+        }
+        builder = schema_builders.get(name)
+        if builder is None:
+            raise ValueError(f"Unknown collection name: {name}")
+
+        expected_fields = [
+            self._field_contract(field)
+            for field in builder(dim).fields
+        ]
+        actual_fields = [
+            self._field_contract(field)
+            for field in collection.schema.fields
+        ]
+        if actual_fields != expected_fields:
+            raise ValueError(
+                f"Milvus schema contract mismatch for '{name}'."
+            )
+
+        embedding_indexes = [
+            index
+            for index in collection.indexes
+            if getattr(index, "field_name", None) == "embedding"
+        ]
+        if len(embedding_indexes) != 1:
+            raise ValueError(
+                f"Milvus schema contract mismatch for '{name}': "
+                "expected exactly one embedding index."
+            )
+        actual_index = getattr(embedding_indexes[0], "params", {}) or {}
+        if (
+            actual_index.get("index_type")
+            != HNSW_INDEX_PARAMS["index_type"]
+            or actual_index.get("metric_type")
+            != HNSW_INDEX_PARAMS["metric_type"]
+            or actual_index.get("params")
+            != HNSW_INDEX_PARAMS["params"]
+        ):
+            raise ValueError(
+                f"Milvus index contract mismatch for '{name}'."
+            )
 
     def insert_batch(
         self, collection_name: str, records: List[Dict[str, Any]], dim: int
@@ -178,6 +246,41 @@ class MilvusVectorClient:
         logger.info(
             f"Deleted records for video_id='{video_id}' from '{collection_name}'."
         )
+
+    def snapshot_by_video_id(
+        self,
+        collection_name: str,
+        video_id: str,
+    ) -> List[Dict[str, Any]]:
+        """Read restorable records before a destructive per-video replace."""
+        if not utility.has_collection(collection_name, using=self.alias):
+            return []
+
+        collection = Collection(collection_name, using=self.alias)
+        collection.load()
+        output_fields = [
+            field.name
+            for field in collection.schema.fields
+            if not (
+                getattr(field, "is_primary", False)
+                and getattr(field, "auto_id", False)
+            )
+        ]
+        escaped_video_id = (
+            video_id.replace("\\", "\\\\").replace('"', '\\"')
+        )
+        records = collection.query(
+            expr=f'video_id == "{escaped_video_id}"',
+            output_fields=output_fields,
+        )
+        return [
+            {
+                key: value
+                for key, value in record.items()
+                if key != "pk"
+            }
+            for record in records
+        ]
 
     def reset(self):
         """Drop all managed collections."""

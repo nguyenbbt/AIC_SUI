@@ -6,6 +6,7 @@ from typing import List
 from .transnet_wrapper import TransNetPredictor
 from .keyframe_extractor import KeyframeExtractor
 from .metadata_schema import VideoMetadata
+from .resume_validation import keyframe_artifacts_are_valid
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,14 @@ class VideoProcessor:
                 try:
                     with open(metadata_path, 'r', encoding='utf-8') as f:
                         data = json.load(f)
-                        VideoMetadata.model_validate(data)
+                        metadata = VideoMetadata.model_validate(data)
+                    if not keyframe_artifacts_are_valid(
+                        metadata,
+                        self.output_dir,
+                    ):
+                        raise ValueError(
+                            "One or more keyframe artifacts are missing or unreadable"
+                        )
                     logger.info(f"Skipping {video_id} - already processed successfully.")
                     return True
                 except Exception as e:

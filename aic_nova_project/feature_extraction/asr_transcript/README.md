@@ -42,12 +42,11 @@ For this module specifically, you need:
 ### 1. Run via Docker (Recommended)
 Build the image:
 ```bash
-docker build -t aic-pipeline .
+docker build -t aic-pipeline -f feature_extraction/asr_transcript/Dockerfile .
 ```
 Run the container:
 ```bash
 docker run --gpus all -v /absolute/path/to/data:/data -e GEMINI_API_KEY=$GEMINI_API_KEY aic-pipeline \
-    -m feature_extraction.asr_transcript.cli \
     --video-dir /data/raw_videos \
     --metadata-dir /data/metadata \
     --caption-dir /data/captions \
@@ -83,6 +82,8 @@ python -m feature_extraction.asr_transcript.cli `
 - `--whisper-size`: `tiny`, `small`, `medium` (default), `large`.
 - `--group-size`: Number of ASR segments to group into a single cleaning interval (default: 5).
 - `--concurrency`: Number of parallel LLM calls (default: 10).
+- `--summary-chunk-chars`: Maximum transcript characters sent in one
+  hierarchical summary request (default: 12000).
 - `--device`: `auto` (default - uses GPU if available), `cpu`, or `cuda`. Controls where the local ASR model (and local LLM) runs.
 
 ## Outputs

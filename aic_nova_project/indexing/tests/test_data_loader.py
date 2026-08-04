@@ -24,6 +24,7 @@ from src.indexing.data_loader import (
     load_text_asr_embeddings,
     load_text_ocr_embeddings,
 )
+from src.indexing.clients.es_client import ASR_MAPPING
 
 
 @pytest.fixture
@@ -70,12 +71,12 @@ def data_dir():
             "video_id": video_id,
             "frames": [
                 {
-                    "frame_id": "shot_00000_pos_050",
+                    "frame_id": f"{video_id}_00000_050",
                     "shot_id": 0,
                     "ocr_text_concat": "Xin chào Việt Nam",
                 },
                 {
-                    "frame_id": "shot_00001_pos_050",
+                    "frame_id": f"{video_id}_00001_050",
                     "shot_id": 1,
                     "ocr_text_concat": "",  # empty — should be skipped
                 },
@@ -87,20 +88,25 @@ def data_dir():
         # --- ASR Transcripts JSON (Module 3) ---
         transcript_dir = root / "transcripts"
         transcript_dir.mkdir()
-        asr = [
-            {
-                "interval_id": "0",
-                "start_time": 0.0,
-                "end_time": 5.0,
-                "cleaned_text": "Đây là tin tức hôm nay.",
-            },
-            {
-                "interval_id": "1",
-                "start_time": 5.0,
-                "end_time": 10.0,
-                "cleaned_text": "",  # empty — should be skipped
-            },
-        ]
+        asr = {
+            "video_id": video_id,
+            "source": "asr",
+            "llm_provider": "MockTranscriptLLM",
+            "intervals": [
+                {
+                    "interval_id": "0",
+                    "start_time_sec": 0.0,
+                    "end_time_sec": 5.0,
+                    "cleaned_text": "Đây là tin tức hôm nay.",
+                },
+                {
+                    "interval_id": "1",
+                    "start_time_sec": 5.0,
+                    "end_time_sec": 10.0,
+                    "cleaned_text": "",  # empty — should be skipped
+                },
+            ],
+        }
         with open(
             transcript_dir / f"{video_id}_cleaned.json", "w", encoding="utf-8"
         ) as f:
@@ -120,7 +126,7 @@ def data_dir():
             "video_id": video_id,
             "frames": [
                 {
-                    "frame_id": "shot_00000_pos_050",
+                    "frame_id": f"{video_id}_00000_050",
                     "shot_id": 0,
                     "objects": [
                         {
@@ -151,13 +157,21 @@ def data_dir():
                     "frame_id": "shot_00000_pos_050",
                     "video_id": video_id,
                     "shot_id": 0,
-                    "embedding": np.random.rand(512).tolist(),
+                    "embedding": (
+                        lambda vector: (
+                            vector / np.linalg.norm(vector)
+                        ).tolist()
+                    )(np.random.rand(512)),
                 },
                 {
                     "frame_id": "shot_00001_pos_050",
                     "video_id": video_id,
                     "shot_id": 1,
-                    "embedding": np.random.rand(512).tolist(),
+                    "embedding": (
+                        lambda vector: (
+                            vector / np.linalg.norm(vector)
+                        ).tolist()
+                    )(np.random.rand(512)),
                 },
             ]
         )
@@ -174,7 +188,11 @@ def data_dir():
                     "start_time_sec": 0.0,
                     "end_time_sec": 5.0,
                     "text": "Đây là tin tức hôm nay.",
-                    "embedding": np.random.rand(768).tolist(),
+                    "embedding": (
+                        lambda vector: (
+                            vector / np.linalg.norm(vector)
+                        ).tolist()
+                    )(np.random.rand(768)),
                 }
             ]
         )
@@ -186,9 +204,13 @@ def data_dir():
         ocr_emb_df = pd.DataFrame(
             [
                 {
-                    "frame_id": "shot_00000_pos_050",
+                    "frame_id": f"{video_id}_00000_050",
                     "video_id": video_id,
-                    "embedding": np.random.rand(768).tolist(),
+                    "embedding": (
+                        lambda vector: (
+                            vector / np.linalg.norm(vector)
+                        ).tolist()
+                    )(np.random.rand(768)),
                 }
             ]
         )
@@ -207,6 +229,43 @@ class TestDiscoverVideoIds:
         ids = discover_video_ids(tmp_path)
         assert ids == []
 
+    def test_discovers_ids_from_every_artifact_family(self, tmp_path):
+        parquet_dirs = {
+            "embeddings/visual": "V_VISUAL",
+            "embeddings/text_asr": "V_ASR_EMB",
+            "embeddings/text_summary": "V_SUM_EMB",
+            "embeddings/text_ocr": "V_OCR_EMB",
+        }
+        for relative_dir, video_id in parquet_dirs.items():
+            directory = tmp_path / relative_dir
+            directory.mkdir(parents=True)
+            (directory / f"{video_id}.parquet").write_bytes(b"fixture")
+
+        json_artifacts = {
+            "transcripts/renamed_cleaned.json": "V_TRANSCRIPT",
+            "summaries/renamed.json": "V_SUMMARY",
+            "object_detection/renamed.json": "V_OBJECT",
+            "ocr/renamed.json": "V_OCR",
+        }
+        for relative_path, video_id in json_artifacts.items():
+            path = tmp_path / relative_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps({"video_id": video_id}),
+                encoding="utf-8",
+            )
+
+        assert set(discover_video_ids(tmp_path)) == {
+            "V_VISUAL",
+            "V_ASR_EMB",
+            "V_SUM_EMB",
+            "V_OCR_EMB",
+            "V_TRANSCRIPT",
+            "V_SUMMARY",
+            "V_OBJECT",
+            "V_OCR",
+        }
+
 
 class TestDetectEmbeddingDim:
     def test_detects_visual_dim(self, data_dir):
@@ -222,6 +281,36 @@ class TestDetectEmbeddingDim:
     def test_returns_none_for_missing_dir(self, tmp_path):
         dim = detect_embedding_dim(tmp_path / "nonexistent")
         assert dim is None
+
+    def test_rejects_dimension_mismatch_in_later_file(self, tmp_path):
+        pd.DataFrame(
+            [{"embedding": [1.0, 0.0]}]
+        ).to_parquet(tmp_path / "V001.parquet", index=False)
+        pd.DataFrame(
+            [{"embedding": [1.0, 0.0, 0.0]}]
+        ).to_parquet(tmp_path / "V002.parquet", index=False)
+
+        with pytest.raises(ValueError, match="dimension"):
+            detect_embedding_dim(tmp_path)
+
+    @pytest.mark.parametrize(
+        "embedding",
+        [
+            [2.0, 0.0],
+            [float("nan"), 0.0],
+        ],
+    )
+    def test_rejects_non_normalized_or_non_finite_vector(
+        self,
+        tmp_path,
+        embedding,
+    ):
+        pd.DataFrame(
+            [{"embedding": embedding}]
+        ).to_parquet(tmp_path / "V001.parquet", index=False)
+
+        with pytest.raises(ValueError, match="embedding"):
+            detect_embedding_dim(tmp_path)
 
 
 class TestLoadOcrTexts:
@@ -239,7 +328,65 @@ class TestLoadAsrTranscripts:
         root, video_id = data_dir
         records = load_asr_transcripts(root, video_id)
         assert len(records) == 1  # second interval had empty text
+        assert records[0]["video_id"] == video_id
+        assert records[0]["interval_id"] == "0"
+        assert records[0]["start_time_sec"] == 0.0
+        assert records[0]["end_time_sec"] == 5.0
         assert records[0]["cleaned_text"] == "Đây là tin tức hôm nay."
+
+    def test_normalizes_legacy_integer_interval_id(self, data_dir):
+        root, video_id = data_dir
+        transcript_path = root / "transcripts" / f"{video_id}_cleaned.json"
+        with open(transcript_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        payload["intervals"][0]["interval_id"] = 0
+        with open(transcript_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+
+        records = load_asr_transcripts(root, video_id)
+
+        assert records[0]["interval_id"] == "0"
+
+    def test_rejects_noncanonical_envelope(self, data_dir):
+        root, video_id = data_dir
+        transcript_path = root / "transcripts" / f"{video_id}_cleaned.json"
+        with open(transcript_path, "w", encoding="utf-8") as f:
+            json.dump([{"interval_id": "0", "cleaned_text": "text"}], f)
+
+        assert load_asr_transcripts(root, video_id) == []
+
+    def test_rejects_video_id_mismatch(self, data_dir):
+        root, video_id = data_dir
+        transcript_path = root / "transcripts" / f"{video_id}_cleaned.json"
+        with open(transcript_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        payload["video_id"] = "ANOTHER_VIDEO"
+        with open(transcript_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+
+        assert load_asr_transcripts(root, video_id) == []
+
+    def test_rejects_legacy_timestamp_names(self, data_dir):
+        root, video_id = data_dir
+        transcript_path = root / "transcripts" / f"{video_id}_cleaned.json"
+        with open(transcript_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        interval = payload["intervals"][0]
+        interval["start_time"] = interval.pop("start_time_sec")
+        interval["end_time"] = interval.pop("end_time_sec")
+        with open(transcript_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+
+        assert load_asr_transcripts(root, video_id) == []
+
+
+def test_asr_mapping_uses_canonical_timestamp_names():
+    properties = ASR_MAPPING["properties"]
+
+    assert properties["start_time_sec"] == {"type": "float"}
+    assert properties["end_time_sec"] == {"type": "float"}
+    assert "start_time" not in properties
+    assert "end_time" not in properties
 
 
 class TestLoadVideoSummary:
@@ -275,6 +422,8 @@ class TestLoadVisualEmbeddings:
         records = load_visual_embeddings(root, video_id)
         assert len(records) == 2
         assert len(records[0]["embedding"]) == 512
+        assert records[0]["frame_id"] == f"{video_id}_00000_050"
+        assert records[1]["frame_id"] == f"{video_id}_00001_050"
 
 
 class TestLoadTextAsrEmbeddings:
@@ -312,10 +461,28 @@ class TestNormalizeFrameId:
         result = normalize_frame_id("shot_00012_pos_050", "TEST_VIDEO_001")
         assert result == "TEST_VIDEO_001_00012_050"
 
+    @pytest.mark.parametrize(
+        "raw_frame_id",
+        [
+            "",
+            "garbage",
+            "V001_",
+            "V001_1_2",
+            "V001_00000_015_extra",
+            "V002_00000_015",
+            "shot_1_pos_15",
+            "shot_00000_pos_015.webp",
+        ],
+    )
+    def test_rejects_invalid_or_wrong_video_ids(self, raw_frame_id):
+        with pytest.raises(ValueError, match="frame_id"):
+            normalize_frame_id(raw_frame_id, "V001")
+
     def test_consistency_across_loaders(self, data_dir):
         """Verify that frame_id from metadata, OCR, and objects are identical."""
         root, video_id = data_dir
         meta, objs = load_metadata_and_objects(root, video_id)
+        visual_records = load_visual_embeddings(root, video_id)
         ocr_records = load_ocr_texts(root, video_id)
         ocr_emb_records = load_text_ocr_embeddings(root, video_id)
 
@@ -323,5 +490,6 @@ class TestNormalizeFrameId:
         expected = f"{video_id}_00000_050"
         assert meta[0]["frame_id"] == expected
         assert objs[0]["frame_id"] == expected
+        assert visual_records[0]["frame_id"] == expected
         assert ocr_records[0]["frame_id"] == expected
         assert ocr_emb_records[0]["frame_id"] == expected

@@ -18,7 +18,7 @@ Nhiệm vụ chính: Tách video thành các shots bằng TransNetV2, trích xu�
 
 1. Cài đặt thư viện:
    ```bash
-   pip install -r requirements.txt
+   pip install -r data_pipeline/shot_keyframe/requirements.txt
    ```
 
 2. Chạy pipeline:
@@ -36,23 +36,26 @@ Nhiệm vụ chính: Tách video thành các shots bằng TransNetV2, trích xu�
 
 ## Hướng dẫn build & chạy bằng Docker
 
-Môi trường Docker đảm bảo khả năng chạy offline hoàn toàn (cần tải file weights trước khi build).
+Môi trường Docker dùng duy nhất project root làm build context. Package
+`transnetv2-pytorch` cung cấp weights mặc định; file weights tải riêng là tùy chọn
+và được mount lúc chạy thay vì trở thành điều kiện để build image.
 
-1. Tải pretrained weights:
+1. (Tùy chọn) Tải pretrained weights:
    ```bash
-   python download_weights.py
+   python scripts/download_transnet_weights.py
    ```
-   *Lệnh này sẽ tạo thư mục `weights/` và lưu file `transnetv2-pytorch-weights.pth` vào đó.*
+   *Lệnh này tạo thư mục `weights/`. Có thể mount thư mục đó vào
+   `/app/weights:ro` khi chạy container.*
 
 2. Build Docker Image:
    ```bash
-   docker build -t shot-keyframe .
+   docker build -t shot-keyframe -f data_pipeline/shot_keyframe/Dockerfile .
    ```
 
 3. Chạy container:
    **Chạy bằng CPU:**
    ```bash
-   docker run -v /absolute/path/to/raw_videos:/data/raw_videos -v /absolute/path/to/output:/data/output shot-keyframe --input /data/raw_videos --output /data/output --workers 4
+   docker run -v /absolute/path/to/raw_videos:/data/raw_videos -v /absolute/path/to/output:/data/output -v /absolute/path/to/weights:/app/weights:ro shot-keyframe --input /data/raw_videos --output /data/output --workers 4
    ```
 
    **Chạy bằng GPU (nếu có NVIDIA Docker):**

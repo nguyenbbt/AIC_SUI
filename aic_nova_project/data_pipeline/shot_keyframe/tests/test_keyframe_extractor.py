@@ -1,6 +1,7 @@
 import pytest
 import os
 import tempfile
+from PIL import Image
 from data_pipeline.shot_keyframe.keyframe_extractor import KeyframeExtractor
 
 def test_keyframe_extractor_short_shot(mock_video_path):
@@ -37,3 +38,42 @@ def test_keyframe_extractor_normal_shot(mock_video_path):
         assert kfs[0]["frame_index"] == 15 # 0 + 0.15 * 100
         assert kfs[1]["frame_index"] == 50 # 0 + 0.5 * 100
         assert kfs[2]["frame_index"] == 85 # 0 + 0.85 * 100
+
+
+def test_keyframe_extractor_creates_valid_fallback_image(
+    tmp_path,
+    monkeypatch,
+):
+    class FailedCapture:
+        def isOpened(self):
+            return True
+
+        def get(self, property_id):
+            return 25.0
+
+        def set(self, property_id, value):
+            return True
+
+        def read(self):
+            return False, None
+
+        def release(self):
+            return None
+
+    monkeypatch.setattr(
+        "data_pipeline.shot_keyframe.keyframe_extractor.cv2.VideoCapture",
+        lambda _: FailedCapture(),
+    )
+    extractor = KeyframeExtractor(positions=[0.15])
+
+    metadata, fps = extractor.extract_keyframes(
+        "unreadable.mp4",
+        "V001",
+        [(0, 10)],
+        str(tmp_path / "keyframes"),
+    )
+
+    image_path = tmp_path / metadata[0]["keyframes"][0]["file_path"]
+    with Image.open(image_path) as image:
+        image.verify()
+    assert fps == 25.0

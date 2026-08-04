@@ -4,6 +4,7 @@ CLI entry point for the Multi-DB Indexing module.
 
 import argparse
 import logging
+import os
 from pathlib import Path
 
 from src.indexing.clients.milvus_client import MilvusVectorClient
@@ -18,32 +19,35 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI parser, including m-gpux-rewritable env defaults."""
     parser = argparse.ArgumentParser(
         description="AI Challenge 2026 - Multi-DB Indexing & Ingestion"
     )
+    data_dir_default = os.getenv("DATA_DIR")
     parser.add_argument(
         "--data-dir",
         type=Path,
-        required=True,
+        default=(Path(data_dir_default) if data_dir_default else None),
+        required=data_dir_default is None,
         help="Root data directory (e.g., data/processed)",
     )
     parser.add_argument(
         "--milvus-uri",
         type=str,
-        default="http://localhost:19530",
+        default=os.getenv("MILVUS_URI", "http://localhost:19530"),
         help="Milvus connection URI",
     )
     parser.add_argument(
         "--es-uri",
         type=str,
-        default="http://localhost:9200",
+        default=os.getenv("ES_URI", "http://localhost:9200"),
         help="Elasticsearch connection URI",
     )
     parser.add_argument(
         "--db-uri",
         type=str,
-        default="sqlite:///data/metadata.db",
+        default=os.getenv("DB_URI", "sqlite:///data/metadata.db"),
         help="SQLite database URI (default: sqlite:///data/metadata.db)",
     )
     parser.add_argument(
@@ -62,6 +66,12 @@ def main():
         action="store_true",
         help="Force re-processing of all videos",
     )
+
+    return parser
+
+
+def main():
+    parser = build_parser()
 
     args = parser.parse_args()
 

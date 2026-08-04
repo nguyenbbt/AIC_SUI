@@ -2,14 +2,17 @@ import argparse
 import logging
 from .pipeline import ASRTranscriptPipeline
 
-def setup_logging():
+logger = logging.getLogger(__name__)
+
+
+def setup_logging() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
     
-def main():
+def main() -> int:
     setup_logging()
     parser = argparse.ArgumentParser(description="ASR and Transcript Cleaning/Summarization Pipeline (Module 3)")
     
@@ -24,6 +27,12 @@ def main():
     
     parser.add_argument("--group-size", type=int, default=5, help="Number of ASR segments to group into one cleaning interval.")
     parser.add_argument("--concurrency", type=int, default=10, help="Number of concurrent LLM API calls for cleaning.")
+    parser.add_argument(
+        "--summary-chunk-chars",
+        type=int,
+        default=12_000,
+        help="Maximum transcript characters sent in one summary request.",
+    )
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"], help="Device for local models.")
     parser.add_argument("--force", action="store_true", help="Force overwrite existing outputs.")
     
@@ -40,10 +49,17 @@ def main():
         group_size=args.group_size,
         device=args.device,
         concurrency=args.concurrency,
+        summary_chunk_chars=args.summary_chunk_chars,
         force=args.force
     )
     
-    pipeline.run()
+    try:
+        pipeline.run()
+    except Exception:
+        logger.exception("ASR transcript pipeline failed.")
+        return 1
+
+    return 0
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

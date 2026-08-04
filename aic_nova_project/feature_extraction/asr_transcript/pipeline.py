@@ -3,15 +3,49 @@ import glob
 import json
 import logging
 import asyncio
-from typing import List, Dict, Any, Optional
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Any, Coroutine, Dict, List, Optional, TypeVar
 
 from .audio_extractor import AudioExtractor
 from .caption_parser import CaptionParser
 from .asr_engine import ASREngine
 from .segment_grouper import SegmentGrouper
 from .summarizer import VideoSummarizer
+from .artifact_writer import write_cleaned_transcript, write_video_summary
 
 logger = logging.getLogger(__name__)
+T = TypeVar("T")
+
+
+def _run_coroutine_sync(coroutine: Coroutine[Any, Any, T]) -> T:
+    """Run a coroutine from synchronous code, including inside a running loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coroutine)
+
+    # A running event loop cannot be nested in the same thread. Use a short-lived
+    # worker so synchronous callers embedded in async services remain supported.
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, coroutine).result()
+
+
+def _is_valid_summary_artifact(path: str, video_id: str) -> bool:
+    """Return whether a cached summary is complete and belongs to the video."""
+    try:
+        with open(path, "r", encoding="utf-8") as summary_file:
+            data = json.load(summary_file)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return False
+
+    return (
+        isinstance(data, dict)
+        and data.get("video_id") == video_id
+        and isinstance(data.get("summary"), str)
+        and bool(data["summary"].strip())
+    )
+
 
 class ASRTranscriptPipeline:
     def __init__(self, 
@@ -25,6 +59,7 @@ class ASRTranscriptPipeline:
                  group_size: int = 5,
                  device: str = "auto",
                  concurrency: int = 10,
+                 summary_chunk_chars: int = 12_000,
                  force: bool = False):
         self.video_dir = video_dir
         self.metadata_dir = metadata_dir
@@ -56,7 +91,10 @@ class ASRTranscriptPipeline:
             from .llm.local_llm import LocalTranscriptLLM
             self.llm = LocalTranscriptLLM(model_name=llm_model, device=device)
 
-        self.summarizer = VideoSummarizer(self.llm)
+        self.summarizer = VideoSummarizer(
+            self.llm,
+            max_chunk_chars=summary_chunk_chars,
+        )
 
     def _init_asr_engine(self):
         """Lazy initialization of ASR Engine to save VRAM if not needed."""
@@ -109,7 +147,7 @@ class ASRTranscriptPipeline:
         cleaned_intervals = await asyncio.gather(*tasks)
         return cleaned_intervals
 
-    def process_video(self, video_id: str):
+    def process_video(self, video_id: str) -> None:
         logger.info(f"--- Processing video {video_id} ---")
         
         raw_transcript_path = os.path.join(self.transcripts_dir, f"{video_id}_raw.json")
@@ -136,25 +174,33 @@ class ASRTranscriptPipeline:
                 # Need ASR
                 video_path = self._find_video_file(video_id)
                 if not video_path:
-                    logger.error(f"Video file not found for {video_id}, skipping ASR.")
-                    return
+                    raise FileNotFoundError(
+                        f"Video file not found for {video_id}; ASR cannot run."
+                    )
                     
                 audio_path = os.path.join(self.audio_dir, f"{video_id}.wav")
                 if not AudioExtractor.extract_audio(video_path, audio_path, force=self.force):
-                    logger.error(f"Failed to extract audio for {video_id}, skipping.")
-                    return
+                    raise RuntimeError(
+                        f"Failed to extract audio for {video_id}."
+                    )
                 
                 self._init_asr_engine()
                 segments = self.asr_engine.transcribe(audio_path)
                 source = "asr"
-                
+
+            if not segments:
+                raise RuntimeError(
+                    f"No transcript segments generated for {video_id}."
+                )
+
             # Save raw segments
             with open(raw_transcript_path, 'w', encoding='utf-8') as f:
                 json.dump({"video_id": video_id, "source": source, "segments": segments}, f, ensure_ascii=False, indent=2)
 
         if not segments:
-            logger.warning(f"No segments generated for {video_id}, skipping cleaning.")
-            return
+            raise RuntimeError(
+                f"Cached raw transcript contains no segments for {video_id}."
+            )
 
         # 2. Group and Clean
         cleaned_intervals = []
@@ -167,50 +213,65 @@ class ASRTranscriptPipeline:
             intervals = SegmentGrouper.group_segments(segments, self.group_size)
             logger.info(f"Grouped into {len(intervals)} intervals. Starting LLM cleaning...")
             
-            # Run async cleaning
-            try:
-                loop = asyncio.get_running_loop()
-                # If there's an existing loop, use it
-                cleaned_intervals = loop.run_until_complete(self._clean_video_intervals(intervals))
-            except RuntimeError:
-                # If no loop exists, use asyncio.run
-                cleaned_intervals = asyncio.run(self._clean_video_intervals(intervals))
+            cleaned_intervals = _run_coroutine_sync(
+                self._clean_video_intervals(intervals)
+            )
             
             
-            # Save cleaned transcript
-            with open(cleaned_transcript_path, 'w', encoding='utf-8') as f:
-                output_data = {
-                    "video_id": video_id,
-                    "source": source,
-                    "llm_provider": self.llm.__class__.__name__,
-                    "intervals": cleaned_intervals
-                }
-                json.dump(output_data, f, ensure_ascii=False, indent=2)
+            # Save cleaned transcript through the shared producer serializer.
+            write_cleaned_transcript(
+                Path(cleaned_transcript_path),
+                video_id=video_id,
+                source=source,
+                llm_provider=self.llm.__class__.__name__,
+                intervals=cleaned_intervals,
+            )
 
         # 3. Summarize
-        if os.path.exists(summary_path) and not self.force:
+        if (
+            os.path.exists(summary_path)
+            and not self.force
+            and _is_valid_summary_artifact(summary_path, video_id)
+        ):
             logger.info(f"Summary exists for {video_id}, skipping.")
         else:
+            if os.path.exists(summary_path) and not self.force:
+                logger.warning(
+                    "Cached summary for %s is invalid; regenerating it.",
+                    video_id,
+                )
             logger.info(f"Generating summary for {video_id}...")
             summary_text = self.summarizer.summarize_video(cleaned_intervals)
-            with open(summary_path, 'w', encoding='utf-8') as f:
-                json.dump({
-                    "video_id": video_id,
-                    "summary": summary_text,
-                    "llm_provider": self.llm.__class__.__name__
-                }, f, ensure_ascii=False, indent=2)
+            write_video_summary(
+                Path(summary_path),
+                video_id=video_id,
+                summary=summary_text,
+                llm_provider=self.llm.__class__.__name__,
+            )
             logger.info(f"Finished processing {video_id}.")
 
-    def run(self):
+    def run(self) -> None:
         video_ids = self._get_video_ids()
         logger.info(f"Found {len(video_ids)} videos to process in metadata dir.")
-        
+        failures: Dict[str, str] = {}
+
         for vid in video_ids:
             try:
                 self.process_video(vid)
-            except Exception as e:
-                logger.error(f"Pipeline crashed on video {vid}: {e}")
+            except Exception as exc:
+                logger.exception("Pipeline crashed on video %s", vid)
+                failures[vid] = f"{type(exc).__name__}: {exc}"
                 
         if getattr(self.llm, "total_tokens_used", None) is not None:
             provider_name = self.llm.__class__.__name__.replace("TranscriptLLM", "")
             logger.info(f"Total {provider_name} tokens used in this run: {self.llm.total_tokens_used}")
+
+        if failures:
+            details = "; ".join(
+                f"{video_id}: {reason}"
+                for video_id, reason in failures.items()
+            )
+            raise RuntimeError(
+                "ASR transcript pipeline failed for "
+                f"{len(failures)}/{len(video_ids)} video(s): {details}"
+            )

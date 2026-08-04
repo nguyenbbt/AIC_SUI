@@ -12,7 +12,7 @@ COPY feature_extraction/asr_transcript/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy source code and scripts
-COPY feature_extraction/asr_transcript/ /app/
+COPY feature_extraction/asr_transcript /app/feature_extraction/asr_transcript
 COPY scripts/download_phowhisper.py /app/scripts/
 
 # Set Python path so our module is importable
@@ -22,4 +22,4 @@ ENV PYTHONPATH=/app
 RUN python scripts/download_phowhisper.py --size medium
 
 # Default entrypoint to the CLI
-ENTRYPOINT ["python", "-m", "cli"]
+ENTRYPOINT ["python", "-m", "feature_extraction.asr_transcript.cli"]

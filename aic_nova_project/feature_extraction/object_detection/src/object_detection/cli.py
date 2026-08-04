@@ -63,8 +63,10 @@ def main():
         
         video_keyframe_dir = args.keyframe_dir / video_id
         if not video_keyframe_dir.exists():
-            logger.warning(f"Keyframe directory missing for {video_id}: {video_keyframe_dir}")
-            continue
+            raise FileNotFoundError(
+                f"Keyframe directory missing for {video_id}: "
+                f"{video_keyframe_dir}"
+            )
             
         pipeline.process_video(
             video_id=video_id,

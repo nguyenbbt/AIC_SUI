@@ -13,7 +13,7 @@ This module extracts visual embeddings from video keyframes using the `PE-Core-b
 ## Requirements
 To run locally outside of Docker:
 ```bash
-pip install -r requirements.txt
+pip install -r feature_extraction/visual_embedding/requirements.txt
 ```
 
 ## Running Locally
@@ -29,7 +29,7 @@ The Dockerfile is designed to cache the model weights during the build process, 
 
 ### Build
 ```bash
-docker build -t visual-embedding .
+docker build -t visual-embedding -f feature_extraction/visual_embedding/Dockerfile .
 ```
 
 ### Run (with GPU)

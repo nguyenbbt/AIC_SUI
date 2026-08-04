@@ -16,7 +16,7 @@ This module is packaged as a Docker container.
 ### Build
 
 ```bash
-docker build -t ocr-module .
+docker build -t ocr-module -f feature_extraction/ocr/Dockerfile .
 ```
 *(Note: Building the image will automatically download the required model weights into the container so it can run offline).*
 
@@ -42,14 +42,30 @@ docker run --gpus all -v $(pwd)/data:/data ocr-module \
 - `--mag-ratio`: (Default: 1.5) Image magnification for EasyOCR.
 - `--vietocr-backbone`: `vgg_transformer` (default) or `vgg_seq2seq`.
 - `--confidence-threshold`: (Default: 0.4) Minimum score to keep recognized text.
+- `--batch-size`: Number of cropped regions sent to VietOCR per inference call.
+- `--workers`: Number of videos processed concurrently on CPU. GPU mode requires
+  one worker and uses `--batch-size` for throughput.
 - `--force`: Overwrite existing results.
 
 ## Output Format
 
 The output is a JSON file for each video in the `--output-dir` with the following schema:
+Module 1's local `file_path` is used only to open the keyframe image. Every
+persisted `frame_id` uses the canonical
+`<video_id>_<shot_id>_<position>` format for downstream joins.
+
 ```json
 {
+  "schema_version": 1,
   "video_id": "V001",
+  "provenance": {
+    "detector_model": "easyocr/CRAFT-vi",
+    "recognizer_backbone": "vgg_transformer",
+    "confidence_threshold": 0.4,
+    "width_ths": 0.7,
+    "mag_ratio": 1.5,
+    "recognition_batch_size": 1
+  },
   "frames": [
     {
       "frame_id": "V001_00000_015",

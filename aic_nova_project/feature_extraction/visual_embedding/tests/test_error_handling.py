@@ -2,12 +2,10 @@ import pytest
 import os
 import shutil
 import json
-from pathlib import Path
 import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
 from feature_extraction.visual_embedding.pipeline import run_pipeline
-import pyarrow.parquet as pq
 
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), 'fixtures')
 METADATA_DIR = os.path.join(FIXTURE_DIR, 'metadata')
@@ -38,25 +36,21 @@ def test_error_handling_missing_image():
         json.dump(meta, f)
         
     try:
-        run_pipeline(
-            metadata_dir=err_meta_dir,
-            keyframe_dir=KEYFRAME_DIR,
-            output_dir=OUTPUT_DIR,
-            model_id="hf-hub:timm/PE-Core-bigG-14-448",
-            device="cpu",
-            precision="fp32",
-            batch_size=2,
-            num_workers=0,
-            force=True
-        )
-        
-        # Pipeline should not crash. Output should exist but only have 1 row
+        with pytest.raises(RuntimeError, match="incomplete"):
+            run_pipeline(
+                metadata_dir=err_meta_dir,
+                keyframe_dir=KEYFRAME_DIR,
+                output_dir=OUTPUT_DIR,
+                model_id="hf-hub:timm/PE-Core-bigG-14-448",
+                device="cpu",
+                precision="fp32",
+                batch_size=2,
+                num_workers=0,
+                force=True
+            )
+
         out_file = os.path.join(OUTPUT_DIR, "V002.parquet")
-        assert os.path.exists(out_file)
-        
-        table = pq.read_table(out_file)
-        assert table.num_rows == 1
-        assert table.column("frame_id")[0].as_py() == "V002_00000_010"
+        assert not os.path.exists(out_file)
         
     finally:
         shutil.rmtree(err_meta_dir)

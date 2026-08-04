@@ -12,4 +12,4 @@ COPY indexing/ /app/
 # Set Python path
 ENV PYTHONPATH=/app
 
-ENTRYPOINT ["python", "-m", "src.indexing.cli"]
+CMD ["python", "-m", "src.indexing.cli"]

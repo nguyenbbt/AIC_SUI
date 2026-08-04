@@ -68,3 +68,26 @@ def test_pipeline_resume(mock_video_path):
         
         success2 = processor.process_video(mock_video_path)
         assert success2 == True
+
+        with open(meta_path, "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+        missing_keyframe = os.path.join(
+            temp_dir,
+            metadata["shots"][0]["keyframes"][0]["file_path"],
+        )
+        os.remove(missing_keyframe)
+
+        class CountingTransNet:
+            called = False
+
+            def predict_shots(self, video_path, threshold):
+                self.called = True
+                return [(0, 89)]
+
+        counting_transnet = CountingTransNet()
+        processor.transnet = counting_transnet
+
+        success3 = processor.process_video(mock_video_path)
+        assert success3 == True
+        assert counting_transnet.called
+        assert os.path.exists(missing_keyframe)

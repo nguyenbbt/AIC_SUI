@@ -20,6 +20,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def resolve_worker_count(
+    requested_workers: int,
+    device: str | None,
+    cuda_available: bool | None = None,
+) -> int:
+    """Return a worker count that cannot replicate a CUDA model in VRAM."""
+    if requested_workers < 1:
+        raise ValueError("--workers must be at least 1")
+
+    if cuda_available is None:
+        import torch
+
+        cuda_available = torch.cuda.is_available()
+
+    uses_cuda = device == "cuda" or (device is None and cuda_available)
+    if uses_cuda and requested_workers > 1:
+        logger.warning(
+            "CUDA execution uses one worker to avoid loading multiple "
+            "TransNetV2 copies into VRAM."
+        )
+        return 1
+
+    return requested_workers
+
+
 def process_single_video(args_tuple):
     video_path, output_dir, device, webp_quality, threshold = args_tuple
     processor = VideoProcessor(
@@ -35,9 +61,10 @@ def build_parquet_index(metadata_dir: str, output_parquet: str):
     Combine all individual JSON metadata into a single flat Parquet file.
     """
     logger.info(f"Building parquet index from {metadata_dir}...")
-    json_files = glob.glob(os.path.join(metadata_dir, "*.json"))
+    json_files = sorted(glob.glob(os.path.join(metadata_dir, "*.json")))
     
     all_keyframes = []
+    parse_failures = []
     
     for jf in tqdm(json_files, desc="Parsing JSONs"):
         try:
@@ -57,13 +84,26 @@ def build_parquet_index(metadata_dir: str, output_parquet: str):
                         })
         except Exception as e:
             logger.error(f"Failed to parse {jf} for parquet: {e}")
-            
+            parse_failures.append(f"{os.path.basename(jf)}: {e}")
+
+    if parse_failures:
+        raise RuntimeError(
+            "Metadata index build failed: " + "; ".join(parse_failures)
+        )
+
     if all_keyframes:
         df = pd.DataFrame(all_keyframes)
-        df.to_parquet(output_parquet, index=False)
+        temporary_path = f"{output_parquet}.tmp"
+        try:
+            df.to_parquet(temporary_path, index=False)
+            os.replace(temporary_path, output_parquet)
+        finally:
+            if os.path.exists(temporary_path):
+                os.remove(temporary_path)
         logger.info(f"Saved parquet index to {output_parquet} with {len(df)} records.")
     else:
         logger.warning("No keyframes found to build parquet index.")
+    return len(all_keyframes)
 
 def main():
     parser = argparse.ArgumentParser(description="Shot Detection and Keyframe Extraction Pipeline")
@@ -75,11 +115,12 @@ def main():
     parser.add_argument("--threshold", type=float, default=0.5, help="TransNetV2 threshold")
     
     args = parser.parse_args()
+    worker_count = resolve_worker_count(args.workers, args.device)
     
     os.makedirs(args.output, exist_ok=True)
     
     # Setup multiprocessing start method for PyTorch
-    if args.workers > 1:
+    if worker_count > 1:
         try:
             mp.set_start_method('spawn', force=True)
         except RuntimeError:
@@ -99,23 +140,36 @@ def main():
     tasks = [(vp, args.output, args.device, args.quality, args.threshold) for vp in video_paths]
     
     success_count = 0
-    if args.workers <= 1:
+    if worker_count <= 1:
         for t in tqdm(tasks, desc="Processing videos"):
             if process_single_video(t):
                 success_count += 1
     else:
-        with ProcessPoolExecutor(max_workers=args.workers) as executor:
+        with ProcessPoolExecutor(max_workers=worker_count) as executor:
             results = list(tqdm(executor.map(process_single_video, tasks), total=len(tasks), desc="Processing videos"))
             success_count = sum(results)
             
     logger.info(f"Successfully processed {success_count}/{len(video_paths)} videos.")
+
+    if success_count != len(video_paths):
+        logger.error(
+            "Processing incomplete: %s of %s videos succeeded.",
+            success_count,
+            len(video_paths),
+        )
+        return 1
     
     # Build parquet
     metadata_dir = os.path.join(args.output, "metadata")
     parquet_path = os.path.join(args.output, "metadata_index.parquet")
-    build_parquet_index(metadata_dir, parquet_path)
+    try:
+        build_parquet_index(metadata_dir, parquet_path)
+    except Exception as e:
+        logger.error(f"Failed to build complete metadata index: {e}")
+        return 1
     
     logger.info("Pipeline finished.")
+    return 0
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

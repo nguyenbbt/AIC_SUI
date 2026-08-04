@@ -86,26 +86,39 @@ python -m src.object_detection.cli \
 ## Input/Output Format
 
 ### Input
-- **Keyframes**: `.webp` files structured as `<keyframe_dir>/<video_id>/<frame_id>.webp`.
-- **Metadata**: JSON files containing a list of frames with their `frame_id`, `shot_id`, and `position`.
+- **Keyframes**: Module 1 `.webp` files structured as
+  `<keyframe_dir>/<video_id>/shot_<shot_id>_pos_<position>.webp`.
+- **Metadata**: Module 1 `VideoMetadata` JSON containing
+  `shots[].keyframes[]`. Each keyframe's `file_path` locates the image, while
+  Module 5 generates a canonical global `frame_id` for downstream joins.
 
 ### Output
-The module generates a JSON file for each processed video in the `output-dir` containing the detections:
+The module generates a JSON file for each processed video. `frame_id` follows
+the canonical `<video_id>_<shot_id>_<position>` format and is not the local
+image filename:
 
 ```json
 {
-  "video_id": "V_001",
+  "schema_version": 1,
+  "video_id": "V001",
+  "provenance": {
+    "yolo_world_model": "weights/yolov8s-world.pt",
+    "custom_vocab_file": null,
+    "co_detr_backbone": "resnet50",
+    "confidence_threshold": 0.25,
+    "nms_threshold": 0.5
+  },
   "frames": [
     {
-      "frame_id": "0001",
-      "shot_id": "shot_0",
-      "position": 1000,
+      "frame_id": "V001_00000_015",
+      "shot_id": 0,
+      "position": 0.15,
       "objects": [
         {
           "label": "person",
-          "score": 0.95,
-          "box": [xmin, ymin, xmax, ymax],
-          "area": 1500.5
+          "confidence": 0.95,
+          "bbox": [10, 20, 100, 200],
+          "model_source": "yolo_world"
         }
       ]
     }

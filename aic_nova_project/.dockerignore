@@ -1,0 +1,14 @@
+.agents
+.git
+.pytest_cache
+.vscode
+__pycache__
+venv
+node_modules
+data
+logs
+weights
+*.log
+*.parquet
+*.pt
+*.pth

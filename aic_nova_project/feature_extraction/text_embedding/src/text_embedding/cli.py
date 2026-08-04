@@ -20,6 +20,12 @@ def main():
     parser.add_argument("--output-dir", type=Path, required=True, help="Base directory for Parquet outputs")
     
     parser.add_argument("--model-name", type=str, default="dangvantuan/vietnamese-embedding", help="HuggingFace model name")
+    parser.add_argument(
+        "--model-revision",
+        type=str,
+        default=None,
+        help="Optional immutable Hugging Face commit/tag for reproducibility",
+    )
     parser.add_argument("--device", type=str, default=None, help="Device (cuda/cpu). Auto-detects if None.")
     parser.add_argument("--batch-size", type=int, default=128, help="Batch size for inference")
     parser.add_argument("--max-length", type=int, default=256, help="Max sequence length for truncation/chunking")
@@ -37,7 +43,8 @@ def main():
         model_name=args.model_name,
         device=device,
         max_length=args.max_length,
-        batch_size=args.batch_size
+        batch_size=args.batch_size,
+        model_revision=args.model_revision,
     )
     
     pipeline = TextEmbeddingPipeline(encoder)

@@ -1,6 +1,7 @@
 import os
 import cv2
 import logging
+import numpy as np
 from PIL import Image
 from typing import List, Dict
 
@@ -65,7 +66,7 @@ class KeyframeExtractor:
                     ret, frame = cap.read()
                     if not ret:
                         logger.error(f"Total failure reading frames for shot {shot_id} in {video_id}. Creating empty frame.")
-                        frame = cv2.Mat.zeros((224, 224, 3), dtype="uint8") # fallback empty frame
+                        frame = np.zeros((224, 224, 3), dtype=np.uint8)
                         
                 # Save as WebP
                 # Convert BGR to RGB for PIL

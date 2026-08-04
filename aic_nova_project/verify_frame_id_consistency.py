@@ -1,185 +1,296 @@
-"""
-Verification script: Verify frame_id consistency across all 3 databases.
-
-Queries 1 random record from each DB (Milvus, Elasticsearch, SQLite)
-and prints the frame_id to confirm they all use the same Global ID format
-(e.g., V001_00000_015).
-
-Usage:
-    python verify_frame_id_consistency.py \
-        --data-dir data/processed \
-        --milvus-uri http://localhost:19530 \
-        --es-uri http://localhost:9200 \
-        --db-uri sqlite:///data/metadata.db
-"""
+"""Verify join-key consistency across Milvus, Elasticsearch, and SQLite."""
 
 import argparse
+import re
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Dict, Iterable, List, Set, Tuple
 
-from pymilvus import connections, Collection, utility
 from elasticsearch import Elasticsearch
+from elasticsearch.helpers import scan
+from pymilvus import Collection, connections, utility
 
 
-def verify_milvus(uri: str):
-    """Query 1 random record from each Milvus collection and print frame_id."""
-    print("\n" + "=" * 60)
-    print("MILVUS — Checking frame_id format in all collections")
-    print("=" * 60)
+CANONICAL_FRAME_ID = re.compile(r"^.+_[0-9]{5}_[0-9]{3}$")
 
+
+@dataclass(frozen=True)
+class VerificationSnapshot:
+    """Join keys read from every online storage branch."""
+
+    visual_frame_ids: Set[str]
+    ocr_vector_frame_ids: Set[str]
+    ocr_text_frame_ids: Set[str]
+    metadata_frame_ids: Set[str]
+    object_frame_ids: Set[str]
+    asr_vector_ids: Set[Tuple[str, str]]
+    asr_text_ids: Set[Tuple[str, str]]
+    summary_vector_ids: Set[str]
+    summary_text_ids: Set[str]
+
+
+def _describe_difference(
+    left_name: str,
+    left: set,
+    right_name: str,
+    right: set,
+) -> str:
+    left_only = sorted(left - right)
+    right_only = sorted(right - left)
+    return (
+        f"{left_name} and {right_name} do not JOIN: "
+        f"{left_name}-only={left_only[:10]}, "
+        f"{right_name}-only={right_only[:10]}"
+    )
+
+
+def build_consistency_report(
+    snapshot: VerificationSnapshot,
+) -> List[str]:
+    """Return cross-database contract violations for matching record keys."""
+    errors: List[str] = []
+    frame_sets = {
+        "Milvus visual": snapshot.visual_frame_ids,
+        "Milvus OCR": snapshot.ocr_vector_frame_ids,
+        "Elasticsearch OCR": snapshot.ocr_text_frame_ids,
+        "SQLite metadata": snapshot.metadata_frame_ids,
+        "SQLite objects": snapshot.object_frame_ids,
+    }
+    for source_name, frame_ids in frame_sets.items():
+        invalid = sorted(
+            frame_id
+            for frame_id in frame_ids
+            if not CANONICAL_FRAME_ID.fullmatch(frame_id)
+        )
+        if invalid:
+            errors.append(
+                f"{source_name} contains invalid frame IDs: {invalid[:10]}"
+            )
+
+    if snapshot.visual_frame_ids != snapshot.metadata_frame_ids:
+        errors.append(
+            _describe_difference(
+                "Milvus visual",
+                snapshot.visual_frame_ids,
+                "SQLite metadata",
+                snapshot.metadata_frame_ids,
+            )
+        )
+    if snapshot.ocr_vector_frame_ids != snapshot.ocr_text_frame_ids:
+        errors.append(
+            _describe_difference(
+                "Milvus OCR",
+                snapshot.ocr_vector_frame_ids,
+                "Elasticsearch OCR",
+                snapshot.ocr_text_frame_ids,
+            )
+        )
+
+    for source_name, frame_ids in (
+        ("Milvus OCR", snapshot.ocr_vector_frame_ids),
+        ("Elasticsearch OCR", snapshot.ocr_text_frame_ids),
+        ("SQLite objects", snapshot.object_frame_ids),
+    ):
+        orphan_ids = sorted(frame_ids - snapshot.metadata_frame_ids)
+        if orphan_ids:
+            errors.append(
+                f"{source_name} has frame IDs absent from SQLite metadata: "
+                f"{orphan_ids[:10]}"
+            )
+
+    if snapshot.asr_vector_ids != snapshot.asr_text_ids:
+        errors.append(
+            _describe_difference(
+                "Milvus ASR",
+                snapshot.asr_vector_ids,
+                "Elasticsearch ASR",
+                snapshot.asr_text_ids,
+            )
+        )
+    if snapshot.summary_vector_ids != snapshot.summary_text_ids:
+        errors.append(
+            _describe_difference(
+                "Milvus summary",
+                snapshot.summary_vector_ids,
+                "Elasticsearch summary",
+                snapshot.summary_text_ids,
+            )
+        )
+    return errors
+
+
+def _query_milvus(
+    collection_name: str,
+    output_fields: List[str],
+) -> List[Dict]:
+    if not utility.has_collection(collection_name, using="verify"):
+        return []
+
+    collection = Collection(collection_name, using="verify")
+    collection.load()
+    iterator = collection.query_iterator(
+        batch_size=1_000,
+        expr="pk >= 0",
+        output_fields=output_fields,
+    )
+    records: List[Dict] = []
+    try:
+        while True:
+            batch = iterator.next()
+            if not batch:
+                break
+            records.extend(batch)
+    finally:
+        iterator.close()
+    return records
+
+
+def collect_milvus_keys(uri: str) -> Dict[str, set]:
+    """Read all relevant join keys from Milvus."""
     connections.connect(alias="verify", uri=uri)
-
-    for coll_name in ["visual_features", "asr_features", "summary_features", "ocr_features"]:
-        if not utility.has_collection(coll_name, using="verify"):
-            print(f"  [{coll_name}] Collection does not exist. SKIP.")
-            continue
-
-        collection = Collection(coll_name, using="verify")
-        collection.load()
-
-        # Query 1 record
-        if coll_name in ("visual_features", "ocr_features"):
-            results = collection.query(
-                expr="pk >= 0",
-                output_fields=["frame_id", "video_id"],
-                limit=1,
-            )
-        elif coll_name == "asr_features":
-            results = collection.query(
-                expr="pk >= 0",
-                output_fields=["video_id", "interval_id"],
-                limit=1,
-            )
-        else:  # summary_features
-            results = collection.query(
-                expr="pk >= 0",
-                output_fields=["video_id"],
-                limit=1,
-            )
-
-        if results:
-            rec = results[0]
-            frame_id = rec.get("frame_id", "N/A")
-            video_id = rec.get("video_id", "N/A")
-            interval_id = rec.get("interval_id", "N/A")
-            if coll_name in ("visual_features", "ocr_features"):
-                print(f"  [{coll_name}] frame_id = {frame_id}, video_id = {video_id}")
-            elif coll_name == "asr_features":
-                print(f"  [{coll_name}] video_id = {video_id}, interval_id = {interval_id}")
-            else:
-                print(f"  [{coll_name}] video_id = {video_id}")
-        else:
-            print(f"  [{coll_name}] EMPTY — no records.")
-
-    connections.disconnect("verify")
+    try:
+        visual = _query_milvus(
+            "visual_features",
+            ["frame_id", "video_id"],
+        )
+        ocr = _query_milvus(
+            "ocr_features",
+            ["frame_id", "video_id"],
+        )
+        asr = _query_milvus(
+            "asr_features",
+            ["video_id", "interval_id"],
+        )
+        summaries = _query_milvus(
+            "summary_features",
+            ["video_id"],
+        )
+        return {
+            "visual": {str(record["frame_id"]) for record in visual},
+            "ocr": {str(record["frame_id"]) for record in ocr},
+            "asr": {
+                (str(record["video_id"]), str(record["interval_id"]))
+                for record in asr
+            },
+            "summary": {
+                str(record["video_id"])
+                for record in summaries
+            },
+        }
+    finally:
+        connections.disconnect("verify")
 
 
-def verify_elasticsearch(uri: str):
-    """Query 1 random record from each Elasticsearch index and print frame_id."""
-    print("\n" + "=" * 60)
-    print("ELASTICSEARCH — Checking frame_id format in all indices")
-    print("=" * 60)
-
-    es = Elasticsearch(uri)
-
-    for index_name in ["ocr_texts", "asr_transcripts", "video_summaries"]:
-        if not es.indices.exists(index=index_name):
-            print(f"  [{index_name}] Index does not exist. SKIP.")
-            continue
-
-        resp = es.search(index=index_name, body={"size": 1, "query": {"match_all": {}}})
-        hits = resp.get("hits", {}).get("hits", [])
-        if hits:
-            src = hits[0]["_source"]
-            doc_id = hits[0]["_id"]
-            frame_id = src.get("frame_id", "N/A")
-            video_id = src.get("video_id", "N/A")
-
-            if index_name == "ocr_texts":
-                print(f"  [{index_name}] _id = {doc_id}, frame_id = {frame_id}, video_id = {video_id}")
-            elif index_name == "asr_transcripts":
-                interval_id = src.get("interval_id", "N/A")
-                print(f"  [{index_name}] _id = {doc_id}, video_id = {video_id}, interval_id = {interval_id}")
-            else:
-                print(f"  [{index_name}] _id = {doc_id}, video_id = {video_id}")
-        else:
-            print(f"  [{index_name}] EMPTY — no records.")
-
-    es.close()
+def _scan_es_index(
+    client: Elasticsearch,
+    index_name: str,
+) -> Iterable[Dict]:
+    if not client.indices.exists(index=index_name):
+        return []
+    return scan(
+        client,
+        index=index_name,
+        query={"query": {"match_all": {}}},
+    )
 
 
-def verify_sqlite(db_uri: str):
-    """Query 1 random record from each SQLite table and print frame_id."""
-    print("\n" + "=" * 60)
-    print("SQLITE — Checking frame_id format in tables")
-    print("=" * 60)
+def collect_elasticsearch_keys(uri: str) -> Dict[str, set]:
+    """Read all relevant join keys from Elasticsearch."""
+    client = Elasticsearch(uri)
+    try:
+        ocr = list(_scan_es_index(client, "ocr_texts"))
+        asr = list(_scan_es_index(client, "asr_transcripts"))
+        summaries = list(_scan_es_index(client, "video_summaries"))
+        return {
+            "ocr": {
+                str(hit["_source"]["frame_id"])
+                for hit in ocr
+            },
+            "asr": {
+                (
+                    str(hit["_source"]["video_id"]),
+                    str(hit["_source"]["interval_id"]),
+                )
+                for hit in asr
+            },
+            "summary": {
+                str(hit["_source"]["video_id"])
+                for hit in summaries
+            },
+        }
+    finally:
+        client.close()
 
+
+def collect_sqlite_keys(db_uri: str) -> Dict[str, set]:
+    """Read all relevant join keys from SQLite."""
     if db_uri.startswith("sqlite:///"):
         db_uri = db_uri[len("sqlite:///"):]
-
     db_path = Path(db_uri)
     if not db_path.exists():
-        print(f"  Database file not found: {db_path}")
-        return
+        raise FileNotFoundError(f"SQLite database not found: {db_path}")
 
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-
-    # metadata
-    cursor = conn.execute("SELECT frame_id, video_id, shot_id, timestamp FROM metadata LIMIT 1")
-    row = cursor.fetchone()
-    if row:
-        print(f"  [metadata] frame_id = {row['frame_id']}, video_id = {row['video_id']}, "
-              f"shot_id = {row['shot_id']}, timestamp = {row['timestamp']}")
-    else:
-        print("  [metadata] EMPTY — no records.")
-
-    # objects
-    cursor = conn.execute("SELECT frame_id, label, confidence FROM objects LIMIT 1")
-    row = cursor.fetchone()
-    if row:
-        print(f"  [objects]  frame_id = {row['frame_id']}, label = {row['label']}, "
-              f"confidence = {row['confidence']}")
-    else:
-        print("  [objects]  EMPTY — no records.")
-
-    conn.close()
+    connection = sqlite3.connect(str(db_path))
+    try:
+        metadata = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT frame_id FROM metadata"
+            ).fetchall()
+        }
+        objects = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT DISTINCT frame_id FROM objects"
+            ).fetchall()
+        }
+        return {"metadata": metadata, "objects": objects}
+    finally:
+        connection.close()
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Verify frame_id consistency across Milvus, ES, and SQLite"
+        description="JOIN all record IDs across Milvus, ES, and SQLite"
     )
     parser.add_argument("--milvus-uri", default="http://localhost:19530")
     parser.add_argument("--es-uri", default="http://localhost:9200")
-    parser.add_argument("--db-uri", default="sqlite:///data/metadata.db")
+    parser.add_argument(
+        "--db-uri",
+        default="sqlite:///data/metadata.db",
+    )
     args = parser.parse_args()
 
-    print("╔══════════════════════════════════════════════════════════╗")
-    print("║  FRAME_ID CONSISTENCY VERIFICATION ACROSS 3 DATABASES  ║")
-    print("╚══════════════════════════════════════════════════════════╝")
-
     try:
-        verify_milvus(args.milvus_uri)
-    except Exception as e:
-        print(f"\n  Milvus verification FAILED: {e}")
+        milvus = collect_milvus_keys(args.milvus_uri)
+        elasticsearch = collect_elasticsearch_keys(args.es_uri)
+        sqlite = collect_sqlite_keys(args.db_uri)
+    except Exception as exc:
+        print(f"Verification failed while reading databases: {exc}")
+        return 1
 
-    try:
-        verify_elasticsearch(args.es_uri)
-    except Exception as e:
-        print(f"\n  Elasticsearch verification FAILED: {e}")
+    snapshot = VerificationSnapshot(
+        visual_frame_ids=milvus["visual"],
+        ocr_vector_frame_ids=milvus["ocr"],
+        ocr_text_frame_ids=elasticsearch["ocr"],
+        metadata_frame_ids=sqlite["metadata"],
+        object_frame_ids=sqlite["objects"],
+        asr_vector_ids=milvus["asr"],
+        asr_text_ids=elasticsearch["asr"],
+        summary_vector_ids=milvus["summary"],
+        summary_text_ids=elasticsearch["summary"],
+    )
+    errors = build_consistency_report(snapshot)
+    if errors:
+        print("Cross-database consistency verification FAILED:")
+        for error in errors:
+            print(f"- {error}")
+        return 1
 
-    try:
-        verify_sqlite(args.db_uri)
-    except Exception as e:
-        print(f"\n  SQLite verification FAILED: {e}")
-
-    print("\n" + "=" * 60)
-    print("DONE. Compare frame_id values above — they should all")
-    print("follow the Global ID format: {video_id}_{shot_id}_{position}")
-    print("Example: V001_00000_015")
-    print("=" * 60)
+    print("Cross-database consistency verification PASSED.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -9,8 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY feature_extraction/ocr/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 # Create a small script to download models during build time
 RUN python -c "import easyocr; reader = easyocr.Reader(['vi'], gpu=False, download_enabled=True); \
@@ -24,7 +24,7 @@ config_seq['device'] = 'cpu'; \
 Predictor(config_seq);"
 
 # Copy application source code
-COPY src/ /app/src/
+COPY feature_extraction/ocr/src /app/src
 
 # Set environment variables for Python
 ENV PYTHONPATH="${PYTHONPATH}:/app/src"
