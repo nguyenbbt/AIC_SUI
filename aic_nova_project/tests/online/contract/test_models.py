@@ -127,6 +127,8 @@ class DomainContractTests(unittest.TestCase):
             "model_source": "organizer_open_images",
         }
         for field, value in (
+            ("label_normalized", "Person"),
+            ("label_normalized", " PERSON "),
             ("confidence", 1.01),
             ("x_min", -0.01),
             ("y_min", 1.01),

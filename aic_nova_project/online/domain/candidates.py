@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Annotated, Generic, Literal, TypeVar
 
-from pydantic import AfterValidator, Field, PlainSerializer, model_validator
+from pydantic import AfterValidator, Field, PlainSerializer, field_validator, model_validator
 
 from .base import (
     FiniteFloat,
@@ -149,6 +149,13 @@ class ObjectDetection(StrictFrozenModel):
     x_max: Annotated[FiniteFloat, Field(ge=0.0, le=1.0)]
     y_max: Annotated[FiniteFloat, Field(ge=0.0, le=1.0)]
     model_source: NonEmptyStr
+
+    @field_validator("label_normalized")
+    @classmethod
+    def validate_normalized_label(cls, value: str) -> str:
+        if value != value.casefold():
+            raise ValueError("label_normalized must already be casefold-normalized")
+        return value
 
     _ordered = model_validator(mode="after")(ensure_bbox_order)
 
