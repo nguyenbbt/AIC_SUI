@@ -12,7 +12,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import Field
 
-from online.domain.base import NonEmptyStr, StrictFrozenModel
+from online.domain.base import NonEmptyStr, StrictFrozenModel, StrictIntValue
 from online.domain.candidates import FusedFrameCandidate
 from online.domain.diagnostics import QueryDiagnostics
 from online.domain.enums import BranchStatus, QueryMode, RetrievalBranch
@@ -71,6 +71,13 @@ class SearchResponse(StrictFrozenModel):
     query_id: NonEmptyStr
     candidates: tuple[FusedFrameCandidate, ...]
     diagnostics: QueryDiagnostics | None = None
+
+
+class KISCompetitionRow(StrictFrozenModel):
+    """Mode-specific KIS submission record in organizer field order."""
+
+    video_id: NonEmptyStr
+    source_frame_idx: StrictIntValue = Field(ge=0)
 
 
 class HealthResponse(StrictFrozenModel):
@@ -327,29 +334,42 @@ def _public_details(details: Mapping[str, Any]) -> dict[str, Any]:
     return output
 
 
-def competition_candidates(
+def serialize_kis_competition_candidates(
     candidates: Sequence[FusedFrameCandidate],
-) -> tuple[Mapping[str, Any], ...]:
-    """Small stable adapter for competition-style frame submissions."""
+) -> tuple[KISCompetitionRow, ...]:
+    """Serialize ranked KIS results without parsing or recomputing frame IDs."""
 
+    if isinstance(candidates, (str, bytes)):
+        raise TypeError("candidates must be a sequence")
+    values = tuple(candidates)
+    if any(not isinstance(candidate, FusedFrameCandidate) for candidate in values):
+        raise TypeError("candidates must contain FusedFrameCandidate objects")
+    keys = tuple(
+        (candidate.video_id, candidate.source_frame_idx)
+        for candidate in values
+    )
+    if len(set(keys)) != len(keys):
+        raise ContractMismatchError(
+            "KIS competition candidates must already be deduplicated",
+            details={"duplicate_count": len(keys) - len(set(keys))},
+        )
     return tuple(
-        {
-            "frame_id": candidate.frame_id,
-            "video_id": candidate.video_id,
-            "timestamp_sec": candidate.timestamp_sec,
-            "score": candidate.final_score,
-        }
-        for candidate in candidates
+        KISCompetitionRow(
+            video_id=candidate.video_id,
+            source_frame_idx=candidate.source_frame_idx,
+        )
+        for candidate in values
     )
 
 
 __all__ = [
     "HealthResponse",
+    "KISCompetitionRow",
     "SearchOrchestratorPort",
     "SearchRequest",
     "SearchResponse",
     "TRAKEModePort",
     "VQAModePort",
-    "competition_candidates",
+    "serialize_kis_competition_candidates",
     "create_app",
 ]

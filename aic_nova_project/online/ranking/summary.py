@@ -17,6 +17,7 @@ from online.domain.candidates import (
     VideoCandidate,
 )
 from online.domain.enums import BranchStatus, CandidateLevel, RetrievalBranch
+from online.ranking.sorting import fused_candidate_sort_key
 
 
 SUMMARY_BRANCHES = frozenset(
@@ -120,7 +121,7 @@ class SummaryScorePropagator:
                     }
                 )
             )
-        return tuple(sorted(boosted, key=lambda item: (-item.final_score, item.frame_id)))
+        return tuple(sorted(boosted, key=fused_candidate_sort_key))
 
     def aggregate_video_scores(
         self,

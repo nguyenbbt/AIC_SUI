@@ -52,6 +52,7 @@ class RankingPolicyConfig(StrictFrozenModel):
     asr_interval_rrf_k: StrictIntValue = Field(default=60, ge=1)
     object_soft_boost_per_constraint: Annotated[FiniteFloat, Field(ge=0.0, le=1.0)] = 0.05
     object_max_total_boost: Annotated[FiniteFloat, Field(ge=0.0, le=1.0)] = 0.2
+    final_top_k: StrictIntValue = Field(default=100, ge=1)
     core_visual_policy: CoreVisualPolicy = "q0_required"
 
     @model_validator(mode="after")

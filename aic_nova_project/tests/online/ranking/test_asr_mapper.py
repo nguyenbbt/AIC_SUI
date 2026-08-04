@@ -18,7 +18,7 @@ def interval(
     rank: int = 1,
     raw_score: float = 0.9,
     normalized_score: float | None = 0.6,
-    video_id: str = "V001",
+    video_id: str = "L21_V001",
 ) -> ASRIntervalCandidate:
     return ASRIntervalCandidate(
         video_id=video_id,
@@ -40,17 +40,26 @@ def interval(
 
 
 def frame(
-    frame_id: str,
+    keyframe_no: int,
     *,
     timestamp: float,
-    shot_id: int = 0,
-    video_id: str = "V001",
+    video_id: str = "L21_V001",
+    fps: float = 30.0,
+    source_frame_idx: int | None = None,
 ) -> FrameMetadata:
     return FrameMetadata(
-        frame_id=frame_id,
+        frame_id=f"{video_id}_{keyframe_no:03d}",
         video_id=video_id,
-        shot_id=shot_id,
+        keyframe_no=keyframe_no,
+        local_index=keyframe_no - 1,
         timestamp_sec=timestamp,
+        fps=fps,
+        source_frame_idx=(
+            round(timestamp * fps)
+            if source_frame_idx is None
+            else source_frame_idx
+        ),
+        image_rel_path=f"keyframes/{video_id}/{keyframe_no:03d}.jpg",
     )
 
 
@@ -72,13 +81,16 @@ class ASRIntervalFrameMapperTests(unittest.TestCase):
         mapped = mapper.map_interval(
             interval("speech", start=1.0, end=6.0, raw_score=0.9, normalized_score=0.6),
             (
-                frame("V001_00000_015", timestamp=1.5),
-                frame("V001_00000_050", timestamp=5.0),
-                frame("V001_00001_050", timestamp=10.0, shot_id=1),
+                frame(1, timestamp=1.5),
+                frame(2, timestamp=5.0),
+                frame(3, timestamp=10.0),
             ),
         )
 
-        self.assertEqual(tuple(item.frame_id for item in mapped), ("V001_00000_015", "V001_00000_050"))
+        self.assertEqual(tuple(item.frame_id for item in mapped), ("L21_V001_001", "L21_V001_002"))
+        self.assertEqual(tuple(item.keyframe_no for item in mapped), (1, 2))
+        self.assertEqual(tuple(item.local_index for item in mapped), (0, 1))
+        self.assertEqual(tuple(item.source_frame_idx for item in mapped), (45, 150))
         self.assertEqual(tuple(item.provenance.backend for item in mapped), ("milvus", "milvus"))
         self.assertEqual(tuple(item.provenance.source_candidate_id for item in mapped), ("speech", "speech"))
         self.assertEqual(tuple(item.provenance.source_start_time_sec for item in mapped), (1.0, 1.0))
@@ -91,7 +103,7 @@ class ASRIntervalFrameMapperTests(unittest.TestCase):
         mapper = ASRIntervalFrameMapper()
         result = mapper.map_result(
             asr_result((interval("silent", start=20.0, end=21.0),)),
-            FakeMetadataReaderPort((frame("V001_00000_015", timestamp=1.5),)),
+            FakeMetadataReaderPort((frame(1, timestamp=1.5),)),
         )
 
         self.assertEqual(result.branch_result.candidate_level, CandidateLevel.FRAME)
@@ -110,17 +122,33 @@ class ASRIntervalFrameMapperTests(unittest.TestCase):
             ),
             FakeMetadataReaderPort(
                 (
-                    frame("V001_00000_015", timestamp=1.5),
-                    frame("V001_00001_050", timestamp=10.0, shot_id=1),
+                    frame(1, timestamp=1.5),
+                    frame(2, timestamp=10.0),
                 )
             ),
         )
 
         self.assertEqual(
             tuple(candidate.frame_id for candidate in result.branch_result.candidates),
-            ("V001_00000_015", "V001_00001_050"),
+            ("L21_V001_001", "L21_V001_002"),
         )
         self.assertEqual(tuple(candidate.rank for candidate in result.branch_result.candidates), (1, 2))
+
+    def test_preserves_timestamp_and_source_index_without_recomputing_from_fps(self) -> None:
+        source = frame(
+            1,
+            timestamp=1.25,
+            fps=120.0,
+            source_frame_idx=7,
+        )
+        mapped = ASRIntervalFrameMapper().map_interval(
+            interval("metadata-source", start=1.25, end=1.25),
+            (source,),
+        )
+
+        self.assertEqual(mapped[0].timestamp_sec, 1.25)
+        self.assertEqual(mapped[0].source_frame_idx, 7)
+        self.assertNotEqual(mapped[0].source_frame_idx, round(source.timestamp_sec * source.fps))
 
     def test_overlapping_intervals_keep_distinct_evidence_for_later_fusion(self) -> None:
         mapper = ASRIntervalFrameMapper()
@@ -133,9 +161,9 @@ class ASRIntervalFrameMapperTests(unittest.TestCase):
             ),
             FakeMetadataReaderPort(
                 (
-                    frame("V001_00000_015", timestamp=1.5),
-                    frame("V001_00000_050", timestamp=5.0),
-                    frame("V001_00001_050", timestamp=10.0, shot_id=1),
+                    frame(1, timestamp=1.5),
+                    frame(2, timestamp=5.0),
+                    frame(3, timestamp=10.0),
                 )
             ),
         )
@@ -143,10 +171,10 @@ class ASRIntervalFrameMapperTests(unittest.TestCase):
         self.assertEqual(
             tuple(candidate.frame_id for candidate in result.branch_result.candidates),
             (
-                "V001_00000_015",
-                "V001_00000_050",
-                "V001_00000_050",
-                "V001_00001_050",
+                "L21_V001_001",
+                "L21_V001_002",
+                "L21_V001_002",
+                "L21_V001_003",
             ),
         )
         self.assertEqual(result.mapping_loss_count, 0)
@@ -156,14 +184,14 @@ class ASRIntervalFrameMapperTests(unittest.TestCase):
         mapped = mapper.map_interval(
             interval("long", start=0.0, end=10.0, raw_score=1.0, normalized_score=0.8),
             (
-                frame("V001_00000_000", timestamp=0.0),
-                frame("V001_00000_040", timestamp=4.0),
-                frame("V001_00000_060", timestamp=6.0),
-                frame("V001_00000_100", timestamp=10.0),
+                frame(1, timestamp=0.0),
+                frame(2, timestamp=4.0),
+                frame(3, timestamp=6.0),
+                frame(4, timestamp=10.0),
             ),
         )
 
-        self.assertEqual(tuple(item.frame_id for item in mapped), ("V001_00000_040", "V001_00000_060"))
+        self.assertEqual(tuple(item.frame_id for item in mapped), ("L21_V001_002", "L21_V001_003"))
         self.assertEqual(tuple(item.raw_score for item in mapped), (0.5, 0.5))
         self.assertEqual(tuple(item.normalized_score for item in mapped), (0.4, 0.4))
 
@@ -172,8 +200,8 @@ class ASRIntervalFrameMapperTests(unittest.TestCase):
         mapped = mapper.map_interval(
             interval("speech-42", start=1.0, end=6.0, rank=1, normalized_score=None),
             (
-                frame("V001_00000_015", timestamp=1.5),
-                frame("V001_00000_050", timestamp=5.0),
+                frame(1, timestamp=1.5),
+                frame(2, timestamp=5.0),
             ),
         )
 
@@ -219,7 +247,7 @@ class ASRIntervalFrameMapperTests(unittest.TestCase):
         with self.assertRaises(ContractMismatchError):
             mapper.map_interval(
                 interval("speech", start=1.0, end=2.0),
-                (frame("V002_00000_015", timestamp=1.5, video_id="V002"),),
+                (frame(1, timestamp=1.5, video_id="L21_V002"),),
             )
         with self.assertRaises(ValueError):
             ASRMappingConfig(policy_name=" ")

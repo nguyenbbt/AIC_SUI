@@ -14,6 +14,7 @@ class RankingPolicyConfigTests(unittest.TestCase):
     def test_policy_config_is_frozen_and_mappings_are_immutable(self) -> None:
         config = RankingPolicyConfig(query_variant_weights={"q0": 1.0})
 
+        self.assertEqual(config.final_top_k, 100)
         with self.assertRaises(ValidationError):
             config.policy_name = "other"  # type: ignore[misc]
         with self.assertRaises(TypeError):
@@ -28,6 +29,10 @@ class RankingPolicyConfigTests(unittest.TestCase):
             RankingPolicyConfig(summary_weight=2.0)
         with self.assertRaises(ValidationError):
             RankingPolicyConfig(query_variant_weights={"q0": math.inf})
+        with self.assertRaises(ValidationError):
+            RankingPolicyConfig(final_top_k=0)
+        with self.assertRaises(ValidationError):
+            RankingPolicyConfig(final_top_k=True)
         with self.assertRaises(ValidationError):
             RankingPolicyConfig(
                 fusion_default_weight=0.0,

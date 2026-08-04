@@ -2,7 +2,7 @@
 
 from .aggregation import QueryVariantAggregationConfig, RRFQueryVariantAggregator
 from .asr_mapper import ASRIntervalFrameMapper, ASRMappingConfig, ASRMappingResult
-from .dedup import ShotDeduplicator
+from .dedup import CompetitionFrameDeduplicator
 from .fusion import FusionConfig, WeightedFrameFusion
 from .normalizers import MinMaxScoreNormalizer, RRFScoreNormalizer, ScoreNormalizer
 from .object_filter import ObjectConstraintProcessor, ObjectProcessingConfig
@@ -22,7 +22,7 @@ __all__ = [
     "RRFScoreNormalizer",
     "RankingPolicyConfig",
     "ScoreNormalizer",
-    "ShotDeduplicator",
+    "CompetitionFrameDeduplicator",
     "SummaryPropagationConfig",
     "SummaryScorePropagator",
     "WeightedFrameFusion",

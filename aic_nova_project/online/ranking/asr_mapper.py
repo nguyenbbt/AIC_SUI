@@ -118,7 +118,17 @@ class ASRIntervalFrameMapper:
                 truncated_frame_count += full_match_count - len(interval_frames)
             mapped.extend(interval_frames)
 
-        ordered = tuple(sorted(mapped, key=lambda item: (item.rank, item.timestamp_sec, item.frame_id)))
+        ordered = tuple(
+            sorted(
+                mapped,
+                key=lambda item: (
+                    item.rank,
+                    item.timestamp_sec,
+                    item.local_index,
+                    item.frame_id,
+                ),
+            )
+        )
         reranked = tuple(
             candidate.model_copy(update={"rank": rank})
             for rank, candidate in enumerate(ordered, start=1)
@@ -165,8 +175,10 @@ class ASRIntervalFrameMapper:
             FrameCandidate(
                 frame_id=frame.frame_id,
                 video_id=frame.video_id,
-                shot_id=frame.shot_id,
+                keyframe_no=frame.keyframe_no,
+                local_index=frame.local_index,
                 timestamp_sec=frame.timestamp_sec,
+                source_frame_idx=frame.source_frame_idx,
                 rank=interval.rank,
                 raw_score=raw_score,
                 normalized_score=normalized_score,
@@ -195,6 +207,20 @@ class ASRIntervalFrameMapper:
                 "ASR mapper received frame metadata from another video",
                 details={"expected_video_id": video_id, "wrong_video_count": len(wrong_video)},
             )
+        ordering = tuple(
+            (frame.local_index, frame.timestamp_sec, frame.frame_id)
+            for frame in frames
+        )
+        if ordering != tuple(sorted(ordering)):
+            raise ContractMismatchError(
+                "ASR mapper requires metadata ordered by local_index",
+                details={"video_id": video_id},
+            )
+        if len({frame.local_index for frame in frames}) != len(frames):
+            raise ContractMismatchError(
+                "ASR mapper received duplicate local_index metadata",
+                details={"video_id": video_id},
+            )
 
     def _matched_frames(
         self,
@@ -222,6 +248,7 @@ class ASRIntervalFrameMapper:
                 key=lambda frame: (
                     abs(frame.timestamp_sec - center),
                     frame.timestamp_sec,
+                    frame.local_index,
                     frame.frame_id,
                 ),
             )[: self.config.max_frames_per_interval]

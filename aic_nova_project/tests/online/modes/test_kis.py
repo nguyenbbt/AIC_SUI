@@ -34,42 +34,71 @@ def provenance(branch: RetrievalBranch, *, variant_id: str = "q0") -> CandidateP
         backend="milvus" if branch.value.endswith("dense") else "elasticsearch",
         source_resource=branch.value,
         query_variant_id=variant_id,
-        query_text="query",
+        query_text=f"query {variant_id}",
+    )
+
+
+def metadata(
+    frame_id: str,
+    *,
+    timestamp_sec: float,
+    source_frame_idx: int,
+    fps: float = 25.0,
+) -> FrameMetadata:
+    video_id, keyframe_text = frame_id.rsplit("_", 1)
+    keyframe_no = int(keyframe_text)
+    return FrameMetadata(
+        frame_id=frame_id,
+        video_id=video_id,
+        keyframe_no=keyframe_no,
+        local_index=keyframe_no - 1,
+        timestamp_sec=timestamp_sec,
+        fps=fps,
+        source_frame_idx=source_frame_idx,
+        image_rel_path=f"{video_id}/{keyframe_text}.jpg",
     )
 
 
 def frame_candidate(
-    frame_id: str,
+    frame: FrameMetadata,
     *,
     branch: RetrievalBranch,
     rank: int,
-    video_id: str,
-    shot_id: int,
-    timestamp_sec: float,
+    variant_id: str = "q0",
+    raw_score: float = 1.0,
 ) -> FrameCandidate:
     return FrameCandidate(
-        frame_id=frame_id,
-        video_id=video_id,
-        shot_id=shot_id,
-        timestamp_sec=timestamp_sec,
+        frame_id=frame.frame_id,
+        video_id=frame.video_id,
+        keyframe_no=frame.keyframe_no,
+        local_index=frame.local_index,
+        timestamp_sec=frame.timestamp_sec,
+        source_frame_idx=frame.source_frame_idx,
         rank=rank,
-        raw_score=1.0,
-        provenance=provenance(branch),
+        raw_score=raw_score,
+        provenance=provenance(branch, variant_id=variant_id),
     )
 
 
 def frame_result(
     branch: RetrievalBranch,
     candidates: tuple[FrameCandidate, ...],
+    *,
+    variant_id: str = "q0",
+    status: BranchStatus = BranchStatus.SUCCESS,
+    warnings: tuple[str, ...] = (),
+    missing_metadata_count: int = 0,
 ) -> BranchResult[FrameCandidate]:
     return BranchResult[FrameCandidate](
         branch=branch,
         candidate_level=CandidateLevel.FRAME,
-        query_variant_id="q0",
+        query_variant_id=variant_id,
         candidates=candidates,
         requested_top_k=10,
         latency_ms=2.0,
-        status=BranchStatus.SUCCESS,
+        status=status,
+        warnings=warnings,
+        missing_metadata_count=missing_metadata_count,
     )
 
 
@@ -80,13 +109,10 @@ def failed_frame_result(
     variant_id: str = "q0",
     missing_metadata_count: int = 0,
 ) -> BranchResult[FrameCandidate]:
-    return BranchResult[FrameCandidate](
-        branch=branch,
-        candidate_level=CandidateLevel.FRAME,
-        query_variant_id=variant_id,
-        candidates=(),
-        requested_top_k=10,
-        latency_ms=2.0,
+    return frame_result(
+        branch,
+        (),
+        variant_id=variant_id,
         status=BranchStatus.FAILED,
         warnings=(warning,),
         missing_metadata_count=missing_metadata_count,
@@ -99,9 +125,10 @@ def asr_interval(
     start: float,
     end: float,
     rank: int,
+    video_id: str = "L21_V001",
 ) -> ASRIntervalCandidate:
     return ASRIntervalCandidate(
-        video_id="V001",
+        video_id=video_id,
         interval_id=interval_id,
         start_time_sec=start,
         end_time_sec=end,
@@ -146,13 +173,27 @@ def video_candidate(video_id: str, *, normalized_score: float) -> VideoCandidate
     )
 
 
+def person_detection() -> ObjectDetection:
+    return ObjectDetection(
+        label_display="Person",
+        label_normalized="person",
+        class_mid="/m/01g317",
+        confidence=0.9,
+        x_min=0.0,
+        y_min=0.0,
+        x_max=1.0,
+        y_max=1.0,
+        model_source="open_images_v7",
+    )
+
+
 class FakeRetrievalService:
     def __init__(self, results: tuple[BranchResult, ...]) -> None:
         self.results = results
-        self.calls = []
+        self.calls: list[tuple[str, QueryMode]] = []
 
     async def retrieve(self, bundle):
-        self.calls.append(bundle.query_id)
+        self.calls.append((bundle.query_id, bundle.mode))
         return self.results
 
 
@@ -199,19 +240,19 @@ class ThreadRecordingRanking:
 
 
 class KISOrchestrationTests(unittest.TestCase):
-    def test_ranking_pipeline_maps_asr_boosts_summary_filters_objects_and_dedups(self) -> None:
-        frames = (
-            FrameMetadata(frame_id="V001_00000_015", video_id="V001", shot_id=0, timestamp_sec=1.5),
-            FrameMetadata(frame_id="V001_00000_050", video_id="V001", shot_id=0, timestamp_sec=5.0),
-            FrameMetadata(frame_id="V002_00000_015", video_id="V002", shot_id=0, timestamp_sec=1.5),
-        )
+    def test_synthetic_pipeline_follows_required_order_and_preserves_organizer_metadata(self) -> None:
+        first = metadata("L21_V001_001", timestamp_sec=1.5, source_frame_idx=15, fps=25.0)
+        duplicate_source = metadata("L21_V001_002", timestamp_sec=1.6, source_frame_idx=15, fps=50.0)
+        other_video = metadata("L21_V002_001", timestamp_sec=1.5, source_frame_idx=15)
+        frames = (first, duplicate_source, other_video)
         bundle = KISQueryBuilder().build(
             "query",
             mode=QueryMode.KIS_TEXT,
-            query_id="kis-orchestrated",
+            paraphrases=("variant",),
+            query_id="kis-synthetic",
             object_constraints=(
                 ObjectConstraint(
-                    label="person",
+                    label="người",
                     count_operator=CountOperator.GTE,
                     count=1,
                     filter_mode=FilterMode.HARD,
@@ -222,173 +263,102 @@ class KISOrchestrationTests(unittest.TestCase):
             metadata=FakeMetadataReaderPort(frames),
             object_reader=FakeObjectReaderPort(
                 {
-                    "V001_00000_015": (
-                        ObjectDetection(
-                            label="person",
-                            confidence=0.9,
-                            x_min=0,
-                            y_min=0,
-                            x_max=1,
-                            y_max=1,
-                        ),
-                    ),
-                    "V002_00000_015": (),
+                    first.frame_id: (person_detection(),),
+                    duplicate_source.frame_id: (person_detection(),),
+                    other_video.frame_id: (),
                 }
             ),
         )
+
         result = ranking.rank(
             bundle,
             (
                 frame_result(
                     RetrievalBranch.VISUAL_DENSE,
                     (
-                        frame_candidate(
-                            "V001_00000_015",
-                            branch=RetrievalBranch.VISUAL_DENSE,
-                            rank=1,
-                            video_id="V001",
-                            shot_id=0,
-                            timestamp_sec=1.5,
-                        ),
-                        frame_candidate(
-                            "V002_00000_015",
-                            branch=RetrievalBranch.VISUAL_DENSE,
-                            rank=2,
-                            video_id="V002",
-                            shot_id=0,
-                            timestamp_sec=1.5,
-                        ),
+                        frame_candidate(first, branch=RetrievalBranch.VISUAL_DENSE, rank=1),
+                        frame_candidate(duplicate_source, branch=RetrievalBranch.VISUAL_DENSE, rank=2),
+                        frame_candidate(other_video, branch=RetrievalBranch.VISUAL_DENSE, rank=3),
                     ),
                 ),
                 frame_result(
-                    RetrievalBranch.OCR_BM25,
+                    RetrievalBranch.VISUAL_DENSE,
                     (
                         frame_candidate(
-                            "V001_00000_015",
-                            branch=RetrievalBranch.OCR_BM25,
+                            first,
+                            branch=RetrievalBranch.VISUAL_DENSE,
                             rank=1,
-                            video_id="V001",
-                            shot_id=0,
-                            timestamp_sec=1.5,
+                            variant_id="q1",
                         ),
                     ),
+                    variant_id="q1",
+                ),
+                frame_result(
+                    RetrievalBranch.OCR_BM25,
+                    (frame_candidate(first, branch=RetrievalBranch.OCR_BM25, rank=1),),
                 ),
                 asr_result(
                     (
-                        asr_interval("hit", start=1.0, end=2.0, rank=1),
+                        asr_interval("hit", start=1.5, end=1.5, rank=1),
                         asr_interval("miss", start=20.0, end=21.0, rank=2),
                     )
                 ),
                 video_result(
                     (
-                        video_candidate("V001", normalized_score=1.0),
-                        video_candidate("V999", normalized_score=1.0),
+                        video_candidate("L21_V001", normalized_score=1.0),
+                        video_candidate("L21_V999", normalized_score=1.0),
                     )
                 ),
             ),
         )
 
-        self.assertEqual(tuple(candidate.frame_id for candidate in result.candidates), ("V001_00000_015",))
-        self.assertGreater(result.candidates[0].diagnostics.summary_boost, 0.0)
-        self.assertEqual(result.candidates[0].diagnostics.object_constraints_satisfied, 1)
-        self.assertEqual(result.diagnostics.query_id, "kis-orchestrated")
+        self.assertEqual(tuple(candidate.frame_id for candidate in result.candidates), (first.frame_id,))
+        final = result.candidates[0]
+        self.assertEqual(
+            (
+                final.video_id,
+                final.keyframe_no,
+                final.local_index,
+                final.timestamp_sec,
+                final.source_frame_idx,
+            ),
+            ("L21_V001", 1, 0, 1.5, 15),
+        )
+        self.assertGreater(final.diagnostics.summary_boost, 0.0)
+        self.assertEqual(final.diagnostics.object_constraints_satisfied, 1)
+        self.assertEqual(tuple(ref.frame_id for ref in final.near_frames), (duplicate_source.frame_id,))
         self.assertEqual(result.diagnostics.object_filter_removals, 1)
+        self.assertEqual(result.diagnostics.dedup_removals, 1)
         self.assertEqual(result.diagnostics.branches[RetrievalBranch.ASR_DENSE].mapping_loss_count, 1)
-        self.assertEqual(result.diagnostics.branches[RetrievalBranch.ASR_DENSE].output_candidate_count, 1)
-        self.assertEqual(result.diagnostics.normalization_method, "rrf")
-        self.assertIn("branch_normalization", result.diagnostics.stage_latencies_ms)
+        self.assertEqual(
+            tuple(result.diagnostics.stage_latencies_ms),
+            (
+                "asr_mapping",
+                "query_variant_aggregation",
+                "branch_normalization",
+                "fusion",
+                "summary_propagation",
+                "object_processing",
+                "dedup",
+                "final_sort_top_k",
+            ),
+        )
         self.assertIn("aggregation_method=weighted_sum_query_variant_v1", result.diagnostics.warnings)
-        self.assertIn("fusion", result.diagnostics.stage_latencies_ms)
+        self.assertIn("object_label_normalizer=open_images_vi_en_v1", result.diagnostics.warnings)
+        self.assertIn("object_position_policy=bbox_center_in_region_v1", result.diagnostics.warnings)
+        self.assertIn("final_top_k=100", result.diagnostics.warnings)
 
-    def test_visual_paraphrase_failure_degrades_without_dropping_q0(self) -> None:
+    def test_asr_interval_contribution_is_distributed_and_truncation_is_diagnostic(self) -> None:
         frames = (
-            FrameMetadata(frame_id="V001_00000_015", video_id="V001", shot_id=0, timestamp_sec=1.5),
+            metadata("L21_V001_001", timestamp_sec=4.0, source_frame_idx=40),
+            metadata("L21_V001_002", timestamp_sec=6.0, source_frame_idx=60),
+            metadata("L21_V001_003", timestamp_sec=10.0, source_frame_idx=100),
         )
-        bundle = KISQueryBuilder().build(
-            "query",
-            mode=QueryMode.KIS_TEXT,
-            paraphrases=("variant",),
-            query_id="visual-q1-timeout",
-        )
-        ranking = KISRankingService(metadata=FakeMetadataReaderPort(frames))
-
-        result = ranking.rank(
-            bundle,
-            (
-                frame_result(
-                    RetrievalBranch.VISUAL_DENSE,
-                    (
-                        frame_candidate(
-                            "V001_00000_015",
-                            branch=RetrievalBranch.VISUAL_DENSE,
-                            rank=1,
-                            video_id="V001",
-                            shot_id=0,
-                            timestamp_sec=1.5,
-                        ),
-                    ),
-                ),
-                failed_frame_result(
-                    RetrievalBranch.VISUAL_DENSE,
-                    "BRANCH_TIMEOUT",
-                    variant_id="q1",
-                ),
-            ),
-        )
-
-        self.assertEqual(tuple(candidate.frame_id for candidate in result.candidates), ("V001_00000_015",))
-        self.assertEqual(result.diagnostics.branches[RetrievalBranch.VISUAL_DENSE].status, BranchStatus.DEGRADED)
-        self.assertIn(
-            "branch=visual_dense;query_variant_id=q1;code=BRANCH_TIMEOUT",
-            result.diagnostics.warnings,
-        )
-
-    def test_optional_branch_failure_does_not_fail_core_query(self) -> None:
-        frames = (
-            FrameMetadata(frame_id="V001_00000_015", video_id="V001", shot_id=0, timestamp_sec=1.5),
-        )
-        bundle = KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT, query_id="optional-fail")
-        ranking = KISRankingService(metadata=FakeMetadataReaderPort(frames))
-
-        result = ranking.rank(
-            bundle,
-            (
-                frame_result(
-                    RetrievalBranch.VISUAL_DENSE,
-                    (
-                        frame_candidate(
-                            "V001_00000_015",
-                            branch=RetrievalBranch.VISUAL_DENSE,
-                            rank=1,
-                            video_id="V001",
-                            shot_id=0,
-                            timestamp_sec=1.5,
-                        ),
-                    ),
-                ),
-                failed_frame_result(RetrievalBranch.OCR_BM25, "RESOURCE_UNAVAILABLE"),
-            ),
-        )
-
-        self.assertEqual(tuple(candidate.frame_id for candidate in result.candidates), ("V001_00000_015",))
-        self.assertIn(
-            "branch=ocr_bm25;query_variant_id=q0;code=RESOURCE_UNAVAILABLE",
-            result.diagnostics.warnings,
-        )
-
-    def test_asr_interval_contribution_is_not_multiplied_in_full_pipeline(self) -> None:
-        frames = (
-            FrameMetadata(frame_id="V001_00000_040", video_id="V001", shot_id=0, timestamp_sec=4.0),
-            FrameMetadata(frame_id="V001_00001_060", video_id="V001", shot_id=1, timestamp_sec=6.0),
-            FrameMetadata(frame_id="V001_00002_100", video_id="V001", shot_id=2, timestamp_sec=10.0),
-        )
-        bundle = KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT, query_id="asr-score")
         ranking = KISRankingService(
             metadata=FakeMetadataReaderPort(frames),
-            asr_mapper=ASRIntervalFrameMapper(
-                ASRMappingConfig(max_frames_per_interval=2, interval_rrf_k=10)
-            ),
+            asr_mapper=ASRIntervalFrameMapper(ASRMappingConfig(max_frames_per_interval=2, interval_rrf_k=10)),
         )
+        bundle = KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT, query_id="asr-score")
 
         result = ranking.rank(
             bundle,
@@ -398,34 +368,27 @@ class KISOrchestrationTests(unittest.TestCase):
             ),
         )
 
-        asr_total = sum(
-            evidence.normalized_score
+        evidence = tuple(
+            item
             for candidate in result.candidates
-            for evidence in candidate.evidence
-            if evidence.branch is RetrievalBranch.ASR_DENSE
+            for item in candidate.evidence
+            if item.branch is RetrievalBranch.ASR_DENSE
         )
-        self.assertAlmostEqual(asr_total, 1 / 11)
+        self.assertAlmostEqual(sum(item.normalized_score for item in evidence), 1 / 11)
+        self.assertTrue(all(item.source_candidate_id == "long" for item in evidence))
         self.assertIn("asr_truncated_interval_count=1", result.diagnostics.warnings)
-        asr_evidence = tuple(
-            evidence
-            for candidate in result.candidates
-            for evidence in candidate.evidence
-            if evidence.branch is RetrievalBranch.ASR_DENSE
-        )
-        self.assertTrue(asr_evidence)
-        self.assertTrue(all(evidence.source_candidate_id == "long" for evidence in asr_evidence))
-        self.assertTrue(all(evidence.source_start_time_sec == 0.0 for evidence in asr_evidence))
-        self.assertTrue(all(evidence.source_end_time_sec == 10.0 for evidence in asr_evidence))
-        self.assertTrue(all(evidence.source_normalized_score is not None for evidence in asr_evidence))
 
-    def test_missing_metadata_count_is_preserved_in_query_diagnostics(self) -> None:
-        ranking = KISRankingService(metadata=FakeMetadataReaderPort(()))
+    def test_optional_failure_degrades_but_core_failure_is_explicit(self) -> None:
+        frame = metadata("L21_V001_001", timestamp_sec=1.5, source_frame_idx=15)
+        ranking = KISRankingService(metadata=FakeMetadataReaderPort((frame,)))
         bundle = KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT)
-
         result = ranking.rank(
             bundle,
             (
-                frame_result(RetrievalBranch.VISUAL_DENSE, ()),
+                frame_result(
+                    RetrievalBranch.VISUAL_DENSE,
+                    (frame_candidate(frame, branch=RetrievalBranch.VISUAL_DENSE, rank=1),),
+                ),
                 failed_frame_result(
                     RetrievalBranch.OCR_BM25,
                     "MISSING_METADATA",
@@ -433,104 +396,135 @@ class KISOrchestrationTests(unittest.TestCase):
                 ),
             ),
         )
-
         self.assertEqual(result.diagnostics.missing_metadata_count, 3)
-
-    def test_visual_dense_failure_is_core_error_not_empty_success(self) -> None:
-        ranking = KISRankingService(metadata=FakeMetadataReaderPort(()))
-        bundle = KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT, query_id="core-fail")
+        self.assertIn(
+            "branch=ocr_bm25;query_variant_id=q0;code=MISSING_METADATA",
+            result.diagnostics.warnings,
+        )
 
         with self.assertRaises(BranchTimeoutError):
             ranking.rank(
                 bundle,
                 (failed_frame_result(RetrievalBranch.VISUAL_DENSE, "BRANCH_TIMEOUT"),),
             )
-
         with self.assertRaises(ResourceUnavailableError):
             ranking.rank(bundle, ())
 
-    def test_async_orchestrator_uses_retrieval_service_port(self) -> None:
-        bundle = KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT, query_id="q-orch")
-        retrieval = FakeRetrievalService(
+    def test_q1_visual_failure_does_not_drop_successful_q0(self) -> None:
+        frame = metadata("L21_V001_001", timestamp_sec=1.5, source_frame_idx=15)
+        ranking = KISRankingService(metadata=FakeMetadataReaderPort((frame,)))
+        bundle = KISQueryBuilder().build(
+            "query",
+            mode=QueryMode.KIS_TEXT,
+            paraphrases=("variant",),
+        )
+        result = ranking.rank(
+            bundle,
             (
                 frame_result(
                     RetrievalBranch.VISUAL_DENSE,
-                    (
-                        frame_candidate(
-                            "V001_00000_015",
-                            branch=RetrievalBranch.VISUAL_DENSE,
-                            rank=1,
-                            video_id="V001",
-                            shot_id=0,
-                            timestamp_sec=1.5,
-                        ),
-                    ),
+                    (frame_candidate(frame, branch=RetrievalBranch.VISUAL_DENSE, rank=1),),
                 ),
-            )
-        )
-        orchestrator = KISSearchOrchestrator(
-            retrieval=retrieval,
-            ranking=KISRankingService(
-                metadata=FakeMetadataReaderPort(
-                    (FrameMetadata(frame_id="V001_00000_015", video_id="V001", shot_id=0, timestamp_sec=1.5),)
-                )
+                failed_frame_result(
+                    RetrievalBranch.VISUAL_DENSE,
+                    "BRANCH_TIMEOUT",
+                    variant_id="q1",
+                ),
             ),
         )
+        self.assertEqual(tuple(item.frame_id for item in result.candidates), (frame.frame_id,))
+        self.assertIs(
+            result.diagnostics.branches[RetrievalBranch.VISUAL_DENSE].status,
+            BranchStatus.DEGRADED,
+        )
 
-        result = asyncio.run(orchestrator.search(bundle))
+    def test_final_top_k_uses_required_deterministic_order(self) -> None:
+        frames = (
+            metadata("L21_V002_001", timestamp_sec=1.0, source_frame_idx=10),
+            metadata("L21_V001_002", timestamp_sec=2.0, source_frame_idx=20),
+            metadata("L21_V001_001", timestamp_sec=1.0, source_frame_idx=10),
+        )
+        ranking = KISRankingService(metadata=FakeMetadataReaderPort(frames), final_top_k=2)
+        bundle = KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT)
+        result = ranking.rank(
+            bundle,
+            (
+                frame_result(
+                    RetrievalBranch.VISUAL_DENSE,
+                    tuple(
+                        frame_candidate(frame, branch=RetrievalBranch.VISUAL_DENSE, rank=1)
+                        for frame in frames
+                    ),
+                ),
+            ),
+        )
+        self.assertEqual(
+            tuple(item.frame_id for item in result.candidates),
+            ("L21_V001_001", "L21_V001_002"),
+        )
+        for invalid in (0, True):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                KISRankingService(metadata=FakeMetadataReaderPort(()), final_top_k=invalid)
 
-        self.assertEqual(retrieval.calls, ["q-orch"])
-        self.assertEqual(tuple(candidate.frame_id for candidate in result.candidates), ("V001_00000_015",))
+    def test_text_and_video_kis_use_the_same_orchestrator(self) -> None:
+        frame = metadata("L21_V001_001", timestamp_sec=1.5, source_frame_idx=15)
+        branch_results = (
+            frame_result(
+                RetrievalBranch.VISUAL_DENSE,
+                (frame_candidate(frame, branch=RetrievalBranch.VISUAL_DENSE, rank=1),),
+            ),
+        )
+        retrieval = FakeRetrievalService(branch_results)
+        orchestrator = KISSearchOrchestrator(
+            retrieval=retrieval,
+            ranking=KISRankingService(metadata=FakeMetadataReaderPort((frame,))),
+        )
 
-    def test_async_orchestrator_runs_ranking_in_executor(self) -> None:
-        bundle = KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT, query_id="q-exec")
+        text_result = asyncio.run(
+            orchestrator.search(KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT, query_id="t"))
+        )
+        video_result_value = asyncio.run(
+            orchestrator.search(KISQueryBuilder().build("query", mode=QueryMode.KIS_VIDEO, query_id="v"))
+        )
+        orchestrator.close()
+
+        self.assertEqual(text_result.candidates, video_result_value.candidates)
+        self.assertEqual(retrieval.calls, [("t", QueryMode.KIS_TEXT), ("v", QueryMode.KIS_VIDEO)])
+
+    def test_orchestrator_runs_ranking_in_executor_and_validates_before_retrieval(self) -> None:
         retrieval = FakeRetrievalService(())
         ranking = ThreadRecordingRanking()
         orchestrator = KISSearchOrchestrator(retrieval=retrieval, ranking=ranking)
-
-        asyncio.run(orchestrator.search(bundle))
+        asyncio.run(
+            orchestrator.search(KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT, query_id="exec"))
+        )
         orchestrator.close()
-
-        self.assertEqual(retrieval.calls, ["q-exec"])
         self.assertEqual(len(ranking.thread_names), 1)
         self.assertTrue(ranking.thread_names[0].startswith("aic-ranking"))
 
-    def test_orchestrator_enforces_c_policy_before_retrieval(self) -> None:
-        bundle = KISQueryBuilder().build(
+        invalid_retrieval = FakeRetrievalService(())
+        invalid_orchestrator = KISSearchOrchestrator(
+            retrieval=invalid_retrieval,
+            ranking=KISRankingService(metadata=FakeMetadataReaderPort(())),
+        )
+        invalid_bundle = KISQueryBuilder().build(
             "query",
             mode=QueryMode.KIS_TEXT,
             enabled_branches=(RetrievalBranch.OCR_BM25,),
         )
-        retrieval = FakeRetrievalService(())
-        orchestrator = KISSearchOrchestrator(
-            retrieval=retrieval,
-            ranking=KISRankingService(metadata=FakeMetadataReaderPort(())),
-        )
-
         with self.assertRaises(InvalidQueryError):
-            asyncio.run(orchestrator.search(bundle))
-        orchestrator.close()
-
-        self.assertEqual(retrieval.calls, [])
+            asyncio.run(invalid_orchestrator.search(invalid_bundle))
+        invalid_orchestrator.close()
+        self.assertEqual(invalid_retrieval.calls, [])
 
     def test_orchestrator_close_drains_active_request_and_rejects_new_work(self) -> None:
         async def scenario() -> None:
-            bundle = KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT, query_id="q-drain")
-            other = KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT, query_id="q-rejected")
+            frame = metadata("L21_V001_001", timestamp_sec=1.5, source_frame_idx=15)
             retrieval = BlockingRetrievalService(
                 (
                     frame_result(
                         RetrievalBranch.VISUAL_DENSE,
-                        (
-                            frame_candidate(
-                                "V001_00000_015",
-                                branch=RetrievalBranch.VISUAL_DENSE,
-                                rank=1,
-                                video_id="V001",
-                                shot_id=0,
-                                timestamp_sec=1.5,
-                            ),
-                        ),
+                        (frame_candidate(frame, branch=RetrievalBranch.VISUAL_DENSE, rank=1),),
                     ),
                 )
             )
@@ -538,58 +532,44 @@ class KISOrchestrationTests(unittest.TestCase):
             retrieval.release = asyncio.Event()
             orchestrator = KISSearchOrchestrator(
                 retrieval=retrieval,
-                ranking=KISRankingService(
-                    metadata=FakeMetadataReaderPort(
-                        (FrameMetadata(frame_id="V001_00000_015", video_id="V001", shot_id=0, timestamp_sec=1.5),)
-                    )
-                ),
+                ranking=KISRankingService(metadata=FakeMetadataReaderPort((frame,))),
             )
-
-            search_task = asyncio.create_task(orchestrator.search(bundle))
+            search_task = asyncio.create_task(
+                orchestrator.search(
+                    KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT, query_id="active")
+                )
+            )
             await retrieval.entered.wait()
             close_task = asyncio.create_task(asyncio.to_thread(orchestrator.close))
             await asyncio.sleep(0.01)
             self.assertFalse(close_task.done())
             with self.assertRaises(ResourceUnavailableError):
-                await orchestrator.search(other)
+                await orchestrator.search(
+                    KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT, query_id="rejected")
+                )
             retrieval.release.set()
             result = await search_task
             await close_task
-            orchestrator.close()
-
-            self.assertEqual(tuple(candidate.frame_id for candidate in result.candidates), ("V001_00000_015",))
+            self.assertEqual(tuple(item.frame_id for item in result.candidates), (frame.frame_id,))
 
         asyncio.run(scenario())
 
     def test_object_constraints_require_object_reader(self) -> None:
+        frame = metadata("L21_V001_001", timestamp_sec=1.5, source_frame_idx=15)
         bundle = KISQueryBuilder().build(
             "query",
             mode=QueryMode.KIS_TEXT,
             object_constraints=(
-                ObjectConstraint(
-                    label="person",
-                    count_operator=CountOperator.GTE,
-                    count=1,
-                ),
+                ObjectConstraint(label="person", count_operator=CountOperator.GTE, count=1),
             ),
         )
-        ranking = KISRankingService(metadata=FakeMetadataReaderPort(()))
         with self.assertRaises(ContractMismatchError):
-            ranking.rank(
+            KISRankingService(metadata=FakeMetadataReaderPort((frame,))).rank(
                 bundle,
                 (
                     frame_result(
                         RetrievalBranch.VISUAL_DENSE,
-                        (
-                            frame_candidate(
-                                "V001_00000_015",
-                                branch=RetrievalBranch.VISUAL_DENSE,
-                                rank=1,
-                                video_id="V001",
-                                shot_id=0,
-                                timestamp_sec=1.5,
-                            ),
-                        ),
+                        (frame_candidate(frame, branch=RetrievalBranch.VISUAL_DENSE, rank=1),),
                     ),
                 ),
             )

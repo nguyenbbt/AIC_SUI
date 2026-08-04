@@ -9,15 +9,27 @@ from online.domain.diagnostics import BranchDiagnostics, QueryDiagnostics
 from online.domain.enums import BranchStatus, RetrievalBranch
 from online.domain.errors import ContractMismatchError, ResourceUnavailableError
 from online.modes.kis import KISSearchResult
-from retrieval_api.search_engine import competition_candidates, create_app
+from retrieval_api.search_engine import (
+    KISCompetitionRow,
+    create_app,
+    serialize_kis_competition_candidates,
+)
 
 
-def fused_frame(frame_id: str = "V001_00000_015") -> FusedFrameCandidate:
+def fused_frame(
+    frame_id: str = "L21_V001_001",
+    *,
+    source_frame_idx: int = 15,
+) -> FusedFrameCandidate:
+    video_id, keyframe_text = frame_id.rsplit("_", 1)
+    keyframe_no = int(keyframe_text)
     return FusedFrameCandidate(
         frame_id=frame_id,
-        video_id="V001",
-        shot_id=0,
+        video_id=video_id,
+        keyframe_no=keyframe_no,
+        local_index=keyframe_no - 1,
         timestamp_sec=1.5,
+        source_frame_idx=source_frame_idx,
         final_score=0.9,
         branch_scores={RetrievalBranch.VISUAL_DENSE: 0.9},
         evidence=(),
@@ -92,7 +104,8 @@ class SearchEngineAPITests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["query_id"], "api-query")
-        self.assertEqual(payload["candidates"][0]["frame_id"], "V001_00000_015")
+        self.assertEqual(payload["candidates"][0]["frame_id"], "L21_V001_001")
+        self.assertEqual(payload["candidates"][0]["source_frame_idx"], 15)
         self.assertIsNone(payload["diagnostics"])
         self.assertEqual(orchestrator.calls[0].text_variants[1].text, "human beside vehicle")
 
@@ -179,20 +192,32 @@ class SearchEngineAPITests(unittest.TestCase):
             (RetrievalBranch.OCR_BM25,),
         )
 
-    def test_competition_candidates_adapter_is_minimal_and_stable(self) -> None:
-        adapted = competition_candidates((fused_frame(),))
+    def test_kis_competition_serializer_has_golden_field_names_types_and_order(self) -> None:
+        adapted = serialize_kis_competition_candidates((fused_frame(),))
 
         self.assertEqual(
             adapted,
             (
-                {
-                    "frame_id": "V001_00000_015",
-                    "video_id": "V001",
-                    "timestamp_sec": 1.5,
-                    "score": 0.9,
-                },
+                KISCompetitionRow(video_id="L21_V001", source_frame_idx=15),
             ),
         )
+        self.assertEqual(
+            [row.model_dump() for row in adapted],
+            [{"video_id": "L21_V001", "source_frame_idx": 15}],
+        )
+        self.assertEqual(tuple(adapted[0].model_dump()), ("video_id", "source_frame_idx"))
+        self.assertIsInstance(adapted[0].video_id, str)
+        self.assertIsInstance(adapted[0].source_frame_idx, int)
+
+    def test_kis_competition_serializer_reads_source_field_and_rejects_underdeduped_input(self) -> None:
+        first = fused_frame(source_frame_idx=901)
+        second = fused_frame("L21_V001_002", source_frame_idx=901)
+        self.assertEqual(
+            serialize_kis_competition_candidates((first,))[0].source_frame_idx,
+            901,
+        )
+        with self.assertRaises(ContractMismatchError):
+            serialize_kis_competition_candidates((first, second))
 
 
 if __name__ == "__main__":

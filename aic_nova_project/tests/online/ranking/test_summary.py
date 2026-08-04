@@ -58,11 +58,14 @@ def summary_result(
 
 
 def frame(frame_id: str, *, video_id: str, final_score: float) -> FusedFrameCandidate:
+    keyframe_no = int(frame_id.rsplit("_", 1)[1])
     return FusedFrameCandidate(
         frame_id=frame_id,
         video_id=video_id,
-        shot_id=0,
+        keyframe_no=keyframe_no,
+        local_index=keyframe_no - 1,
         timestamp_sec=1.0,
+        source_frame_idx=keyframe_no * 10,
         final_score=final_score,
         branch_scores={RetrievalBranch.VISUAL_DENSE: min(final_score, 1.0)},
         evidence=(),
@@ -77,20 +80,20 @@ class SummaryPropagationTests(unittest.TestCase):
         )
         output = propagator.propagate(
             (
-                frame("V001_00000_015", video_id="V001", final_score=0.5),
-                frame("V002_00000_015", video_id="V002", final_score=0.55),
+                frame("L21_V001_001", video_id="L21_V001", final_score=0.5),
+                frame("L21_V002_001", video_id="L21_V002", final_score=0.55),
             ),
             (
                 summary_result(
                     RetrievalBranch.SUMMARY_DENSE,
                     (
                         video_candidate(
-                            "V001",
+                            "L21_V001",
                             branch=RetrievalBranch.SUMMARY_DENSE,
                             normalized_score=0.3,
                         ),
                         video_candidate(
-                            "V999",
+                            "L21_V999",
                             branch=RetrievalBranch.SUMMARY_DENSE,
                             normalized_score=1.0,
                         ),
@@ -100,7 +103,7 @@ class SummaryPropagationTests(unittest.TestCase):
                     RetrievalBranch.SUMMARY_BM25,
                     (
                         video_candidate(
-                            "V001",
+                            "L21_V001",
                             branch=RetrievalBranch.SUMMARY_BM25,
                             normalized_score=0.4,
                         ),
@@ -109,7 +112,7 @@ class SummaryPropagationTests(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(tuple(item.video_id for item in output), ("V001", "V002"))
+        self.assertEqual(tuple(item.video_id for item in output), ("L21_V001", "L21_V002"))
         self.assertAlmostEqual(output[0].final_score, 0.7)
         self.assertAlmostEqual(output[0].diagnostics.summary_boost, 0.2)
         self.assertEqual(
@@ -131,11 +134,11 @@ class SummaryPropagationTests(unittest.TestCase):
             SummaryPropagationConfig(weight=1.0, max_boost=1.0)
         )
         output = propagator.propagate(
-            (frame("V001_00000_015", video_id="V001", final_score=0.5),),
+            (frame("L21_V001_001", video_id="L21_V001", final_score=0.5),),
             (
                 summary_result(
                     RetrievalBranch.SUMMARY_DENSE,
-                    (video_candidate("V001", branch=RetrievalBranch.SUMMARY_DENSE, rank=1),),
+                    (video_candidate("L21_V001", branch=RetrievalBranch.SUMMARY_DENSE, rank=1),),
                 ),
                 summary_result(
                     RetrievalBranch.SUMMARY_BM25,
@@ -156,7 +159,7 @@ class SummaryPropagationTests(unittest.TestCase):
             (
                 summary_result(
                     RetrievalBranch.SUMMARY_DENSE,
-                    (video_candidate("V001", branch=RetrievalBranch.SUMMARY_DENSE, normalized_score=1.0),),
+                    (video_candidate("L21_V001", branch=RetrievalBranch.SUMMARY_DENSE, normalized_score=1.0),),
                 ),
             ),
         )
@@ -179,7 +182,7 @@ class SummaryPropagationTests(unittest.TestCase):
                 RetrievalBranch.SUMMARY_DENSE,
                 (
                     video_candidate(
-                        "V001",
+                        "L21_V001",
                         branch=RetrievalBranch.SUMMARY_DENSE,
                         normalized_score=0.7,
                     ),
@@ -189,7 +192,7 @@ class SummaryPropagationTests(unittest.TestCase):
                 RetrievalBranch.SUMMARY_BM25,
                 (
                     video_candidate(
-                        "V001",
+                        "L21_V001",
                         branch=RetrievalBranch.SUMMARY_BM25,
                         normalized_score=0.7,
                     ),
@@ -197,7 +200,7 @@ class SummaryPropagationTests(unittest.TestCase):
             ),
         )
         once = propagator.propagate(
-            (frame("V001_00000_015", video_id="V001", final_score=0.5),),
+            (frame("L21_V001_001", video_id="L21_V001", final_score=0.5),),
             summary_results,
         )
         twice = propagator.propagate(once, summary_results)
@@ -217,7 +220,7 @@ class SummaryPropagationTests(unittest.TestCase):
             RetrievalBranch.SUMMARY_DENSE,
             (
                 video_candidate(
-                    "V001",
+                    "L21_V001",
                     branch=RetrievalBranch.SUMMARY_DENSE,
                     rank=1,
                     variant_id="q1",
@@ -227,7 +230,7 @@ class SummaryPropagationTests(unittest.TestCase):
         )
 
         disabled = disabled_q1.propagate(
-            (frame("V001_00000_015", video_id="V001", final_score=0.5),),
+            (frame("L21_V001_001", video_id="L21_V001", final_score=0.5),),
             (q1_result,),
         )
         self.assertEqual(disabled[0].diagnostics.summary_boost, 0.0)
@@ -240,7 +243,7 @@ class SummaryPropagationTests(unittest.TestCase):
                 query_variant_weights={"q1": 0.5},
             )
         ).propagate(
-            (frame("V001_00000_015", video_id="V001", final_score=0.5),),
+            (frame("L21_V001_001", video_id="L21_V001", final_score=0.5),),
             (q1_result,),
         )[0]
         self.assertAlmostEqual(enabled_q1.diagnostics.summary_boost, (1 / 11) * 0.5)

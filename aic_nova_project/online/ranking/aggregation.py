@@ -50,11 +50,12 @@ class QueryVariantAggregationConfig:
 
 
 class RRFQueryVariantAggregator:
-    """Apply configured weights to branch-local normalized q0/q1/q2 evidence.
+    """Prepare q0/q1/q2 results and weight their normalized evidence.
 
     The class name is retained for import compatibility with earlier C code.
-    Its policy name reflects the current behavior: weighted sum across query
-    variants, while RRF belongs to the branch-local normalizer.
+    Aggregation preparation deliberately runs before branch-local normalization
+    in the KIS pipeline.  Variant weights are applied only after normalization
+    so backend-specific raw-score scales are never multiplied together.
     """
 
     def __init__(self, config: QueryVariantAggregationConfig | None = None) -> None:
@@ -68,19 +69,38 @@ class RRFQueryVariantAggregator:
 
     def aggregate(self, branch_results: Sequence[BranchResult[Any]]) -> tuple[BranchResult[Any], ...]:
         values = _as_branch_results(branch_results)
+        seen: set[tuple[object, str]] = set()
+        for result in values:
+            key = (result.branch, result.query_variant_id)
+            if key in seen:
+                raise ContractMismatchError(
+                    "query-variant aggregation received duplicate branch variants",
+                    details={
+                        "branch": result.branch.value,
+                        "query_variant_id": result.query_variant_id,
+                    },
+                )
+            seen.add(key)
+        return values
+
+    def apply_normalized_weights(
+        self,
+        branch_results: Sequence[BranchResult[Any]],
+    ) -> tuple[BranchResult[Any], ...]:
+        """Apply variant weights after each branch result has been normalized."""
+
+        values = _as_branch_results(branch_results)
         for result in values:
             if result.status not in {BranchStatus.SUCCESS, BranchStatus.DEGRADED}:
                 continue
-            for candidate in result.candidates:
-                if candidate.normalized_score is None:
-                    raise ContractMismatchError(
-                        "query-variant aggregation requires normalized candidates",
-                        details={
-                            "branch": result.branch.value,
-                            "query_variant_id": result.query_variant_id,
-                        },
-                    )
-
+            if any(candidate.normalized_score is None for candidate in result.candidates):
+                raise ContractMismatchError(
+                    "query-variant weighting requires normalized candidates",
+                    details={
+                        "branch": result.branch.value,
+                        "query_variant_id": result.query_variant_id,
+                    },
+                )
         return tuple(
             result.model_copy(
                 update={

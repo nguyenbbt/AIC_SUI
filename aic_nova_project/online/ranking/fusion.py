@@ -18,6 +18,7 @@ from online.domain.candidates import (
 )
 from online.domain.enums import BranchStatus, CandidateLevel, RetrievalBranch
 from online.domain.errors import ContractMismatchError
+from online.ranking.sorting import fused_candidate_sort_key
 
 
 FRAME_FUSION_BRANCHES: tuple[RetrievalBranch, ...] = (
@@ -92,7 +93,7 @@ class WeightedFrameFusion:
                 grouped[candidate.frame_id].append(candidate)
 
         fused = tuple(self._fuse_frame(candidates) for candidates in grouped.values())
-        return tuple(sorted(fused, key=lambda item: (-item.final_score, item.frame_id)))
+        return tuple(sorted(fused, key=fused_candidate_sort_key))
 
     def _fuse_frame(self, candidates: Sequence[FrameCandidate]) -> FusedFrameCandidate:
         ordered = tuple(sorted(candidates, key=_evidence_sort_key))
@@ -137,8 +138,10 @@ class WeightedFrameFusion:
         return FusedFrameCandidate(
             frame_id=representative.frame_id,
             video_id=representative.video_id,
-            shot_id=representative.shot_id,
+            keyframe_no=representative.keyframe_no,
+            local_index=representative.local_index,
             timestamp_sec=representative.timestamp_sec,
+            source_frame_idx=representative.source_frame_idx,
             final_score=final_score,
             branch_scores=branch_scores,
             evidence=tuple(evidence),
@@ -177,7 +180,13 @@ def _validate_frame_contract(candidates: Sequence[FrameCandidate]) -> None:
     for candidate in candidates[1:]:
         mismatches = {
             field
-            for field in ("video_id", "shot_id", "timestamp_sec")
+            for field in (
+                "video_id",
+                "keyframe_no",
+                "local_index",
+                "timestamp_sec",
+                "source_frame_idx",
+            )
             if getattr(candidate, field) != getattr(first, field)
         }
         if mismatches:

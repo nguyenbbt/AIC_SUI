@@ -1,4 +1,4 @@
-"""Shot-level deduplication and near-frame grouping."""
+"""Competition-frame deduplication for KIS output."""
 
 from __future__ import annotations
 
@@ -6,12 +6,13 @@ from collections import defaultdict
 from collections.abc import Sequence
 
 from online.domain.candidates import FusedFrameCandidate, NearFrameRef
+from online.ranking.sorting import fused_candidate_sort_key
 
 
-class ShotDeduplicator:
-    """Keep one representative frame per ``(video_id, shot_id)`` group."""
+class CompetitionFrameDeduplicator:
+    """Keep one KIS result per organizer ``(video_id, source_frame_idx)``."""
 
-    name = "shot_dedup"
+    name = "competition_frame_dedup_v1"
 
     def deduplicate(self, candidates: Sequence[FusedFrameCandidate]) -> tuple[FusedFrameCandidate, ...]:
         if isinstance(candidates, (str, bytes)):
@@ -22,17 +23,17 @@ class ShotDeduplicator:
 
         groups: dict[tuple[str, int], list[FusedFrameCandidate]] = defaultdict(list)
         for candidate in values:
-            groups[(candidate.video_id, candidate.shot_id)].append(candidate)
+            groups[(candidate.video_id, candidate.source_frame_idx)].append(candidate)
 
         representatives = tuple(
             self._represent_group(group)
             for group in groups.values()
         )
-        return tuple(sorted(representatives, key=lambda item: (-item.final_score, item.frame_id)))
+        return tuple(sorted(representatives, key=fused_candidate_sort_key))
 
     @staticmethod
     def _represent_group(group: Sequence[FusedFrameCandidate]) -> FusedFrameCandidate:
-        ordered = tuple(sorted(group, key=lambda item: (-item.final_score, item.frame_id)))
+        ordered = tuple(sorted(group, key=fused_candidate_sort_key))
         representative = ordered[0]
         near_by_id = {
             frame.frame_id: frame
@@ -53,15 +54,8 @@ class ShotDeduplicator:
                 key=lambda item: (-item.final_score, item.frame_id),
             )
         )
-        return FusedFrameCandidate(
-            frame_id=representative.frame_id,
-            video_id=representative.video_id,
-            shot_id=representative.shot_id,
-            timestamp_sec=representative.timestamp_sec,
-            final_score=representative.final_score,
-            branch_scores=representative.branch_scores,
-            evidence=representative.evidence,
-            near_frames=near_frames,
-            objects=representative.objects,
-            diagnostics=representative.diagnostics,
+        return representative.model_copy(
+            update={
+                "near_frames": near_frames,
+            }
         )

@@ -16,11 +16,15 @@ def frame(
     rank: int,
     normalized_score: float | None = None,
 ) -> FrameCandidate:
+    video_id, keyframe_text = frame_id.rsplit("_", 1)
+    keyframe_no = int(keyframe_text)
     return FrameCandidate(
         frame_id=frame_id,
-        video_id="V001",
-        shot_id=0,
+        video_id=video_id,
+        keyframe_no=keyframe_no,
+        local_index=keyframe_no - 1,
         timestamp_sec=1.0,
+        source_frame_idx=keyframe_no * 10,
         rank=rank,
         raw_score=100.0 - rank,
         normalized_score=normalized_score,
@@ -58,35 +62,36 @@ class QueryVariantAggregationTests(unittest.TestCase):
         aggregator = RRFQueryVariantAggregator(
             QueryVariantAggregationConfig(query_variant_weights={"q0": 1.0, "q1": 0.5})
         )
-        aggregated = aggregator.aggregate(
+        prepared = aggregator.aggregate(
             (
                 branch_result(
                     "q0",
                     (
-                        frame("V001_00000_015", variant_id="q0", rank=1, normalized_score=0.4),
-                        frame("V001_00000_050", variant_id="q0", rank=2, normalized_score=0.7),
+                        frame("L21_V001_001", variant_id="q0", rank=1, normalized_score=0.4),
+                        frame("L21_V001_002", variant_id="q0", rank=2, normalized_score=0.7),
                     ),
                 ),
                 branch_result(
                     "q1",
                     (
-                        frame("V001_00000_015", variant_id="q1", rank=2, normalized_score=0.4),
+                        frame("L21_V001_001", variant_id="q1", rank=2, normalized_score=0.4),
                     ),
                 ),
             )
         )
+        aggregated = aggregator.apply_normalized_weights(prepared)
 
         self.assertEqual(tuple(result.query_variant_id for result in aggregated), ("q0", "q1"))
         repeated_scores = [
             candidate.normalized_score
             for result in aggregated
             for candidate in result.candidates
-            if candidate.frame_id == "V001_00000_015"
+            if candidate.frame_id == "L21_V001_001"
         ]
         self.assertEqual(repeated_scores, [0.4, 0.2])
 
         fused = WeightedFrameFusion().fuse(aggregated)
-        self.assertEqual(fused[0].frame_id, "V001_00000_050")
+        self.assertEqual(fused[0].frame_id, "L21_V001_002")
         self.assertAlmostEqual(
             fused[1].branch_scores[RetrievalBranch.VISUAL_DENSE],
             0.6,
@@ -103,35 +108,40 @@ class QueryVariantAggregationTests(unittest.TestCase):
             status=BranchStatus.FAILED,
             warnings=("BRANCH_TIMEOUT",),
         )
-        aggregated = RRFQueryVariantAggregator().aggregate(
+        aggregator = RRFQueryVariantAggregator()
+        prepared = aggregator.aggregate(
             (
                 branch_result(
                     "q0",
-                    (frame("V001_00000_015", variant_id="q0", rank=1, normalized_score=0.3),),
+                    (frame("L21_V001_001", variant_id="q0", rank=1, normalized_score=0.3),),
                 ),
                 failed,
             )
         )
+        aggregated = aggregator.apply_normalized_weights(prepared)
 
         self.assertEqual(aggregated[0].candidates[0].normalized_score, 0.3)
         self.assertIs(aggregated[1], failed)
 
     def test_query_variant_weights_have_observable_effect(self) -> None:
-        aggregated = RRFQueryVariantAggregator(
+        aggregator = RRFQueryVariantAggregator(
             QueryVariantAggregationConfig(query_variant_weights={"q0": 0.25})
-        ).aggregate(
-            (
-                branch_result(
-                    "q0",
-                    (
-                        frame(
-                            "V001_00000_015",
-                            variant_id="q0",
-                            rank=1,
-                            normalized_score=0.42,
+        )
+        aggregated = aggregator.apply_normalized_weights(
+            aggregator.aggregate(
+                (
+                    branch_result(
+                        "q0",
+                        (
+                            frame(
+                                "L21_V001_001",
+                                variant_id="q0",
+                                rank=1,
+                                normalized_score=0.42,
+                            ),
                         ),
                     ),
-                ),
+                )
             )
         )
 
@@ -141,9 +151,23 @@ class QueryVariantAggregationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             QueryVariantAggregationConfig(query_variant_weights={"q0": -1.0})
         with self.assertRaises(ContractMismatchError):
-            RRFQueryVariantAggregator().aggregate(
-                (branch_result("q0", (frame("V001_00000_015", variant_id="q0", rank=1),)),)
+            aggregator = RRFQueryVariantAggregator()
+            aggregator.apply_normalized_weights(
+                aggregator.aggregate(
+                    (
+                        branch_result(
+                            "q0",
+                            (frame("L21_V001_001", variant_id="q0", rank=1),),
+                        ),
+                    )
+                )
             )
+        with self.assertRaises(ContractMismatchError):
+            duplicate = branch_result(
+                "q0",
+                (frame("L21_V001_001", variant_id="q0", rank=1),),
+            )
+            RRFQueryVariantAggregator().aggregate((duplicate, duplicate))
         with self.assertRaises(TypeError):
             RRFQueryVariantAggregator().aggregate(("not-a-result",))  # type: ignore[arg-type]
 

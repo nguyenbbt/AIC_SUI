@@ -320,6 +320,7 @@ def build_online_runtime(
         policy_name=policy.policy_name,
         policy_status=policy.policy_status,
         core_visual_policy=policy.core_visual_policy,
+        final_top_k=policy.final_top_k,
     )
     ranking_executor = ThreadPoolExecutor(
         max_workers=runtime_config.ranking_max_workers,
@@ -532,6 +533,7 @@ def _ranking_policy_from_env(prefix: str) -> RankingPolicyConfig:
         asr_interval_rrf_k=_env_int(prefix, "RANKING_ASR_INTERVAL_RRF_K", 60),
         object_soft_boost_per_constraint=_env_float(prefix, "RANKING_OBJECT_SOFT_BOOST", 0.05),
         object_max_total_boost=_env_float(prefix, "RANKING_OBJECT_MAX_TOTAL_BOOST", 0.2),
+        final_top_k=_env_int(prefix, "RANKING_FINAL_TOP_K", 100),
     )
 
 

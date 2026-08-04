@@ -70,17 +70,20 @@ class BrokenTextEncoder(FakeTextEncoder):
 
 def runtime_with_fakes() -> tuple[object, ManagedMilvus, ManagedElasticsearch]:
     frame = FrameMetadata(
-        frame_id="V001_00000_015",
-        video_id="V001",
-        shot_id=0,
+        frame_id="L21_V001_001",
+        video_id="L21_V001",
+        keyframe_no=1,
+        local_index=0,
         timestamp_sec=1.5,
+        fps=30.0,
+        source_frame_idx=45,
+        image_rel_path="keyframes/L21_V001/001.jpg",
     )
     milvus = ManagedMilvus(
         visual=(
             FrameSearchHit(
                 frame_id=frame.frame_id,
                 video_id=frame.video_id,
-                shot_id=frame.shot_id,
                 raw_score=0.9,
             ),
         )
@@ -114,6 +117,7 @@ class RuntimeCompositionTests(unittest.TestCase):
                 "AIC_ONLINE_RANKING_NORMALIZATION_RRF_K": "17",
                 "AIC_ONLINE_RANKING_QUERY_Q1_WEIGHT": "0.25",
                 "AIC_ONLINE_RANKING_ASR_MAX_FRAMES_PER_INTERVAL": "9",
+                "AIC_ONLINE_RANKING_FINAL_TOP_K": "37",
             },
             clear=True,
         ):
@@ -125,6 +129,7 @@ class RuntimeCompositionTests(unittest.TestCase):
         self.assertEqual(config.ranking_policy.normalization_rrf_k, 17)
         self.assertEqual(config.ranking_policy.query_variant_weights["q1"], 0.25)
         self.assertEqual(config.ranking_policy.asr_max_frames_per_interval, 9)
+        self.assertEqual(config.ranking_policy.final_top_k, 37)
         invocation_configs = build_invocation_configs(config)
         self.assertEqual(invocation_configs[(RetrievalBranch.VISUAL_DENSE, "q0")].top_k, 7)
         self.assertEqual(invocation_configs[(RetrievalBranch.OCR_DENSE, "q1")].top_k, 11)
@@ -147,10 +152,14 @@ class RuntimeCompositionTests(unittest.TestCase):
 
     def test_required_encoder_probe_marks_runtime_unhealthy(self) -> None:
         frame = FrameMetadata(
-            frame_id="V001_00000_015",
-            video_id="V001",
-            shot_id=0,
+            frame_id="L21_V001_001",
+            video_id="L21_V001",
+            keyframe_no=1,
+            local_index=0,
             timestamp_sec=1.5,
+            fps=30.0,
+            source_frame_idx=45,
+            image_rel_path="keyframes/L21_V001/001.jpg",
         )
         runtime = build_online_runtime(
             data_config=OnlineDataConfig(),
@@ -201,7 +210,7 @@ class RuntimeCompositionTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["query_id"], "wired-query")
-        self.assertEqual(response.json()["candidates"][0]["frame_id"], "V001_00000_015")
+        self.assertEqual(response.json()["candidates"][0]["frame_id"], "L21_V001_001")
         self.assertTrue(milvus.closed)
         self.assertTrue(elasticsearch.closed)
 

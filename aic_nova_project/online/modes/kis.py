@@ -27,12 +27,14 @@ from online.ports.metadata import MetadataReaderPort
 from online.ports.objects import ObjectReaderPort
 from online.ranking.aggregation import RRFQueryVariantAggregator
 from online.ranking.asr_mapper import ASRIntervalFrameMapper
-from online.ranking.dedup import ShotDeduplicator
+from online.ranking.dedup import CompetitionFrameDeduplicator
 from online.ranking.fusion import FRAME_FUSION_BRANCHES, FusionConfig, WeightedFrameFusion
 from online.ranking.normalizers import RRFScoreNormalizer, ScoreNormalizer
 from online.ranking.object_filter import ObjectConstraintProcessor, ObjectProcessingConfig
 from online.ranking.summary import SummaryScorePropagator
+from online.ranking.sorting import fused_candidate_sort_key
 from online.retrieval.service import RetrievalServicePort
+from query_understanding.providers.objects import OBJECT_LABEL_NORMALIZER_VERSION
 
 
 CORE_BRANCHES = frozenset({RetrievalBranch.VISUAL_DENSE})
@@ -65,8 +67,9 @@ class KISRankingService:
         normalizer: ScoreNormalizer | None = None,
         fusion: WeightedFrameFusion | None = None,
         summary: SummaryScorePropagator | None = None,
-        dedup: ShotDeduplicator | None = None,
+        dedup: CompetitionFrameDeduplicator | None = None,
         object_config: ObjectProcessingConfig | None = None,
+        final_top_k: int = 100,
         policy_name: str = "person_c_experimental_baseline_v1",
         policy_status: str = "experimental",
         core_visual_policy: str = "q0_required",
@@ -82,8 +85,15 @@ class KISRankingService:
         self.normalizer = normalizer or RRFScoreNormalizer()
         self.fusion = fusion or WeightedFrameFusion()
         self.summary = summary or SummaryScorePropagator()
-        self.dedup = dedup or ShotDeduplicator()
+        self.dedup = dedup or CompetitionFrameDeduplicator()
         self.object_config = object_config or ObjectProcessingConfig()
+        if (
+            isinstance(final_top_k, bool)
+            or not isinstance(final_top_k, int)
+            or final_top_k < 1
+        ):
+            raise ValueError("final_top_k must be a positive integer")
+        self.final_top_k = final_top_k
         self.policy_name = policy_name
         self.policy_status = policy_status
         if core_visual_policy != "q0_required":
@@ -140,15 +150,16 @@ class KISRankingService:
         stage_latencies["asr_mapping"] = _elapsed_ms(stage_start)
 
         stage_start = perf_counter()
-        normalized = _normalize_branch_results(tuple(frame_results), self.normalizer)
-        stage_latencies["branch_normalization"] = _elapsed_ms(stage_start)
-
-        stage_start = perf_counter()
-        aggregated = self.aggregator.aggregate(normalized)
+        aggregated = self.aggregator.aggregate(tuple(frame_results))
         stage_latencies["query_variant_aggregation"] = _elapsed_ms(stage_start)
 
         stage_start = perf_counter()
-        fused = self.fusion.fuse(aggregated)
+        normalized = _normalize_branch_results(aggregated, self.normalizer)
+        weighted = self.aggregator.apply_normalized_weights(normalized)
+        stage_latencies["branch_normalization"] = _elapsed_ms(stage_start)
+
+        stage_start = perf_counter()
+        fused = self.fusion.fuse(weighted)
         stage_latencies["fusion"] = _elapsed_ms(stage_start)
 
         stage_start = perf_counter()
@@ -164,6 +175,12 @@ class KISRankingService:
         deduped = self.dedup.deduplicate(object_filtered)
         dedup_removals = len(object_filtered) - len(deduped)
         stage_latencies["dedup"] = _elapsed_ms(stage_start)
+
+        stage_start = perf_counter()
+        final_candidates = tuple(
+            sorted(deduped, key=fused_candidate_sort_key)
+        )[: self.final_top_k]
+        stage_latencies["final_sort_top_k"] = _elapsed_ms(stage_start)
 
         total_latency_ms = _elapsed_ms(started_at)
         diagnostics = QueryDiagnostics(
@@ -195,10 +212,11 @@ class KISRankingService:
                 aggregator=self.aggregator,
                 summary=self.summary,
                 object_config=self.object_config,
+                final_top_k=self.final_top_k,
             ),
             errors=(),
         )
-        return KISSearchResult(candidates=deduped, diagnostics=diagnostics)
+        return KISSearchResult(candidates=final_candidates, diagnostics=diagnostics)
 
     def _apply_objects(
         self,
@@ -422,6 +440,7 @@ def _query_warnings(
     aggregator: RRFQueryVariantAggregator,
     summary: SummaryScorePropagator,
     object_config: ObjectProcessingConfig,
+    final_top_k: int,
 ) -> tuple[str, ...]:
     values = [
         f"ranking_policy={policy_name}:{policy_status}",
@@ -442,6 +461,9 @@ def _query_warnings(
         f"summary_fallback_rrf_k={summary.config.fallback_rrf_k}",
         f"object_soft_boost_per_constraint={object_config.soft_boost_per_constraint}",
         f"object_max_total_boost={object_config.max_total_boost}",
+        f"object_label_normalizer={OBJECT_LABEL_NORMALIZER_VERSION}",
+        f"object_position_policy={object_config.position_policy_name}",
+        f"final_top_k={final_top_k}",
     ]
     values.extend(f"asr_{key}={value}" for key, value in sorted(asr_stats.items()))
     values.extend(
