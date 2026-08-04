@@ -87,3 +87,22 @@ def test_modal_volume_json_array_is_flattened_before_name_lookup():
     assert "$volumes = @($volumeJson | ConvertFrom-Json)" not in script
     assert "$volumeNames = @($volumes | ForEach-Object { $_.name })" in script
     assert "$VolumeName -notin $volumeNames" in script
+
+
+def test_modal_pull_targets_data_parent_to_avoid_nested_processed_dir():
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert '$localData = Join-Path $projectRoot "data"' in script
+    assert '"/processed", $localData' in script
+    assert '"/processed", $localProcessed' not in script
+
+
+def test_indexing_worker_is_rebuilt_before_it_runs():
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    build = '"compose", "build", "indexing"'
+    run = '"compose", "run", "--rm", "indexing"'
+
+    assert build in script
+    assert run in script
+    assert script.index(build) < script.index(run)

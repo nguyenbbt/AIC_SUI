@@ -12,9 +12,10 @@ Set-StrictMode -Version Latest
 
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $modalRunner = Join-Path $projectRoot "scripts\offline_modal_runner.py"
+$localData = Join-Path $projectRoot "data"
 $localRawVideos = Join-Path $projectRoot "data\raw_videos"
 $localCaptions = Join-Path $projectRoot "data\captions"
-$localProcessed = Join-Path $projectRoot "data\processed"
+$localProcessed = Join-Path $localData "processed"
 
 function Write-Stage {
     param([Parameter(Mandatory)][string]$Name)
@@ -162,11 +163,11 @@ try {
 
     Write-Stage "pull-artifacts"
     if (-not $DryRun) {
-        New-Item -ItemType Directory -Force -Path $localProcessed | Out-Null
+        New-Item -ItemType Directory -Force -Path $localData | Out-Null
     }
     Invoke-CheckedCommand "modal" @(
         "volume", "get", "--force", $VolumeName,
-        "/processed", $localProcessed
+        "/processed", $localData
     )
 
     Write-Stage "docker-indexing"
@@ -181,6 +182,9 @@ try {
         Invoke-CheckedCommand "docker" @(
             "compose", "up", "-d", "--build",
             "etcd", "minio", "milvus-standalone", "elasticsearch"
+        )
+        Invoke-CheckedCommand "docker" @(
+            "compose", "build", "indexing"
         )
 
         $indexArguments = @(
