@@ -15,13 +15,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy source code and scripts
 COPY feature_extraction/visual_embedding /app/feature_extraction/visual_embedding
-COPY scripts/download_pe_core.py /app/scripts/
+COPY scripts/download_visual_model.py /app/scripts/
 
 # Set Python path so our module is importable
 ENV PYTHONPATH=/app
 
 # Download the model weights to cache for offline use
-RUN python scripts/download_pe_core.py
+RUN python scripts/download_visual_model.py
 
 # Default entrypoint to the CLI
 ENTRYPOINT ["python", "-m", "feature_extraction.visual_embedding.cli"]

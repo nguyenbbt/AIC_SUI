@@ -7,6 +7,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
 from feature_extraction.visual_embedding.pipeline import run_pipeline
 from feature_extraction.visual_embedding.metadata_reader import read_metadata
+from feature_extraction.visual_embedding.config import DEFAULT_VISUAL_MODEL_ID
 
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), 'fixtures')
 METADATA_DIR = os.path.join(FIXTURE_DIR, 'metadata')
@@ -28,7 +29,7 @@ def test_resume_skip_existing():
         metadata_dir=METADATA_DIR,
         keyframe_dir=KEYFRAME_DIR,
         output_dir=OUTPUT_DIR,
-        model_id="hf-hub:timm/PE-Core-bigG-14-448",
+        model_id=DEFAULT_VISUAL_MODEL_ID,
         device="cpu",
         precision="fp32",
         batch_size=1,
@@ -48,7 +49,7 @@ def test_resume_skip_existing():
         metadata_dir=METADATA_DIR,
         keyframe_dir=KEYFRAME_DIR,
         output_dir=OUTPUT_DIR,
-        model_id="hf-hub:timm/PE-Core-bigG-14-448",
+        model_id=DEFAULT_VISUAL_MODEL_ID,
         device="cpu",
         precision="fp32",
         batch_size=1,
@@ -64,7 +65,7 @@ def test_resume_skip_existing():
         metadata_dir=METADATA_DIR,
         keyframe_dir=KEYFRAME_DIR,
         output_dir=OUTPUT_DIR,
-        model_id="hf-hub:timm/PE-Core-bigG-14-448",
+        model_id=DEFAULT_VISUAL_MODEL_ID,
         device="cpu",
         precision="fp32",
         batch_size=1,

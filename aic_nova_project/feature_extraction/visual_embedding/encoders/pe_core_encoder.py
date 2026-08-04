@@ -4,6 +4,8 @@ from typing import List
 from PIL.Image import Image
 import numpy as np
 
+from ..config import DEFAULT_VISUAL_MODEL_ID, parse_open_clip_model_id
+
 try:
     import open_clip
 except ImportError:
@@ -13,11 +15,16 @@ from .base import VisualEncoder
 
 class PECoreEncoder(VisualEncoder):
     """
-    Encoder implementation using open_clip and PE-Core-bigG-14-448.
+    Encoder implementation using OpenCLIP.
     """
-    def __init__(self, device: str = "auto", precision: str = "fp16", model_id: str = "hf-hub:timm/PE-Core-bigG-14-448"):
+    def __init__(
+        self,
+        device: str = "auto",
+        precision: str = "fp16",
+        model_id: str = DEFAULT_VISUAL_MODEL_ID,
+    ):
         """
-        Initialize the PE-Core model.
+        Initialize the configured OpenCLIP model.
         """
         self.model_id = model_id
         if device == "auto":
@@ -39,11 +46,11 @@ class PECoreEncoder(VisualEncoder):
                 self.dtype = torch.float32
 
         # Load model and transforms
-        if "::" in model_id:
-            model_name, pretrained = model_id.split("::")
+        model_name, pretrained = parse_open_clip_model_id(model_id)
+        if pretrained is not None:
             self.model, _, self.preprocess = open_clip.create_model_and_transforms(model_name, pretrained=pretrained)
         else:
-            self.model, _, self.preprocess = open_clip.create_model_and_transforms(model_id)
+            self.model, _, self.preprocess = open_clip.create_model_and_transforms(model_name)
         
         self.model = self.model.to(self.device, dtype=self.dtype)
         self.model.eval()

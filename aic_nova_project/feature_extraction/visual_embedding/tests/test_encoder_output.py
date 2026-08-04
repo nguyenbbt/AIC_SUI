@@ -36,7 +36,7 @@ def test_encoder_output_shape_and_norm():
         encoder = PECoreEncoder(
             device="cpu",
             precision="fp32",
-            model_id="hf-hub:timm/PE-Core-bigG-14-448",
+            model_id="hf-hub:organization/custom-vision-model",
         )
     
     # Create dummy images
@@ -65,3 +65,16 @@ def test_encoder_empty_batch():
     assert isinstance(embeddings, np.ndarray)
     assert embeddings.shape == (0,)
     model.encode_image.assert_not_called()
+
+
+def test_encoder_defaults_to_openai_clip_vit_b32():
+    model, preprocess = _mock_open_clip_model()
+    with patch(
+        "feature_extraction.visual_embedding.encoders.pe_core_encoder."
+        "open_clip.create_model_and_transforms",
+        return_value=(model, None, preprocess),
+    ) as create_model:
+        encoder = PECoreEncoder(device="cpu", precision="fp32")
+
+    assert encoder.model_id == "ViT-B-32::openai"
+    create_model.assert_called_once_with("ViT-B-32", pretrained="openai")

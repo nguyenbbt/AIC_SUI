@@ -1,5 +1,7 @@
 import argparse
 import sys
+
+from .config import DEFAULT_VISUAL_MODEL_ID
 from .pipeline import run_pipeline
 
 def main():
@@ -8,7 +10,12 @@ def main():
     parser.add_argument("--metadata-dir", type=str, required=True, help="Directory containing input metadata JSON files.")
     parser.add_argument("--keyframe-dir", type=str, required=True, help="Directory containing extracted keyframes.")
     parser.add_argument("--output-dir", type=str, required=True, help="Directory to save output Parquet files.")
-    parser.add_argument("--model-id", type=str, default="hf-hub:timm/PE-Core-bigG-14-448", help="Model ID for open_clip.")
+    parser.add_argument(
+        "--model-id",
+        type=str,
+        default=DEFAULT_VISUAL_MODEL_ID,
+        help="Model ID for open_clip.",
+    )
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cuda", "cpu"], help="Device to use for inference.")
     parser.add_argument("--precision", type=str, default="fp16", choices=["fp16", "bf16", "fp32"], help="Precision for inference.")
     parser.add_argument("--batch-size", type=int, default=64, help="Batch size for inference.")

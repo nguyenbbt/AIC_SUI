@@ -1,6 +1,7 @@
 # Module 2: Visual Embedding
 
-This module extracts visual embeddings from video keyframes using the `PE-Core-bigG-14-448` model from Meta (via `open_clip`).
+This module extracts visual embeddings from video keyframes using OpenAI CLIP
+`ViT-B-32::openai` via `open_clip`.
 
 ## Features
 - Complete offline capability (model weights are downloaded during Docker build).
@@ -21,8 +22,24 @@ pip install -r feature_extraction/visual_embedding/requirements.txt
 python -m feature_extraction.visual_embedding.cli --metadata-dir data/metadata --keyframe-dir data/keyframes --output-dir data/embeddings --device auto --batch-size 64 --num-workers 4
 ```
 ```
-python -m feature_extraction.visual_embedding.cli --metadata-dir data/metadata --keyframe-dir data/keyframes --output-dir data/embeddings --device cuda --model-id hf-hub:timm/ViT-L-14-SigLIP --batch-size 16 --num-workers 
+python -m feature_extraction.visual_embedding.cli --metadata-dir data/metadata --keyframe-dir data/keyframes --output-dir data/embeddings --device cuda --model-id ViT-B-32::openai --batch-size 64 --num-workers 4
 ```
+
+`ViT-B-32::openai` is the default, so `--model-id` may be omitted. The model ID
+is stored in each Parquet artifact and checked during resume. Artifacts produced
+by another model are treated as stale and regenerated automatically.
+
+When migrating an existing deployment, regenerate visual embeddings before
+re-indexing because vectors from different models must not share a Milvus
+collection:
+
+```powershell
+python -m feature_extraction.visual_embedding.cli --metadata-dir data/metadata --keyframe-dir data/keyframes --output-dir data/embeddings/visual --device auto --force
+```
+
+Then run Module 7 indexing with `--reset-all` once to recreate the collection
+using the detected CLIP embedding dimension. This resets all three Module 7
+stores, so back up any data that is not reproducible before running it.
 
 ## Running via Docker (Offline execution)
 The Dockerfile is designed to cache the model weights during the build process, so no internet connection is required when running the container.

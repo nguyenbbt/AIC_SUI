@@ -6,6 +6,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
 from feature_extraction.visual_embedding.pipeline import run_pipeline
+from feature_extraction.visual_embedding.config import DEFAULT_VISUAL_MODEL_ID
 
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), 'fixtures')
 METADATA_DIR = os.path.join(FIXTURE_DIR, 'metadata')
@@ -41,7 +42,7 @@ def test_error_handling_missing_image():
                 metadata_dir=err_meta_dir,
                 keyframe_dir=KEYFRAME_DIR,
                 output_dir=OUTPUT_DIR,
-                model_id="hf-hub:timm/PE-Core-bigG-14-448",
+                model_id=DEFAULT_VISUAL_MODEL_ID,
                 device="cpu",
                 precision="fp32",
                 batch_size=2,
