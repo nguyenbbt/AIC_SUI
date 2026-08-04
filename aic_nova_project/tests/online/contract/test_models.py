@@ -11,6 +11,7 @@ from online.domain.candidates import (
     BranchResult,
     FrameCandidate,
     FusedFrameCandidate,
+    ObjectDetection,
     VideoCandidate,
 )
 from online.domain.enums import BranchStatus, CandidateLevel, QueryMode, RetrievalBranch
@@ -73,6 +74,74 @@ class DomainContractTests(unittest.TestCase):
                 count=-1,
                 min_confidence=0.5,
             )
+
+    def test_object_detection_uses_organizer_schema_and_normalized_bbox(self) -> None:
+        detection = ObjectDetection(
+            label_display="Person",
+            label_normalized="person",
+            class_mid="/m/01g317",
+            class_label_id="0",
+            confidence=0.95,
+            x_min=0.10,
+            y_min=0.20,
+            x_max=0.60,
+            y_max=0.90,
+            model_source="organizer_open_images",
+        )
+        self.assertEqual(
+            set(ObjectDetection.model_fields),
+            {
+                "label_display",
+                "label_normalized",
+                "class_mid",
+                "class_label_id",
+                "confidence",
+                "x_min",
+                "y_min",
+                "x_max",
+                "y_max",
+                "model_source",
+            },
+        )
+        self.assertEqual(
+            ObjectDetection.model_validate_json(detection.model_dump_json()),
+            detection,
+        )
+        optional_ids = detection.model_copy(
+            update={"class_mid": None, "class_label_id": None}
+        )
+        self.assertIsNone(optional_ids.class_mid)
+        self.assertIsNone(optional_ids.class_label_id)
+
+    def test_object_detection_rejects_legacy_or_invalid_organizer_records(self) -> None:
+        base = {
+            "label_display": "Person",
+            "label_normalized": "person",
+            "class_mid": "/m/01g317",
+            "class_label_id": "0",
+            "confidence": 0.95,
+            "x_min": 0.10,
+            "y_min": 0.20,
+            "x_max": 0.60,
+            "y_max": 0.90,
+            "model_source": "organizer_open_images",
+        }
+        for field, value in (
+            ("confidence", 1.01),
+            ("x_min", -0.01),
+            ("y_min", 1.01),
+            ("x_max", 1.01),
+            ("y_max", -0.01),
+            ("x_min", 0.70),
+            ("y_min", 0.95),
+            ("model_source", " "),
+        ):
+            with self.assertRaises(ValidationError):
+                ObjectDetection.model_validate({**base, field: value})
+        with self.assertRaises(ValidationError):
+            ObjectDetection.model_validate({key: value for key, value in base.items() if key != "model_source"})
+        with self.assertRaises(ValidationError):
+            ObjectDetection.model_validate({**base, "label": "person"})
 
     def test_error_diagnostics_redact_secrets_and_vectors(self) -> None:
         error = ResourceUnavailableError(

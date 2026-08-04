@@ -64,6 +64,11 @@ class PortConformanceTests(unittest.TestCase):
             ["L21_V001_003"], label="person", min_confidence=0.5
         )
         self.assertEqual(len(filtered["L21_V001_003"]), 1)
+        self.assertEqual(filtered["L21_V001_003"][0].label_display, "Person")
+        by_mid = fixture.object_reader().get_objects_by_frame_ids(
+            ["L21_V001_003"], label="/m/0k4j", min_confidence=0.5
+        )
+        self.assertEqual(by_mid["L21_V001_003"][0].label_normalized, "car")
 
     def test_fakes_validate_inputs_record_calls_and_preserve_empty_success(self) -> None:
         fixture = build_integration_fixture()

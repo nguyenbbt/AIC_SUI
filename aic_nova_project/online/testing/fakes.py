@@ -420,7 +420,11 @@ class FakeObjectReaderPort:
                 value
                 for value in values
                 if value.confidence >= min_confidence
-                and (label is None or value.label == label)
+                and (
+                    label is None
+                    or value.label_normalized == label
+                    or value.class_mid == label
+                )
             )
         return output
 
@@ -511,52 +515,68 @@ def build_integration_fixture() -> IntegrationFixture:
         "L21_V001_001": (),
         "L21_V001_002": (
             ObjectDetection(
-                label="person",
+                label_display="Person",
+                label_normalized="person",
+                class_mid="/m/01g317",
+                class_label_id="0",
                 confidence=0.95,
-                x_min=10,
-                y_min=20,
-                x_max=110,
-                y_max=220,
-                model_source="yolo_world",
+                x_min=0.10,
+                y_min=0.10,
+                x_max=0.30,
+                y_max=0.60,
+                model_source="organizer_open_images",
             ),
         ),
         "L21_V001_003": (
             ObjectDetection(
-                label="person",
+                label_display="Person",
+                label_normalized="person",
+                class_mid="/m/01g317",
+                class_label_id="0",
                 confidence=0.91,
-                x_min=15,
-                y_min=25,
-                x_max=115,
-                y_max=225,
-                model_source="yolo_world",
+                x_min=0.12,
+                y_min=0.10,
+                x_max=0.32,
+                y_max=0.62,
+                model_source="organizer_open_images",
             ),
             ObjectDetection(
-                label="person",
+                label_display="Person",
+                label_normalized="person",
+                class_mid="/m/01g317",
+                class_label_id="0",
                 confidence=0.35,
-                x_min=120,
-                y_min=30,
-                x_max=200,
-                y_max=230,
-                model_source="co_detr",
+                x_min=0.40,
+                y_min=0.12,
+                x_max=0.60,
+                y_max=0.65,
+                model_source="organizer_open_images",
             ),
             ObjectDetection(
-                label="car",
+                label_display="Car",
+                label_normalized="car",
+                class_mid="/m/0k4j",
+                class_label_id="1",
                 confidence=0.88,
-                x_min=210,
-                y_min=120,
-                x_max=410,
-                y_max=300,
-                model_source="co_detr",
+                x_min=0.50,
+                y_min=0.35,
+                x_max=0.90,
+                y_max=0.85,
+                model_source="organizer_open_images",
             ),
         ),
         "L21_V002_001": (
             ObjectDetection(
-                label="bicycle",
+                label_display="Bicycle",
+                label_normalized="bicycle",
+                class_mid=None,
+                class_label_id=None,
                 confidence=0.82,
-                x_min=5,
-                y_min=40,
-                x_max=90,
-                y_max=180,
+                x_min=0.05,
+                y_min=0.20,
+                x_max=0.45,
+                y_max=0.90,
+                model_source="organizer_open_images",
             ),
         ),
     }

@@ -139,13 +139,16 @@ class BranchResult(StrictFrozenModel, Generic[CandidateT]):
 
 
 class ObjectDetection(StrictFrozenModel):
-    label: NonEmptyStr
+    label_display: NonEmptyStr
+    label_normalized: NonEmptyStr
+    class_mid: NonEmptyStr | None = None
+    class_label_id: NonEmptyStr | None = None
     confidence: Annotated[FiniteFloat, Field(ge=0.0, le=1.0)]
-    x_min: Annotated[FiniteFloat, Field(ge=0.0)]
-    y_min: Annotated[FiniteFloat, Field(ge=0.0)]
-    x_max: Annotated[FiniteFloat, Field(ge=0.0)]
-    y_max: Annotated[FiniteFloat, Field(ge=0.0)]
-    model_source: NonEmptyStr | None = None
+    x_min: Annotated[FiniteFloat, Field(ge=0.0, le=1.0)]
+    y_min: Annotated[FiniteFloat, Field(ge=0.0, le=1.0)]
+    x_max: Annotated[FiniteFloat, Field(ge=0.0, le=1.0)]
+    y_max: Annotated[FiniteFloat, Field(ge=0.0, le=1.0)]
+    model_source: NonEmptyStr
 
     _ordered = model_validator(mode="after")(ensure_bbox_order)
 
