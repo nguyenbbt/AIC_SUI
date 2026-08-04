@@ -217,7 +217,12 @@ class ESClient:
                 action["_id"] = str(doc_id)
             actions.append(action)
 
-        success_count, errors = bulk(self.client, actions, raise_on_error=False)
+        success_count, errors = bulk(
+            self.client,
+            actions,
+            raise_on_error=False,
+            refresh="wait_for",
+        )
         if errors:
             raise RuntimeError(
                 f"Bulk index to '{index_name}' had {len(errors)} error(s); "

@@ -1,8 +1,61 @@
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 import src.indexing.orchestrator as orchestrator_module
-from src.indexing.orchestrator import IndexingOrchestrator
+from src.indexing.orchestrator import IndexingOrchestrator, VideoSnapshot
+
+
+def test_post_index_mismatch_identifies_the_failed_stream():
+    visual = [
+        {
+            "frame_id": "V001_00000_050",
+            "video_id": "V001",
+            "shot_id": 0,
+            "embedding": [1.0, 0.0],
+        }
+    ]
+    snapshot = VideoSnapshot(
+        milvus={
+            orchestrator_module.VISUAL_COLLECTION: [],
+            orchestrator_module.ASR_COLLECTION: [],
+            orchestrator_module.SUMMARY_COLLECTION: [],
+            orchestrator_module.OCR_COLLECTION: [],
+        },
+        elasticsearch={
+            orchestrator_module.OCR_INDEX: [],
+            orchestrator_module.ASR_INDEX: [],
+            orchestrator_module.SUMMARY_INDEX: [],
+        },
+        metadata=[],
+        objects=[],
+    )
+    orchestrator = IndexingOrchestrator(
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"milvus\.visual_features: expected=1 actual=0",
+    ):
+        orchestrator._validate_post_index(
+            snapshot,
+            visual_records=visual,
+            asr_emb_records=[],
+            summary_emb_records=[],
+            ocr_emb_records=[],
+            ocr_text_records=[],
+            asr_text_records=[],
+            summary_text_records=[],
+            metadata_records=[],
+            object_records=[],
+            visual_dim=2,
+            text_dim=2,
+            ocr_dim=2,
+        )
 
 
 def test_missing_post_index_record_fails_and_rolls_back(

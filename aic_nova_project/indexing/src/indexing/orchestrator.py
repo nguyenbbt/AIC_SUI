@@ -185,6 +185,7 @@ class IndexingOrchestrator:
         summary_text_records: list,
         metadata_records: list,
         object_records: list,
+        mismatch_details: Optional[List[str]] = None,
     ) -> bool:
         """Return whether every persisted stream has the expected identities."""
         es_sources = {
@@ -196,42 +197,55 @@ class IndexingOrchestrator:
         }
         comparisons = (
             (
+                f"milvus.{VISUAL_COLLECTION}",
                 snapshot.milvus[VISUAL_COLLECTION],
                 visual_records,
                 ("frame_id",),
             ),
             (
+                f"milvus.{ASR_COLLECTION}",
                 snapshot.milvus[ASR_COLLECTION],
                 asr_emb_records,
                 ("video_id", "interval_id"),
             ),
             (
+                f"milvus.{SUMMARY_COLLECTION}",
                 snapshot.milvus[SUMMARY_COLLECTION],
                 summary_emb_records,
                 ("video_id",),
             ),
             (
+                f"milvus.{OCR_COLLECTION}",
                 snapshot.milvus[OCR_COLLECTION],
                 ocr_emb_records,
                 ("frame_id",),
             ),
             (
+                f"elasticsearch.{OCR_INDEX}",
                 es_sources[OCR_INDEX],
                 ocr_text_records,
                 ("frame_id",),
             ),
             (
+                f"elasticsearch.{ASR_INDEX}",
                 es_sources[ASR_INDEX],
                 asr_text_records,
                 ("video_id", "interval_id"),
             ),
             (
+                f"elasticsearch.{SUMMARY_INDEX}",
                 es_sources[SUMMARY_INDEX],
                 summary_text_records,
                 ("video_id",),
             ),
-            (snapshot.metadata, metadata_records, ("frame_id",)),
             (
+                "sqlite.metadata",
+                snapshot.metadata,
+                metadata_records,
+                ("frame_id",),
+            ),
+            (
+                "sqlite.objects",
                 snapshot.objects,
                 object_records,
                 (
@@ -246,10 +260,31 @@ class IndexingOrchestrator:
                 ),
             ),
         )
-        return all(
-            self._same_record_keys(existing, expected, fields)
-            for existing, expected, fields in comparisons
-        )
+        matches = True
+        for stream_name, existing, expected, fields in comparisons:
+            if self._same_record_keys(existing, expected, fields):
+                continue
+
+            matches = False
+            if mismatch_details is None:
+                continue
+
+            existing_keys = Counter(
+                tuple(str(record.get(field, "")) for field in fields)
+                for record in existing
+            )
+            expected_keys = Counter(
+                tuple(str(record.get(field, "")) for field in fields)
+                for record in expected
+            )
+            missing = list((expected_keys - existing_keys).elements())[:3]
+            unexpected = list((existing_keys - expected_keys).elements())[:3]
+            mismatch_details.append(
+                f"{stream_name}: expected={len(expected)} "
+                f"actual={len(existing)} missing={missing!r} "
+                f"unexpected={unexpected!r}"
+            )
+        return matches
 
     @staticmethod
     def _validate_vector_snapshot(
@@ -310,6 +345,7 @@ class IndexingOrchestrator:
         ocr_dim: Optional[int],
     ) -> None:
         """Validate counts, join IDs, vector shape, and norm after inserts."""
+        mismatch_details: List[str] = []
         if not self._snapshot_matches_inputs(
             snapshot,
             visual_records=visual_records,
@@ -321,10 +357,12 @@ class IndexingOrchestrator:
             summary_text_records=summary_text_records,
             metadata_records=metadata_records,
             object_records=object_records,
+            mismatch_details=mismatch_details,
         ):
             raise ValueError(
                 "Post-index record counts or identifiers do not match "
-                "the producer artifacts."
+                "the producer artifacts: "
+                + "; ".join(mismatch_details)
             )
 
         visual_ids = {
