@@ -17,9 +17,10 @@ from .branches import (
     VisualSemanticBranch,
 )
 from .encoders import (
-    PE_CORE_MODEL_ID,
+    OPEN_CLIP_DIMENSION,
+    OPEN_CLIP_MODEL_ID,
     VIETNAMESE_MODEL_NAME,
-    PECoreTextEncoder,
+    OpenCLIPTextEncoder,
     VietnameseTextEncoder,
 )
 from .factory import build_retrieval_service
@@ -53,8 +54,9 @@ __all__ = [
     "OCR_LEXICAL_SOURCE_RESOURCE",
     "OCRLexicalBranch",
     "OCRSemanticBranch",
-    "PE_CORE_MODEL_ID",
-    "PECoreTextEncoder",
+    "OPEN_CLIP_DIMENSION",
+    "OPEN_CLIP_MODEL_ID",
+    "OpenCLIPTextEncoder",
     "RetrievalExecution",
     "RetrievalInvocationConfig",
     "RetrievalService",

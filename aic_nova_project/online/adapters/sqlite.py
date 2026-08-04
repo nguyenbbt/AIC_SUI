@@ -116,7 +116,9 @@ class SQLiteReadAdapter:
             for chunk in self._chunks(ids):
                 placeholders = ",".join("?" for _ in chunk)
                 sql = (
-                    f"SELECT frame_id, video_id, shot_id, timestamp FROM {table} "
+                    "SELECT frame_id, video_id, keyframe_no, local_index, "
+                    "pts_time_sec, fps, source_frame_idx, image_rel_path "
+                    f"FROM {table} "
                     f"WHERE frame_id IN ({placeholders})"
                 )
                 rows = call_backend(
@@ -127,6 +129,26 @@ class SQLiteReadAdapter:
                     output[metadata.frame_id] = metadata
         return output
 
+    def list_video_ids(self) -> Sequence[str]:
+        table = self._quote_identifier(self.config.videos_table)
+        with self._lock:
+            rows = call_backend(
+                "list_video_ids",
+                "sqlite",
+                lambda: self._conn().execute(
+                    f"SELECT video_id FROM {table} ORDER BY video_id ASC"
+                ).fetchall(),
+            )
+        try:
+            video_ids = tuple(self._row_text(row, "video_id") for row in rows)
+        except Exception as exc:
+            raise ContractMismatchError(
+                "Invalid video row returned by SQLite"
+            ) from exc
+        if len(video_ids) != len(set(video_ids)):
+            raise ContractMismatchError("SQLite videos table contains duplicate video_id")
+        return video_ids
+
     def get_ordered_frames_by_video(self, video_id: str) -> Sequence[FrameMetadata]:
         if (
             not isinstance(video_id, str)
@@ -136,8 +158,10 @@ class SQLiteReadAdapter:
             raise InvalidQueryError("video_id must not be empty")
         table = self._quote_identifier(self.config.metadata_table)
         sql = (
-            f"SELECT frame_id, video_id, shot_id, timestamp FROM {table} "
-            "WHERE video_id = ? ORDER BY timestamp ASC, frame_id ASC"
+            "SELECT frame_id, video_id, keyframe_no, local_index, "
+            "pts_time_sec, fps, source_frame_idx, image_rel_path "
+            f"FROM {table} WHERE video_id = ? "
+            "ORDER BY local_index ASC, frame_id ASC"
         )
         with self._lock:
             rows = call_backend(
@@ -179,12 +203,13 @@ class SQLiteReadAdapter:
                 predicates = [f"frame_id IN ({placeholders})", "confidence >= ?"]
                 parameters: list[object] = [*chunk, min_confidence]
                 if label is not None:
-                    predicates.append("label = ?")
-                    parameters.append(label)
+                    predicates.append("(label_normalized = ? OR class_mid = ?)")
+                    parameters.extend((label, label))
                 sql = (
-                    "SELECT frame_id, label, confidence, x_min, y_min, x_max, y_max, model_source "
+                    "SELECT frame_id, label_display, label_normalized, class_mid, "
+                    "class_label_id, confidence, x_min, y_min, x_max, y_max, model_source "
                     f"FROM {table} WHERE {' AND '.join(predicates)} "
-                    "ORDER BY frame_id ASC, confidence DESC, label ASC, id ASC"
+                    "ORDER BY frame_id ASC, confidence DESC, label_normalized ASC, id ASC"
                 )
                 rows = call_backend(
                     "get_objects_by_frame_ids",
@@ -194,27 +219,25 @@ class SQLiteReadAdapter:
                 for row in rows:
                     try:
                         frame_id = row["frame_id"]
-                        label_value = row["label"]
                         if (
                             not isinstance(frame_id, str)
                             or not frame_id.strip()
-                            or not isinstance(label_value, str)
-                            or not label_value.strip()
                         ):
-                            raise ValueError("invalid object identifier/label")
+                            raise ValueError("invalid object frame identifier")
                         output[frame_id].append(
                             ObjectDetection(
-                                label=label_value,
+                                label_display=self._row_text(row, "label_display"),
+                                label_normalized=self._row_text(row, "label_normalized"),
+                                class_mid=self._row_optional_text(row, "class_mid"),
+                                class_label_id=self._row_optional_text(
+                                    row, "class_label_id"
+                                ),
                                 confidence=self._row_float(row, "confidence"),
                                 x_min=self._row_float(row, "x_min"),
                                 y_min=self._row_float(row, "y_min"),
                                 x_max=self._row_float(row, "x_max"),
                                 y_max=self._row_float(row, "y_max"),
-                                model_source=(
-                                    None
-                                    if row["model_source"] is None
-                                    else self._row_text(row, "model_source")
-                                ),
+                                model_source=self._row_text(row, "model_source"),
                             )
                         )
                     except Exception as exc:
@@ -235,15 +258,17 @@ class SQLiteReadAdapter:
                 or not frame_id.strip()
                 or not isinstance(video_id, str)
                 or not video_id.strip()
-                or row["shot_id"] is None
-                or row["timestamp"] is None
             ):
                 raise ValueError("missing metadata field")
             return FrameMetadata(
                 frame_id=frame_id,
                 video_id=video_id,
-                shot_id=SQLiteReadAdapter._row_int(row, "shot_id"),
-                timestamp_sec=SQLiteReadAdapter._row_float(row, "timestamp"),
+                keyframe_no=SQLiteReadAdapter._row_int(row, "keyframe_no"),
+                local_index=SQLiteReadAdapter._row_int(row, "local_index"),
+                timestamp_sec=SQLiteReadAdapter._row_float(row, "pts_time_sec"),
+                fps=SQLiteReadAdapter._row_float(row, "fps"),
+                source_frame_idx=SQLiteReadAdapter._row_int(row, "source_frame_idx"),
+                image_rel_path=SQLiteReadAdapter._row_text(row, "image_rel_path"),
             )
         except Exception as exc:
             raise ContractMismatchError("Invalid metadata row returned by SQLite") from exc
@@ -258,6 +283,10 @@ class SQLiteReadAdapter:
         ):
             raise ValueError(f"{field} must be canonical text")
         return value
+
+    @staticmethod
+    def _row_optional_text(row: sqlite3.Row, field: str) -> str | None:
+        return None if row[field] is None else SQLiteReadAdapter._row_text(row, field)
 
     @staticmethod
     def _row_float(row: sqlite3.Row, field: str) -> float:
@@ -277,7 +306,11 @@ class SQLiteReadAdapter:
         return value
 
     def table_columns(self, table_name: str) -> Mapping[str, str]:
-        if table_name not in {self.config.metadata_table, self.config.objects_table}:
+        if table_name not in {
+            self.config.videos_table,
+            self.config.metadata_table,
+            self.config.objects_table,
+        }:
             raise InvalidQueryError("table is not managed by the Online adapter")
         table = self._quote_identifier(table_name)
         with self._lock:
@@ -294,7 +327,11 @@ class SQLiteReadAdapter:
         fields: Sequence[str],
         limit: int,
     ) -> Sequence[Mapping[str, object]]:
-        if table_name not in {self.config.metadata_table, self.config.objects_table}:
+        if table_name not in {
+            self.config.videos_table,
+            self.config.metadata_table,
+            self.config.objects_table,
+        }:
             raise InvalidQueryError("table is not managed by the Online adapter")
         if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
             raise InvalidQueryError("limit must be >= 1")

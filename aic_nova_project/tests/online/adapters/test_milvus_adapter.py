@@ -20,8 +20,15 @@ class FakeBackend:
         self.raise_error: Exception | None = None
         self.descriptions = {
             name: {
-                "fields": {"embedding": "FLOAT_VECTOR"},
-                "dimension": 2,
+                "fields": {
+                    "embedding": "FLOAT_VECTOR",
+                    **(
+                        {"frame_id": "VARCHAR", "video_id": "VARCHAR", "local_index": "INT64"}
+                        if name == "visual_features"
+                        else {}
+                    ),
+                },
+                "dimension": 512 if name == "visual_features" else 2,
                 "metric_type": "IP",
                 "index_type": "HNSW",
             }
@@ -29,6 +36,7 @@ class FakeBackend:
         }
         self.hits = {}
         self.last_search = None
+        self.search_calls = []
 
     def connect(self) -> None:
         self.connected = True
@@ -46,6 +54,7 @@ class FakeBackend:
         if self.raise_error:
             raise self.raise_error
         self.last_search = (name, vector, output_fields, top_k, search_params, timeout_sec)
+        self.search_calls.append(self.last_search)
         return self.hits.get(name, ())
 
     def sample_records(self, name, output_fields, limit):
@@ -58,42 +67,46 @@ class MilvusAdapterTests(unittest.TestCase):
         self.adapter = MilvusSearchAdapter(MilvusResourceConfig(), backend=self.backend)
         self.adapter.connect()
         self.vector = (1 / math.sqrt(2), 1 / math.sqrt(2))
+        self.visual_vector = (1.0,) + (0.0,) * 511
 
     def test_maps_all_collection_levels_without_pk(self) -> None:
         self.backend.hits = {
-            "visual_features": ({"entity": {"frame_id": "F1", "video_id": "V1", "shot_id": 2}, "distance": 0.9, "pk": 99},),
-            "ocr_features": ({"entity": {"frame_id": "F1", "video_id": "V1"}, "distance": 0.8},),
-            "asr_features": ({"entity": {"video_id": "V1", "interval_id": "i1", "start_time_sec": 1, "end_time_sec": 2}, "distance": 0.7},),
-            "summary_features": ({"entity": {"video_id": "V1"}, "distance": 0.6},),
+            "visual_features": ({"entity": {"frame_id": "L21_V001_001", "video_id": "L21_V001"}, "distance": 0.9, "pk": 99},),
+            "ocr_features": ({"entity": {"frame_id": "L21_V001_001", "video_id": "L21_V001"}, "distance": 0.8},),
+            "asr_features": ({"entity": {"video_id": "L21_V001", "interval_id": "i1", "start_time_sec": 1, "end_time_sec": 2}, "distance": 0.7},),
+            "summary_features": ({"entity": {"video_id": "L21_V001"}, "distance": 0.6},),
         }
-        self.assertEqual(self.adapter.search_visual(self.vector, 5)[0].frame_id, "F1")
-        self.assertIsNone(self.adapter.search_ocr(self.vector, 5)[0].shot_id)
+        visual = self.adapter.search_visual(self.visual_vector, 5)[0]
+        self.assertEqual(visual.frame_id, "L21_V001_001")
+        self.assertEqual(set(type(visual).model_fields), {"frame_id", "video_id", "raw_score"})
+        self.assertEqual(self.backend.search_calls[0][2], ("frame_id", "video_id"))
+        self.assertEqual(self.adapter.search_ocr(self.vector, 5)[0].frame_id, "L21_V001_001")
         self.assertEqual(self.adapter.search_asr(self.vector, 5)[0].interval_id, "i1")
-        self.assertEqual(self.adapter.search_summary(self.vector, 5)[0].video_id, "V1")
+        self.assertEqual(self.adapter.search_summary(self.vector, 5)[0].video_id, "L21_V001")
         self.assertEqual(self.backend.last_search[4], {"metric_type": "IP", "params": {"ef": 128}})
 
     def test_dimension_finite_and_norm_validation(self) -> None:
         with self.assertRaises(DimensionMismatchError):
             self.adapter.search_visual((1.0,), 1)
         with self.assertRaises(InvalidQueryError):
-            self.adapter.search_visual((float("nan"), 0.0), 1)
+            self.adapter.search_visual((float("nan"),) + (0.0,) * 511, 1)
         with self.assertRaises(InvalidQueryError):
-            self.adapter.search_visual((1.0, 1.0), 1)
+            self.adapter.search_visual((1.0, 1.0) + (0.0,) * 510, 1)
         with self.assertRaises(InvalidQueryError):
-            self.adapter.search_visual((True, 0.0), 1)
+            self.adapter.search_visual((True,) + (0.0,) * 511, 1)
         with self.assertRaises(InvalidQueryError):
             self.adapter.sample_records("visual_features", "embedding", 1)  # type: ignore[arg-type]
 
     def test_empty_result_differs_from_backend_failure(self) -> None:
-        self.assertEqual(self.adapter.search_visual(self.vector, 1), ())
+        self.assertEqual(self.adapter.search_visual(self.visual_vector, 1), ())
         self.backend.raise_error = ConnectionError("down")
         with self.assertRaises(ResourceUnavailableError):
-            self.adapter.search_visual(self.vector, 1)
+            self.adapter.search_visual(self.visual_vector, 1)
 
     def test_missing_field_and_timeout_are_explicit(self) -> None:
-        self.backend.hits["visual_features"] = ({"entity": {"video_id": "V1", "shot_id": 1}, "distance": 0.5},)
+        self.backend.hits["visual_features"] = ({"entity": {"video_id": "L21_V001"}, "distance": 0.5},)
         with self.assertRaises(ContractMismatchError):
-            self.adapter.search_visual(self.vector, 1)
+            self.adapter.search_visual(self.visual_vector, 1)
         self.backend.raise_error = TimeoutError("slow")
         with self.assertRaises(Exception) as raised:
             self.adapter.search_ocr(self.vector, 1)
@@ -101,7 +114,7 @@ class MilvusAdapterTests(unittest.TestCase):
 
     def test_malformed_score_and_sample_response_are_contract_errors(self) -> None:
         self.backend.hits["ocr_features"] = (
-            {"entity": {"frame_id": "F1", "video_id": "V1"}, "distance": float("nan")},
+            {"entity": {"frame_id": "L21_V001_001", "video_id": "L21_V001"}, "distance": float("nan")},
         )
         with self.assertRaises(ContractMismatchError):
             self.adapter.search_ocr(self.vector, 1)
@@ -121,7 +134,7 @@ class MilvusAdapterTests(unittest.TestCase):
 
         self.backend.search = blocked
         thread = threading.Thread(
-            target=lambda: self.adapter.search_visual(self.vector, 1)
+            target=lambda: self.adapter.search_visual(self.visual_vector, 1)
         )
         thread.start()
         self.assertTrue(entered.wait(timeout=1))

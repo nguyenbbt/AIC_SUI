@@ -40,6 +40,7 @@ The optional runtime profile requires configured, non-production resources:
 $env:AIC_ONLINE_MILVUS_URI = "http://localhost:19530"
 $env:AIC_ONLINE_ES_URI = "http://localhost:9200"
 $env:AIC_ONLINE_SQLITE_PATH = "data\metadata.db"
+$env:AIC_ONLINE_DATASET_MANIFEST_PATH = "data\index-manifest.json"
 python -m online.validate_contract
 python -m online.validate_contract --fail-on-partial
 ```
@@ -48,8 +49,9 @@ The validator is read-only. It reports `FAIL` when the required visual/metadata
 contract or visual encoder smoke check is missing, `PARTIAL` when optional
 resources/checks are unavailable, and `PASS` only after every executed required
 check succeeds. Encoder smoke factories can be injected through the Python
-`OfflineContractValidator(..., encoder_smoke_vectors={...})` API; they are not
-loaded implicitly by the CLI.
+`OfflineContractValidator(..., manifest=..., encoder_smoke_vectors={...})` API;
+they are not loaded implicitly by the CLI. The manifest must identify the
+visual space as `ViT-B-32::openai`, dimension 512, with normalized embeddings.
 
 Runtime status remains `NEED_RUNTIME_VERIFICATION` until Milvus,
 Elasticsearch, SQLite, encoder dimensions/norms, canonical JOIN samples, and a

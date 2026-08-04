@@ -36,6 +36,8 @@ class ConfigLifecycleTests(unittest.TestCase):
                 "AIC_ONLINE_MILVUS_SEARCH_EF": "64",
                 "AIC_ONLINE_ES_FUZZY_ENABLED": "true",
                 "AIC_ONLINE_SQLITE_BATCH_SIZE": "100",
+                "AIC_ONLINE_SQLITE_VIDEOS_TABLE": "organizer_videos",
+                "AIC_ONLINE_DATASET_MANIFEST_PATH": "data/organizer-manifest.json",
             },
             clear=False,
         ):
@@ -43,6 +45,10 @@ class ConfigLifecycleTests(unittest.TestCase):
         self.assertEqual(config.milvus.search_ef, 64)
         self.assertTrue(config.elasticsearch.fuzzy_enabled)
         self.assertEqual(config.sqlite.batch_size, 100)
+        self.assertEqual(config.sqlite.videos_table, "organizer_videos")
+        self.assertEqual(
+            config.manifest.path.as_posix(), "data/organizer-manifest.json"
+        )
         with self.assertRaises(ValidationError):
             SQLiteResourceConfig(metadata_table="metadata; DROP TABLE objects")
 

@@ -258,7 +258,7 @@ class ElasticsearchSearchAdapter:
     def search_ocr(
         self, query: str, top_k: int, *, fuzzy: bool | None = None
     ) -> Sequence[FrameSearchHit]:
-        fields = ("frame_id", "video_id", "shot_id")
+        fields = ("frame_id", "video_id")
         hits = self._search(
             self.config.ocr_index,
             query,
@@ -275,7 +275,6 @@ class ElasticsearchSearchAdapter:
                     FrameSearchHit(
                         frame_id=self._required_str(source, "frame_id"),
                         video_id=self._required_str(source, "video_id"),
-                        shot_id=self._required_int(source, "shot_id"),
                         raw_score=score,
                     )
                 )
@@ -286,7 +285,13 @@ class ElasticsearchSearchAdapter:
     def search_asr(
         self, query: str, top_k: int, *, fuzzy: bool | None = None
     ) -> Sequence[ASRSearchHit]:
-        fields = ("video_id", "interval_id", "start_time", "end_time", "cleaned_text")
+        fields = (
+            "video_id",
+            "interval_id",
+            "start_time_sec",
+            "end_time_sec",
+            "cleaned_text",
+        )
         hits = self._search(
             self.config.asr_index,
             query,
@@ -303,8 +308,8 @@ class ElasticsearchSearchAdapter:
                     ASRSearchHit(
                         video_id=self._required_str(source, "video_id"),
                         interval_id=self._required_str(source, "interval_id"),
-                        start_time_sec=self._required_float(source, "start_time"),
-                        end_time_sec=self._required_float(source, "end_time"),
+                        start_time_sec=self._required_float(source, "start_time_sec"),
+                        end_time_sec=self._required_float(source, "end_time_sec"),
                         text=self._optional_str(source, "cleaned_text"),
                         raw_score=score,
                     )

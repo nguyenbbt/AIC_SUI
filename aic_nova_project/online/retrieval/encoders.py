@@ -17,7 +17,8 @@ from online.domain.errors import (
 )
 
 
-PE_CORE_MODEL_ID = "hf-hub:timm/PE-Core-bigG-14-448"
+OPEN_CLIP_MODEL_ID = "ViT-B-32::openai"
+OPEN_CLIP_DIMENSION = 512
 VIETNAMESE_MODEL_NAME = "dangvantuan/vietnamese-embedding"
 
 
@@ -194,20 +195,22 @@ class _ValidatedTextEncoder:
         return tuple(output)
 
 
-class PECoreTextEncoder(_ValidatedTextEncoder):
-    """Text tower paired with Offline PE-Core-bigG-14-448 image vectors."""
+class OpenCLIPTextEncoder(_ValidatedTextEncoder):
+    """OpenCLIP text tower paired with organizer ViT-B-32::openai vectors."""
 
     def __init__(
         self,
         *,
-        model_id: str = PE_CORE_MODEL_ID,
+        model_id: str = OPEN_CLIP_MODEL_ID,
         device: str = "auto",
         precision: str = "fp16",
-        expected_dimension: int | None = None,
+        expected_dimension: int | None = OPEN_CLIP_DIMENSION,
         backend_factory: Callable[[], _TextEmbeddingBackend] | None = None,
     ) -> None:
         if not isinstance(model_id, str) or not model_id.strip():
             raise ValueError("model_id must be non-empty")
+        if model_id.strip() != OPEN_CLIP_MODEL_ID:
+            raise ValueError("model_id must be ViT-B-32::openai")
         if not isinstance(device, str) or not device.strip():
             raise ValueError("device must be non-empty")
         if precision not in {"fp16", "bf16", "fp32"}:
@@ -217,7 +220,7 @@ class PECoreTextEncoder(_ValidatedTextEncoder):
         self.device = device.strip()
         self.precision = precision
         factory = backend_factory or (
-            lambda: _PECoreBackend(
+            lambda: _OpenCLIPBackend(
                 model_id=self.model_id,
                 device=self.device,
                 precision=self.precision,
@@ -274,13 +277,13 @@ class VietnameseTextEncoder(_ValidatedTextEncoder):
         )
 
 
-class _PECoreBackend:
+class _OpenCLIPBackend:
     def __init__(self, *, model_id: str, device: str, precision: str) -> None:
         try:
             import open_clip
             import torch
         except ImportError as exc:
-            raise RuntimeError("PE-Core runtime dependencies are unavailable") from exc
+            raise RuntimeError("OpenCLIP runtime dependencies are unavailable") from exc
 
         self._torch = torch
         self._device = "cuda" if device == "auto" and torch.cuda.is_available() else device
@@ -373,8 +376,9 @@ class _VietnameseSentenceTransformerBackend:
 
 
 __all__ = [
-    "PE_CORE_MODEL_ID",
+    "OPEN_CLIP_DIMENSION",
+    "OPEN_CLIP_MODEL_ID",
     "VIETNAMESE_MODEL_NAME",
-    "PECoreTextEncoder",
+    "OpenCLIPTextEncoder",
     "VietnameseTextEncoder",
 ]

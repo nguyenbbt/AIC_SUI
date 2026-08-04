@@ -39,15 +39,17 @@ def _question(question_id: str = "q-vqa") -> VQAQuestion:
 
 
 def _candidate(
-    frame_id: str = "V001_00000_015",
+    frame_id: str = "L21_V001_001",
     *,
     score: float = 0.9,
 ) -> FusedFrameCandidate:
     return FusedFrameCandidate(
         frame_id=frame_id,
-        video_id="V001",
-        shot_id=0,
+        video_id="L21_V001",
+        keyframe_no=int(frame_id.rsplit("_", 1)[1]),
+        local_index=int(frame_id.rsplit("_", 1)[1]) - 1,
         timestamp_sec=1.5,
+        source_frame_idx=15,
         final_score=score,
         branch_scores={RetrievalBranch.VISUAL_DENSE: score},
         evidence=(
@@ -161,7 +163,7 @@ def test_public_handoff_returns_immutable_ranked_candidates() -> None:
     question = _question()
     candidates = (
         _candidate(score=0.95),
-        _candidate("V001_00001_050", score=0.75),
+        _candidate("L21_V001_002", score=0.75),
     )
     adapter = VQACandidateRetriever(
         rewriter=_rewriter(question),

@@ -376,7 +376,7 @@ class MilvusSearchAdapter:
         hits = self._search(
             self.config.visual_collection,
             vector,
-            ("frame_id", "video_id", "shot_id"),
+            ("frame_id", "video_id"),
             top_k,
         )
         output: list[FrameSearchHit] = []
@@ -387,7 +387,6 @@ class MilvusSearchAdapter:
                     FrameSearchHit(
                         frame_id=self._required_str(entity, "frame_id"),
                         video_id=self._required_str(entity, "video_id"),
-                        shot_id=self._required_int(entity, "shot_id"),
                         raw_score=score,
                     )
                 )
@@ -407,7 +406,6 @@ class MilvusSearchAdapter:
                     FrameSearchHit(
                         frame_id=self._required_str(entity, "frame_id"),
                         video_id=self._required_str(entity, "video_id"),
-                        shot_id=None,
                         raw_score=score,
                     )
                 )

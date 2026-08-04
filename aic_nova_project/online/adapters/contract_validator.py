@@ -20,9 +20,16 @@ from online.domain.base import (
 )
 from online.domain.errors import DataInfrastructureError, ErrorCode
 from online.domain.identifiers import validate_canonical_frame_id
+from online.ports.manifest import (
+    DatasetManifest,
+    ORGANIZER_CONTRACT_VERSION,
+    ORGANIZER_FRAME_ID_CONTRACT_VERSION,
+    ORGANIZER_VISUAL_DIMENSION,
+    ORGANIZER_VISUAL_MODEL_ID,
+)
 
 
-VALIDATOR_VERSION = "3"
+VALIDATOR_VERSION = "4"
 
 
 class ValidationStatus(str, Enum):
@@ -95,7 +102,7 @@ class OfflineContractValidator:
             {
                 "frame_id": "VARCHAR",
                 "video_id": "VARCHAR",
-                "shot_id": "INT64",
+                "local_index": "INT64",
                 "embedding": "FLOAT_VECTOR",
             },
             True,
@@ -128,7 +135,6 @@ class OfflineContractValidator:
             {
                 "frame_id": "keyword",
                 "video_id": "keyword",
-                "shot_id": "keyword",
                 "ocr_text_concat": "text",
             },
             False,
@@ -137,8 +143,8 @@ class OfflineContractValidator:
             {
                 "video_id": "keyword",
                 "interval_id": "keyword",
-                "start_time": "float",
-                "end_time": "float",
+                "start_time_sec": "float",
+                "end_time_sec": "float",
                 "cleaned_text": "text",
             },
             False,
@@ -149,12 +155,30 @@ class OfflineContractValidator:
         ),
     }
     SQLITE_REQUIREMENTS = {
+        "videos": (
+            {
+                "video_id": "TEXT",
+                "media_title": "TEXT",
+                "media_author": "TEXT",
+                "media_description": "TEXT",
+                "media_keywords_json": "TEXT",
+                "media_length_sec": "REAL",
+                "publish_date": "TEXT",
+                "watch_url": "TEXT",
+                "video_rel_path": "TEXT",
+            },
+            True,
+        ),
         "metadata": (
             {
                 "frame_id": "TEXT",
                 "video_id": "TEXT",
-                "shot_id": "INTEGER",
-                "timestamp": "REAL",
+                "keyframe_no": "INTEGER",
+                "local_index": "INTEGER",
+                "pts_time_sec": "REAL",
+                "fps": "REAL",
+                "source_frame_idx": "INTEGER",
+                "image_rel_path": "TEXT",
             },
             True,
         ),
@@ -162,12 +186,16 @@ class OfflineContractValidator:
             {
                 "id": "INTEGER",
                 "frame_id": "TEXT",
-                "label": "TEXT",
+                "label_display": "TEXT",
+                "label_normalized": "TEXT",
+                "class_mid": "TEXT",
+                "class_label_id": "TEXT",
                 "confidence": "REAL",
                 "x_min": "REAL",
                 "y_min": "REAL",
                 "x_max": "REAL",
                 "y_max": "REAL",
+                "model_source": "TEXT",
             },
             False,
         ),
@@ -180,6 +208,7 @@ class OfflineContractValidator:
         milvus: Any,
         elasticsearch: Any,
         sqlite: Any,
+        manifest: Any,
         encoder_smoke_vectors: Mapping[str, Callable[[], Sequence[float]]] | None = None,
         sample_size: int = 5,
         norm_tolerance: float = 1e-2,
@@ -192,6 +221,7 @@ class OfflineContractValidator:
         self.milvus = milvus
         self.elasticsearch = elasticsearch
         self.sqlite = sqlite
+        self.manifest = manifest
         self.encoder_smoke_vectors = dict(encoder_smoke_vectors or {})
         self.sample_size = sample_size
         self.norm_tolerance = norm_tolerance
@@ -330,6 +360,53 @@ class OfflineContractValidator:
                 self._not_run(full_name, required=required, reason=reason)
                 existing.add(full_name)
 
+    def _validate_manifest(self) -> None:
+        manifest = self.manifest.read_manifest()
+        if not isinstance(manifest, DatasetManifest):
+            raise TypeError("manifest reader returned an invalid record")
+        self._available["manifest"] = True
+        checks = (
+            (
+                "manifest.contract_version",
+                manifest.contract_version == ORGANIZER_CONTRACT_VERSION,
+                "manifest contract_version matches organizer-v1",
+                "manifest contract_version does not match organizer-v1",
+            ),
+            (
+                "manifest.visual_model_id",
+                manifest.visual_model_id == ORGANIZER_VISUAL_MODEL_ID,
+                "manifest visual model identity matches ViT-B-32::openai",
+                "manifest visual model identity does not match ViT-B-32::openai",
+            ),
+            (
+                "manifest.visual_dimension",
+                manifest.visual_dimension == ORGANIZER_VISUAL_DIMENSION,
+                "manifest visual dimension is 512",
+                "manifest visual dimension is not 512",
+            ),
+            (
+                "manifest.visual_normalized",
+                manifest.visual_normalized is True,
+                "manifest declares normalized visual vectors",
+                "manifest does not declare normalized visual vectors",
+            ),
+            (
+                "manifest.frame_id_contract_version",
+                manifest.frame_id_contract_version
+                == ORGANIZER_FRAME_ID_CONTRACT_VERSION,
+                "manifest frame ID contract matches organizer-v1",
+                "manifest frame ID contract does not match organizer-v1",
+            ),
+        )
+        for name, ok, success, failure in checks:
+            self._record(
+                name,
+                ok=ok,
+                required=True,
+                success=success,
+                failure=failure,
+            )
+
     def _validate_milvus_resource(
         self,
         logical_name: str,
@@ -385,13 +462,25 @@ class OfflineContractValidator:
         )
 
         dimension = description.get("dimension")
-        valid_dim = isinstance(dimension, int) and not isinstance(dimension, bool) and dimension > 0
+        valid_dim = (
+            isinstance(dimension, int)
+            and not isinstance(dimension, bool)
+            and dimension > 0
+            and (
+                logical_name != "visual"
+                or dimension == ORGANIZER_VISUAL_DIMENSION
+            )
+        )
         self._record(
             f"{prefix}.dimension",
             ok=valid_dim,
             required=required,
             success=f"dimension={dimension}",
-            failure="embedding dimension is missing or invalid",
+            failure=(
+                "visual embedding dimension must be 512"
+                if logical_name == "visual"
+                else "embedding dimension is missing or invalid"
+            ),
             code=ErrorCode.DIMENSION_MISMATCH,
         )
         if valid_dim:
@@ -595,13 +684,13 @@ class OfflineContractValidator:
 
     def _validate_canonical_ids(self) -> None:
         specifications = (
-            ("milvus:visual", "canonical_id.milvus.visual", True, True, True),
-            ("milvus:ocr", "canonical_id.milvus.ocr", False, True, False),
-            ("es:ocr", "canonical_id.elasticsearch.ocr", False, True, True),
-            ("sqlite:metadata", "canonical_id.sqlite.metadata", True, True, True),
-            ("sqlite:objects", "canonical_id.sqlite.objects", False, False, False),
+            ("milvus:visual", "canonical_id.milvus.visual", True, True, False, True),
+            ("milvus:ocr", "canonical_id.milvus.ocr", False, True, False, False),
+            ("es:ocr", "canonical_id.elasticsearch.ocr", False, True, False, False),
+            ("sqlite:metadata", "canonical_id.sqlite.metadata", True, True, True, True),
+            ("sqlite:objects", "canonical_id.sqlite.objects", False, False, False, False),
         )
-        for key, name, required, has_video, has_shot in specifications:
+        for key, name, required, has_video, has_keyframe, has_local_index in specifications:
             if not self._available.get(key):
                 self._not_run(name, required=required, reason=f"{key} is unavailable")
                 continue
@@ -610,7 +699,7 @@ class OfflineContractValidator:
             for record in records:
                 frame_id = record.get("frame_id")
                 video_id = record.get("video_id") if has_video else None
-                shot_id = record.get("shot_id") if has_shot else None
+                keyframe_no = record.get("keyframe_no") if has_keyframe else None
                 if not isinstance(frame_id, str):
                     valid = False
                     break
@@ -618,12 +707,14 @@ class OfflineContractValidator:
                     valid = False
                     break
                 try:
-                    semantic_shot = int(shot_id) if has_shot else None
-                    validate_canonical_frame_id(
+                    semantic_keyframe = int(keyframe_no) if has_keyframe else None
+                    parsed = validate_canonical_frame_id(
                         frame_id,
                         video_id=video_id,
-                        shot_id=semantic_shot,
+                        keyframe_no=semantic_keyframe,
                     )
+                    if has_local_index and int(record.get("local_index")) != parsed.keyframe_no - 1:
+                        raise ValueError("local_index mismatch")
                 except Exception:
                     valid = False
                     break
@@ -661,7 +752,7 @@ class OfflineContractValidator:
                     if (
                         row is None
                         or row.video_id != record.get("video_id")
-                        or row.shot_id != int(record.get("shot_id"))
+                        or row.local_index != int(record.get("local_index"))
                     ):
                         matches = False
                         break
@@ -726,15 +817,7 @@ class OfflineContractValidator:
             matches = bool(records) and len(ids) == len(records)
             for frame_id, record in zip(ids, records):
                 row = metadata.get(frame_id)
-                try:
-                    if (
-                        row is None
-                        or row.video_id != record.get("video_id")
-                        or row.shot_id != int(record.get("shot_id"))
-                    ):
-                        matches = False
-                        break
-                except (TypeError, ValueError):
+                if row is None or row.video_id != record.get("video_id"):
                     matches = False
                     break
             self._record(
@@ -950,6 +1033,21 @@ class OfflineContractValidator:
         self._sample_counts = {}
         self._resources_checked = []
 
+        self._resources_checked.append("manifest:dataset_manifest")
+        self._guard_resource(
+            prefix="manifest",
+            availability_key="manifest",
+            required=True,
+            child_checks=(
+                "contract_version",
+                "visual_model_id",
+                "visual_dimension",
+                "visual_normalized",
+                "frame_id_contract_version",
+            ),
+            function=self._validate_manifest,
+        )
+
         milvus_resources = {
             "visual": self.config.milvus.visual_collection,
             "ocr": self.config.milvus.ocr_collection,
@@ -997,6 +1095,7 @@ class OfflineContractValidator:
         self._guard("elasticsearch.analysis_icu", False, self._validate_icu_plugin)
 
         sqlite_resources = {
+            "videos": self.config.sqlite.videos_table,
             "metadata": self.config.sqlite.metadata_table,
             "objects": self.config.sqlite.objects_table,
         }

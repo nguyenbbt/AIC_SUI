@@ -1102,6 +1102,43 @@ class AdvancedRuntimeMetadataReader(_RuntimePort):
         super().__init__(component="metadata_reader", **kwargs)
         self._delegate = delegate
 
+    def list_video_ids(self) -> tuple[str, ...]:
+        def collect() -> tuple[str, ...]:
+            try:
+                return tuple(self._delegate.list_video_ids())
+            except DataInfrastructureError:
+                raise
+            except (TypeError, ValueError):
+                raise ContractMismatchError(
+                    "advanced fake metadata reader returned an invalid video list",
+                    details={"component": "metadata_reader"},
+                ) from None
+
+        raw = self._invoke(
+            method="list_video_ids",
+            operation=collect,
+            empty_factory=tuple,
+            identifiers=(),
+            item_count=0,
+        )
+        try:
+            output = tuple(raw)
+        except TypeError:
+            raise ContractMismatchError(
+                "advanced fake metadata reader returned an invalid video list",
+                details={"component": "metadata_reader"},
+            ) from None
+        if (
+            any(not isinstance(video_id, str) or not video_id for video_id in output)
+            or len(set(output)) != len(output)
+            or output != tuple(sorted(output))
+        ):
+            raise ContractMismatchError(
+                "advanced fake metadata reader returned an invalid video list",
+                details={"component": "metadata_reader"},
+            )
+        return output
+
     def get_frames_by_ids(
         self,
         frame_ids: Sequence[str],
@@ -1197,7 +1234,7 @@ class AdvancedRuntimeMetadataReader(_RuntimePort):
                 sorted(
                     output,
                     key=lambda metadata: (
-                        metadata.timestamp_sec,
+                        metadata.local_index,
                         metadata.frame_id,
                     ),
                 )

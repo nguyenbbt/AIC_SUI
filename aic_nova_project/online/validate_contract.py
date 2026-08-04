@@ -9,6 +9,7 @@ from typing import Any
 
 from online.adapters.contract_validator import OfflineContractValidator, ValidationStatus
 from online.adapters.elasticsearch import ElasticsearchSearchAdapter
+from online.adapters.manifest import JsonManifestAdapter
 from online.adapters.milvus import MilvusSearchAdapter
 from online.adapters.sqlite import SQLiteReadAdapter
 from online.config import OnlineDataConfig
@@ -38,6 +39,7 @@ def main() -> int:
         milvus = MilvusSearchAdapter(config.milvus)
         elasticsearch = ElasticsearchSearchAdapter(config.elasticsearch)
         sqlite = SQLiteReadAdapter(config.sqlite)
+        manifest = JsonManifestAdapter(config.manifest)
         lifecycle = InfrastructureLifecycle()
         lifecycle.register("milvus", milvus, required=True)
         lifecycle.register("elasticsearch", elasticsearch, required=False)
@@ -54,6 +56,7 @@ def main() -> int:
             milvus=milvus,
             elasticsearch=elasticsearch,
             sqlite=sqlite,
+            manifest=manifest,
             encoder_smoke_vectors=smoke_vectors,
         ).validate()
         print(report.model_dump_json(indent=2))

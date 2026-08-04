@@ -180,17 +180,23 @@ class VisualSemanticBranchTests(unittest.TestCase):
         )
 
     def test_cross_database_identity_mismatch_is_not_hidden(self) -> None:
-        hit = FrameSearchHit(frame_id="F001", video_id="V001", shot_id=1, raw_score=0.9)
+        hit = FrameSearchHit(frame_id="L21_V001_001", video_id="L21_V001", raw_score=0.9)
         conflicting = FrameMetadata(
-            frame_id="F001",
-            video_id="V999",
-            shot_id=1,
+            frame_id="L21_V999_001",
+            video_id="L21_V999",
+            keyframe_no=1,
+            local_index=0,
             timestamp_sec=2.0,
+            fps=25.0,
+            source_frame_idx=50,
+            image_rel_path="L21_V999/001.jpg",
         )
+        metadata = RecordingMetadataPort((conflicting,))
+        metadata.frames[hit.frame_id] = conflicting
         branch = VisualSemanticBranch(
             encoder=FakeTextEncoder(),
             milvus=FakeMilvusSearchPort(visual=(hit,)),
-            metadata=RecordingMetadataPort((conflicting,)),
+            metadata=metadata,
             clock=StepClock(),
         )
 
@@ -250,7 +256,7 @@ class VisualSemanticBranchTests(unittest.TestCase):
             broken_milvus_branch.retrieve_variant(variant, top_k=1)
         self.assertIs(raised.exception, milvus_error)
 
-        hit = FrameSearchHit(frame_id="F001", video_id="V001", shot_id=0, raw_score=0.8)
+        hit = FrameSearchHit(frame_id="L21_V001_001", video_id="L21_V001", raw_score=0.8)
         metadata_error = ResourceUnavailableError("SQLite unavailable")
         broken_metadata_branch = VisualSemanticBranch(
             encoder=FakeTextEncoder(),

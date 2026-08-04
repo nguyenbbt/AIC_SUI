@@ -4,6 +4,7 @@ from .encoders import ImageEncoderPort, TextEncoderPort
 from .evidence import EvidenceHydrationPort, EvidenceReaderPort
 from .images import ImageResolverPort
 from .metadata import MetadataReaderPort
+from .manifest import DatasetManifest, ManifestReaderPort
 from .objects import ObjectReaderPort
 from .records import ASRSearchHit, FrameMetadata, FrameSearchHit, VideoSearchHit
 from .search import ElasticsearchSearchPort, MilvusSearchPort
@@ -25,6 +26,8 @@ __all__ = [
     "FrameSearchHit",
     "ImageEncoderPort",
     "ImageResolverPort",
+    "DatasetManifest",
+    "ManifestReaderPort",
     "MetadataReaderPort",
     "MilvusSearchPort",
     "ObjectReaderPort",

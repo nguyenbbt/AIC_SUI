@@ -4,6 +4,9 @@ import math
 import threading
 import time
 import unittest
+from contextlib import nullcontext
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from online.domain.errors import (
     ContractMismatchError,
@@ -13,9 +16,10 @@ from online.domain.errors import (
 )
 from online.ports import TextEncoderPort
 from online.retrieval.encoders import (
-    PE_CORE_MODEL_ID,
+    OPEN_CLIP_DIMENSION,
+    OPEN_CLIP_MODEL_ID,
     VIETNAMESE_MODEL_NAME,
-    PECoreTextEncoder,
+    OpenCLIPTextEncoder,
     VietnameseTextEncoder,
 )
 from online.testing import FakeTextEncoder
@@ -67,7 +71,67 @@ class ConcurrentBackend(StaticBackend):
 
 
 class TextEncoderTests(unittest.TestCase):
-    def test_pe_core_is_lazy_cached_normalized_and_protocol_conformant(self) -> None:
+    def test_open_clip_uses_exact_model_pretrained_tokenizer_and_float32_output(
+        self,
+    ) -> None:
+        calls: list[tuple[str, str]] = []
+
+        class Tensor:
+            def __init__(self, values=None) -> None:
+                self.values = values
+
+            def to(self, *args, **kwargs):
+                return self
+
+            def detach(self):
+                return self
+
+            def cpu(self):
+                return self
+
+            def tolist(self):
+                return self.values
+
+        class Model:
+            def to(self, *args, **kwargs):
+                return self
+
+            def eval(self):
+                return None
+
+            def encode_text(self, tokens):
+                return Tensor([[1.0] + [0.0] * (OPEN_CLIP_DIMENSION - 1)])
+
+        def create_model_and_transforms(model_name, *, pretrained):
+            calls.append((model_name, pretrained))
+            return Model(), None, None
+
+        def get_tokenizer(model_name):
+            calls.append(("tokenizer", model_name))
+            return lambda texts: Tensor()
+
+        fake_open_clip = SimpleNamespace(
+            create_model_and_transforms=create_model_and_transforms,
+            get_tokenizer=get_tokenizer,
+        )
+        fake_torch = SimpleNamespace(
+            cuda=SimpleNamespace(is_available=lambda: False),
+            float16="float16",
+            bfloat16="bfloat16",
+            float32="float32",
+            no_grad=lambda: nullcontext(),
+            autocast=lambda **kwargs: nullcontext(),
+        )
+        with patch.dict(
+            "sys.modules", {"open_clip": fake_open_clip, "torch": fake_torch}
+        ):
+            vector = OpenCLIPTextEncoder().encode_texts(("query",))[0]
+
+        self.assertEqual(calls[:2], [("ViT-B-32", "openai"), ("tokenizer", "ViT-B-32")])
+        self.assertEqual(len(vector), OPEN_CLIP_DIMENSION)
+        self.assertTrue(all(isinstance(value, float) for value in vector))
+
+    def test_open_clip_is_lazy_cached_normalized_and_protocol_conformant(self) -> None:
         backend = StaticBackend()
         factory_calls = 0
 
@@ -76,8 +140,8 @@ class TextEncoderTests(unittest.TestCase):
             factory_calls += 1
             return backend
 
-        encoder = PECoreTextEncoder(expected_dimension=3, backend_factory=factory)
-        self.assertEqual(encoder.model_id, PE_CORE_MODEL_ID)
+        encoder = OpenCLIPTextEncoder(expected_dimension=3, backend_factory=factory)
+        self.assertEqual(encoder.model_id, OPEN_CLIP_MODEL_ID)
         self.assertEqual(factory_calls, 0)
         self.assertIsInstance(encoder, TextEncoderPort)
 
@@ -87,9 +151,13 @@ class TextEncoderTests(unittest.TestCase):
         self.assertEqual(factory_calls, 1)
         self.assertEqual(len(vectors), 2)
         self.assertTrue(all(len(vector) == 3 for vector in vectors))
-        self.assertTrue(all(isinstance(value, float) for vector in vectors for value in vector))
+        self.assertTrue(
+            all(isinstance(value, float) for vector in vectors for value in vector)
+        )
         for vector in vectors:
-            self.assertAlmostEqual(math.sqrt(sum(value * value for value in vector)), 1.0)
+            self.assertAlmostEqual(
+                math.sqrt(sum(value * value for value in vector)), 1.0
+            )
 
         encoder.encode_texts(("third",))
         self.assertEqual(factory_calls, 1)
@@ -97,7 +165,9 @@ class TextEncoderTests(unittest.TestCase):
 
     def test_vietnamese_encoder_uses_offline_defaults_and_same_validation(self) -> None:
         backend = StaticBackend(rows=[[1.0, 1.0, 1.0]])
-        encoder = VietnameseTextEncoder(expected_dimension=3, backend_factory=lambda: backend)
+        encoder = VietnameseTextEncoder(
+            expected_dimension=3, backend_factory=lambda: backend
+        )
 
         self.assertEqual(encoder.model_name, VIETNAMESE_MODEL_NAME)
         self.assertEqual(encoder.max_length, 256)
@@ -113,7 +183,7 @@ class TextEncoderTests(unittest.TestCase):
             calls += 1
             return StaticBackend()
 
-        encoder = PECoreTextEncoder(backend_factory=factory)
+        encoder = OpenCLIPTextEncoder(backend_factory=factory)
         self.assertEqual(encoder.encode_texts(()), ())
         self.assertEqual(calls, 0)
 
@@ -128,19 +198,24 @@ class TextEncoderTests(unittest.TestCase):
         self.assertEqual(backend.calls, [])
 
     def test_collection_dimension_mismatch_is_explicit(self) -> None:
-        encoder = PECoreTextEncoder(
+        encoder = OpenCLIPTextEncoder(
             expected_dimension=4,
             backend_factory=lambda: StaticBackend(dimension=3),
         )
         with self.assertRaises(DimensionMismatchError) as raised:
             _ = encoder.dimension
-        self.assertEqual(raised.exception.details, {"model": PE_CORE_MODEL_ID, "expected": 4, "actual": 3})
+        self.assertEqual(
+            raised.exception.details,
+            {"model": OPEN_CLIP_MODEL_ID, "expected": 4, "actual": 3},
+        )
 
     def test_invalid_encoder_configuration_is_rejected_without_loading(self) -> None:
         with self.assertRaises(ValueError):
-            PECoreTextEncoder(expected_dimension="3")  # type: ignore[arg-type]
+            OpenCLIPTextEncoder(expected_dimension="3")  # type: ignore[arg-type]
         with self.assertRaises(ValueError):
-            PECoreTextEncoder(precision="int8")
+            OpenCLIPTextEncoder(precision="int8")
+        with self.assertRaises(ValueError):
+            OpenCLIPTextEncoder(model_id="ViT-L-14::openai")
         with self.assertRaises(ValueError):
             VietnameseTextEncoder(max_length=0)
         with self.assertRaises(ValueError):
@@ -155,7 +230,9 @@ class TextEncoderTests(unittest.TestCase):
         )
         for backend, error_type in cases:
             with self.subTest(error_type=error_type.__name__):
-                encoder = VietnameseTextEncoder(backend_factory=lambda backend=backend: backend)
+                encoder = VietnameseTextEncoder(
+                    backend_factory=lambda backend=backend: backend
+                )
                 with self.assertRaises(error_type):
                     encoder.encode_texts(("query",))
 
@@ -163,7 +240,7 @@ class TextEncoderTests(unittest.TestCase):
         def broken_factory() -> StaticBackend:
             raise OSError("secret local model path")
 
-        loading_encoder = PECoreTextEncoder(backend_factory=broken_factory)
+        loading_encoder = OpenCLIPTextEncoder(backend_factory=broken_factory)
         with self.assertRaises(ResourceUnavailableError) as loading:
             _ = loading_encoder.dimension
         self.assertEqual(loading.exception.details["stage"], "load")
@@ -203,7 +280,9 @@ class TextEncoderTests(unittest.TestCase):
             except BaseException as exc:  # pragma: no cover - assertion below
                 errors.append(exc)
 
-        threads = [threading.Thread(target=encode, args=(f"query-{i}",)) for i in range(3)]
+        threads = [
+            threading.Thread(target=encode, args=(f"query-{i}",)) for i in range(3)
+        ]
         for thread in threads:
             thread.start()
         for thread in threads:

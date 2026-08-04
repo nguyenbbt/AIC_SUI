@@ -96,13 +96,12 @@ class OCRBranchTests(unittest.TestCase):
         self.assertEqual(result.candidates[0].provenance.query_text, "store sign")
         self.assertEqual(len(metadata.calls), 1)
 
-    def test_semantic_runs_all_variants_independently_and_hydrates_shot_id(self) -> None:
+    def test_semantic_runs_all_variants_independently_and_hydrates_organizer_metadata(self) -> None:
         fixture = build_integration_fixture()
         semantic_hits = tuple(
             FrameSearchHit(
                 frame_id=hit.frame_id,
                 video_id=hit.video_id,
-                shot_id=None,
                 raw_score=hit.raw_score,
             )
             for hit in fixture.ocr_hits
@@ -133,7 +132,8 @@ class OCRBranchTests(unittest.TestCase):
         self.assertTrue(all(call[1] == 2 for call in milvus.ocr_calls))
         self.assertTrue(all(result.branch is RetrievalBranch.OCR_DENSE for result in results))
         self.assertTrue(all(result.returned_count == 2 for result in results))
-        self.assertEqual(results[0].candidates[0].shot_id, fixture.frames[1].shot_id)
+        self.assertEqual(results[0].candidates[0].local_index, fixture.frames[1].local_index)
+        self.assertEqual(results[0].candidates[0].source_frame_idx, fixture.frames[1].source_frame_idx)
         self.assertEqual(results[0].candidates[0].provenance.backend, "milvus")
         self.assertEqual(results[0].candidates[0].provenance.source_resource, "ocr_features")
 

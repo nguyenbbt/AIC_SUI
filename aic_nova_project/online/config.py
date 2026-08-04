@@ -39,17 +39,22 @@ class ElasticsearchResourceConfig(StrictFrozenModel):
 
 class SQLiteResourceConfig(StrictFrozenModel):
     path: Path = Path("data/metadata.db")
+    videos_table: NonEmptyStr = "videos"
     metadata_table: NonEmptyStr = "metadata"
     objects_table: NonEmptyStr = "objects"
     batch_size: StrictIntValue = Field(default=500, ge=1, le=900)
     timeout_sec: FiniteFloat = Field(default=5.0, gt=0.0)
 
-    @field_validator("metadata_table", "objects_table")
+    @field_validator("videos_table", "metadata_table", "objects_table")
     @classmethod
     def validate_identifier(cls, value: str) -> str:
         if not _SQL_IDENTIFIER.fullmatch(value):
             raise ValueError("SQLite table name must be a simple SQL identifier")
         return value
+
+
+class ManifestResourceConfig(StrictFrozenModel):
+    path: Path = Path("data/index-manifest.json")
 
 
 class OnlineDataConfig(StrictFrozenModel):
@@ -58,6 +63,7 @@ class OnlineDataConfig(StrictFrozenModel):
         default_factory=ElasticsearchResourceConfig
     )
     sqlite: SQLiteResourceConfig = Field(default_factory=SQLiteResourceConfig)
+    manifest: ManifestResourceConfig = Field(default_factory=ManifestResourceConfig)
 
     @classmethod
     def from_env(cls, prefix: str = "AIC_ONLINE_") -> "OnlineDataConfig":
@@ -94,9 +100,13 @@ class OnlineDataConfig(StrictFrozenModel):
             ),
             sqlite=SQLiteResourceConfig(
                 path=Path(env("SQLITE_PATH", "data/metadata.db")),
+                videos_table=env("SQLITE_VIDEOS_TABLE", "videos"),
                 metadata_table=env("SQLITE_METADATA_TABLE", "metadata"),
                 objects_table=env("SQLITE_OBJECTS_TABLE", "objects"),
                 batch_size=int(env("SQLITE_BATCH_SIZE", 500)),
                 timeout_sec=float(env("SQLITE_TIMEOUT_SEC", 5.0)),
+            ),
+            manifest=ManifestResourceConfig(
+                path=Path(env("DATASET_MANIFEST_PATH", "data/index-manifest.json")),
             ),
         )

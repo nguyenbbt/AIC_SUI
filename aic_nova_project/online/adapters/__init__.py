@@ -9,6 +9,7 @@ from .contract_validator import (
 )
 from .elasticsearch import ElasticsearchSearchAdapter
 from .milvus import MilvusSearchAdapter
+from .manifest import JsonManifestAdapter
 from .sqlite import SQLiteReadAdapter
 
 __all__ = [
@@ -17,6 +18,7 @@ __all__ = [
     "ContractCheck",
     "ContractValidationReport",
     "MilvusSearchAdapter",
+    "JsonManifestAdapter",
     "OfflineContractValidator",
     "SQLiteReadAdapter",
     "ValidationStatus",

@@ -6,7 +6,7 @@ from online.domain.candidates import VideoCandidate
 from online.domain.enums import BranchStatus, CandidateLevel, QueryMode, RetrievalBranch
 from online.domain.errors import ContractMismatchError, InvalidQueryError, ResourceUnavailableError
 from online.domain.query import TextQueryVariant
-from online.ports.records import FrameSearchHit, VideoSearchHit
+from online.ports.records import ASRSearchHit, VideoSearchHit
 from online.retrieval.branches import SummaryLexicalBranch, SummarySemanticBranch
 from online.retrieval.query_builder import KISQueryBuilder
 from online.testing import FakeElasticsearchSearchPort, FakeMilvusSearchPort, FakeTextEncoder
@@ -43,7 +43,7 @@ class BrokenSummaryMilvusPort(FakeMilvusSearchPort):
 
 class InvalidSummaryPort(FakeMilvusSearchPort):
     def search_summary(self, vector, top_k):
-        return (FrameSearchHit(frame_id="F001", video_id="V001", raw_score=0.5),)
+        return (ASRSearchHit(video_id="V001", interval_id="i1", start_time_sec=0, end_time_sec=1, raw_score=0.5),)
 
 
 class SummaryBranchTests(unittest.TestCase):

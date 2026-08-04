@@ -40,20 +40,20 @@ class ElasticsearchAdapterTests(unittest.TestCase):
         )
 
     def test_exact_query_body_and_ocr_mapping(self) -> None:
-        self.client.response = {"hits": {"hits": [{"_score": 4.5, "_source": {"frame_id": "F1", "video_id": "V1", "shot_id": "2"}}]}}
+        self.client.response = {"hits": {"hits": [{"_score": 4.5, "_source": {"frame_id": "L21_V001_001", "video_id": "L21_V001"}}]}}
         result = self.adapter.search_ocr("xin chào", 7, fuzzy=False)
-        self.assertEqual(result[0].shot_id, 2)
+        self.assertEqual(result[0].frame_id, "L21_V001_001")
         self.assertEqual(
             self.client.last_call["body"],
             {
                 "size": 7,
-                "_source": ["frame_id", "video_id", "shot_id"],
+                "_source": ["frame_id", "video_id"],
                 "query": {"match": {"ocr_text_concat": {"query": "xin chào"}}},
             },
         )
 
     def test_fuzzy_body_asr_and_summary_mapping(self) -> None:
-        self.client.response = {"hits": {"hits": [{"_score": 3, "_source": {"video_id": "V1", "interval_id": "i1", "start_time": 1, "end_time": 2, "cleaned_text": "text"}}]}}
+        self.client.response = {"hits": {"hits": [{"_score": 3, "_source": {"video_id": "V1", "interval_id": "i1", "start_time_sec": 1, "end_time_sec": 2, "cleaned_text": "text"}}]}}
         asr = self.adapter.search_asr("hello", 2, fuzzy=True)
         self.assertEqual(asr[0].start_time_sec, 1)
         self.assertEqual(self.client.last_call["body"]["query"]["match"]["cleaned_text"]["fuzziness"], "AUTO")

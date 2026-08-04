@@ -168,8 +168,10 @@ class _FrameBranchBase(_BranchBase):
                 FrameCandidate(
                     frame_id=metadata.frame_id,
                     video_id=metadata.video_id,
-                    shot_id=metadata.shot_id,
+                    keyframe_no=metadata.keyframe_no,
+                    local_index=metadata.local_index,
                     timestamp_sec=metadata.timestamp_sec,
+                    source_frame_idx=metadata.source_frame_idx,
                     rank=rank,
                     raw_score=hit.raw_score,
                     provenance=CandidateProvenance(
@@ -192,11 +194,6 @@ class _FrameBranchBase(_BranchBase):
         if metadata.video_id != hit.video_id:
             raise ContractMismatchError(
                 "Hydrated video_id does not match frame hit",
-                details={"frame_id": hit.frame_id},
-            )
-        if hit.shot_id is not None and metadata.shot_id != hit.shot_id:
-            raise ContractMismatchError(
-                "Hydrated shot_id does not match frame hit",
                 details={"frame_id": hit.frame_id},
             )
 
@@ -310,7 +307,7 @@ class _VideoBranchBase(_BranchBase):
 
 
 class VisualSemanticBranch(_FrameBranchBase):
-    """PE-Core text-to-frame retrieval with mandatory batch hydration.
+    """OpenCLIP text-to-frame retrieval with mandatory batch hydration.
 
     One ``BranchResult`` is produced per query variant. This class deliberately
     does not aggregate q0/q1/q2, normalize scores, fuse branches or deduplicate

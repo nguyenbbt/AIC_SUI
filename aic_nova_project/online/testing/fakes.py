@@ -337,6 +337,9 @@ class FakeMetadataReaderPort:
         with self._lock:
             return tuple(self._calls)
 
+    def list_video_ids(self) -> Sequence[str]:
+        return tuple(sorted({frame.video_id for frame in self._frames.values()}))
+
     @staticmethod
     def _validate_ids(frame_ids: Sequence[str]) -> tuple[str, ...]:
         if isinstance(frame_ids, (str, bytes)):
@@ -374,7 +377,7 @@ class FakeMetadataReaderPort:
         return tuple(
             sorted(
                 (frame for frame in self._frames.values() if frame.video_id == video_id),
-                key=lambda frame: (frame.timestamp_sec, frame.frame_id),
+                key=lambda frame: (frame.local_index, frame.frame_id),
             )
         )
 

@@ -6,7 +6,7 @@ from online.domain.candidates import ASRIntervalCandidate
 from online.domain.enums import BranchStatus, CandidateLevel, QueryMode, RetrievalBranch
 from online.domain.errors import ContractMismatchError, InvalidQueryError, ResourceUnavailableError
 from online.domain.query import TextQueryVariant
-from online.ports.records import FrameSearchHit
+from online.ports.records import VideoSearchHit
 from online.retrieval.branches import ASRLexicalBranch, ASRSemanticBranch
 from online.retrieval.query_builder import KISQueryBuilder
 from online.testing import (
@@ -48,7 +48,7 @@ class BrokenASRMilvusPort(FakeMilvusSearchPort):
 
 class InvalidASRPort(FakeMilvusSearchPort):
     def search_asr(self, vector, top_k):
-        return (FrameSearchHit(frame_id="F001", video_id="V001", raw_score=0.5),)
+        return (VideoSearchHit(video_id="V001", raw_score=0.5),)
 
 
 class ASRBranchTests(unittest.TestCase):
