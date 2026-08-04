@@ -8,7 +8,10 @@ from unittest.mock import MagicMock, patch
 
 # Add src to sys.path to allow imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
-from feature_extraction.visual_embedding.encoders import PECoreEncoder
+from feature_extraction.visual_embedding.encoders import (
+    OpenCLIPEncoder,
+    PECoreEncoder,
+)
 
 
 def _mock_open_clip_model():
@@ -29,11 +32,11 @@ def test_encoder_output_shape_and_norm():
     """
     model, preprocess = _mock_open_clip_model()
     with patch(
-        "feature_extraction.visual_embedding.encoders.pe_core_encoder."
+        "feature_extraction.visual_embedding.encoders.open_clip_encoder."
         "open_clip.create_model_and_transforms",
         return_value=(model, None, preprocess),
     ):
-        encoder = PECoreEncoder(
+        encoder = OpenCLIPEncoder(
             device="cpu",
             precision="fp32",
             model_id="hf-hub:organization/custom-vision-model",
@@ -56,11 +59,11 @@ def test_encoder_output_shape_and_norm():
 def test_encoder_empty_batch():
     model, preprocess = _mock_open_clip_model()
     with patch(
-        "feature_extraction.visual_embedding.encoders.pe_core_encoder."
+        "feature_extraction.visual_embedding.encoders.open_clip_encoder."
         "open_clip.create_model_and_transforms",
         return_value=(model, None, preprocess),
     ):
-        encoder = PECoreEncoder(device="cpu", precision="fp32")
+        encoder = OpenCLIPEncoder(device="cpu", precision="fp32")
     embeddings = encoder.encode_batch([])
     assert isinstance(embeddings, np.ndarray)
     assert embeddings.shape == (0,)
@@ -70,11 +73,15 @@ def test_encoder_empty_batch():
 def test_encoder_defaults_to_openai_clip_vit_b32():
     model, preprocess = _mock_open_clip_model()
     with patch(
-        "feature_extraction.visual_embedding.encoders.pe_core_encoder."
+        "feature_extraction.visual_embedding.encoders.open_clip_encoder."
         "open_clip.create_model_and_transforms",
         return_value=(model, None, preprocess),
     ) as create_model:
-        encoder = PECoreEncoder(device="cpu", precision="fp32")
+        encoder = OpenCLIPEncoder(device="cpu", precision="fp32")
 
     assert encoder.model_id == "ViT-B-32::openai"
     create_model.assert_called_once_with("ViT-B-32", pretrained="openai")
+
+
+def test_legacy_pe_core_encoder_name_remains_compatible():
+    assert PECoreEncoder is OpenCLIPEncoder

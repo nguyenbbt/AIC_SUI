@@ -9,7 +9,7 @@ from torch.utils.data import Dataset, DataLoader
 import time
 from datetime import timedelta
 
-from .encoders import PECoreEncoder
+from .encoders import OpenCLIPEncoder
 from .metadata_reader import read_metadata
 from .embedding_writer import write_embeddings_to_parquet
 from .resume_validation import visual_output_is_valid
@@ -54,7 +54,7 @@ def custom_collate(batch):
 def process_video_batch(
     video_id: str,
     records: List[Dict[str, Any]],
-    encoder: PECoreEncoder,
+    encoder: OpenCLIPEncoder,
     output_dir: str,
     batch_size: int,
     num_workers: int
@@ -159,7 +159,11 @@ def run_pipeline(
     force: bool
 ):
     logger.info("Initializing encoder...")
-    encoder = PECoreEncoder(device=device, precision=precision, model_id=model_id)
+    encoder = OpenCLIPEncoder(
+        device=device,
+        precision=precision,
+        model_id=model_id,
+    )
     
     logger.info(f"Reading metadata from {metadata_dir}...")
     # Assume keyframe_base_dir is parent of keyframe_dir if relative, 

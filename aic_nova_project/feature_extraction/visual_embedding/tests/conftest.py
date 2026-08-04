@@ -19,4 +19,4 @@ def isolate_visual_pipeline_from_remote_model(monkeypatch):
                 dtype=np.float32,
             )
 
-    monkeypatch.setattr(pipeline, "PECoreEncoder", FixtureEncoder)
+    monkeypatch.setattr(pipeline, "OpenCLIPEncoder", FixtureEncoder)
