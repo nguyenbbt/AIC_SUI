@@ -51,6 +51,8 @@ def frame(
         video_id=video_id,
         shot_id=shot_id,
         timestamp_sec=timestamp,
+        source_frame_idx=max(0, int(timestamp * 30)),
+        image_rel_path=f"keyframes/{video_id}/{frame_id}.webp",
     )
 
 
@@ -70,7 +72,7 @@ class ASRIntervalFrameMapperTests(unittest.TestCase):
     def test_maps_single_and_multiple_frames_inside_interval_with_distributed_scores(self) -> None:
         mapper = ASRIntervalFrameMapper()
         mapped = mapper.map_interval(
-            interval("speech", start=1.0, end=6.0, raw_score=0.9, normalized_score=0.6),
+            interval("0", start=1.0, end=6.0, raw_score=0.9, normalized_score=0.6),
             (
                 frame("V001_00000_015", timestamp=1.5),
                 frame("V001_00000_050", timestamp=5.0),
@@ -80,7 +82,7 @@ class ASRIntervalFrameMapperTests(unittest.TestCase):
 
         self.assertEqual(tuple(item.frame_id for item in mapped), ("V001_00000_015", "V001_00000_050"))
         self.assertEqual(tuple(item.provenance.backend for item in mapped), ("milvus", "milvus"))
-        self.assertEqual(tuple(item.provenance.source_candidate_id for item in mapped), ("speech", "speech"))
+        self.assertEqual(tuple(item.provenance.source_candidate_id for item in mapped), ("0", "0"))
         self.assertEqual(tuple(item.provenance.source_start_time_sec for item in mapped), (1.0, 1.0))
         self.assertEqual(tuple(item.provenance.source_end_time_sec for item in mapped), (6.0, 6.0))
         self.assertEqual(tuple(item.provenance.source_normalized_score for item in mapped), (0.6, 0.6))
@@ -90,7 +92,7 @@ class ASRIntervalFrameMapperTests(unittest.TestCase):
     def test_no_frame_in_interval_counts_mapping_loss_in_branch_result(self) -> None:
         mapper = ASRIntervalFrameMapper()
         result = mapper.map_result(
-            asr_result((interval("silent", start=20.0, end=21.0),)),
+            asr_result((interval("0", start=20.0, end=21.0),)),
             FakeMetadataReaderPort((frame("V001_00000_015", timestamp=1.5),)),
         )
 
@@ -104,8 +106,8 @@ class ASRIntervalFrameMapperTests(unittest.TestCase):
         result = mapper.map_result(
             asr_result(
                 (
-                    interval("later", start=10.0, end=10.0, rank=2),
-                    interval("early", start=1.5, end=1.5, rank=1),
+                    interval("1", start=10.0, end=10.0, rank=2),
+                    interval("0", start=1.5, end=1.5, rank=1),
                 )
             ),
             FakeMetadataReaderPort(
@@ -127,8 +129,8 @@ class ASRIntervalFrameMapperTests(unittest.TestCase):
         result = mapper.map_result(
             asr_result(
                 (
-                    interval("first", start=1.0, end=6.0, rank=1),
-                    interval("second", start=5.0, end=11.0, rank=2),
+                    interval("0", start=1.0, end=6.0, rank=1),
+                    interval("1", start=5.0, end=11.0, rank=2),
                 )
             ),
             FakeMetadataReaderPort(
@@ -154,7 +156,7 @@ class ASRIntervalFrameMapperTests(unittest.TestCase):
     def test_long_interval_is_limited_and_scores_use_kept_frame_count(self) -> None:
         mapper = ASRIntervalFrameMapper(ASRMappingConfig(max_frames_per_interval=2))
         mapped = mapper.map_interval(
-            interval("long", start=0.0, end=10.0, raw_score=1.0, normalized_score=0.8),
+            interval("0", start=0.0, end=10.0, raw_score=1.0, normalized_score=0.8),
             (
                 frame("V001_00000_000", timestamp=0.0),
                 frame("V001_00000_040", timestamp=4.0),
@@ -170,7 +172,7 @@ class ASRIntervalFrameMapperTests(unittest.TestCase):
     def test_missing_interval_normalized_score_uses_interval_level_rrf_before_mapping(self) -> None:
         mapper = ASRIntervalFrameMapper(ASRMappingConfig(interval_rrf_k=10))
         mapped = mapper.map_interval(
-            interval("speech-42", start=1.0, end=6.0, rank=1, normalized_score=None),
+            interval("42", start=1.0, end=6.0, rank=1, normalized_score=None),
             (
                 frame("V001_00000_015", timestamp=1.5),
                 frame("V001_00000_050", timestamp=5.0),
@@ -184,7 +186,7 @@ class ASRIntervalFrameMapperTests(unittest.TestCase):
         )
         self.assertEqual(
             tuple(item.provenance.source_candidate_id for item in mapped),
-            ("speech-42", "speech-42"),
+            ("42", "42"),
         )
         self.assertEqual(
             tuple(item.provenance.source_normalized_score for item in mapped),
@@ -194,7 +196,7 @@ class ASRIntervalFrameMapperTests(unittest.TestCase):
     def test_video_without_metadata_is_mapping_loss_not_cross_video_mapping(self) -> None:
         mapper = ASRIntervalFrameMapper()
         result = mapper.map_result(
-            asr_result((interval("missing-video", start=1.0, end=2.0),)),
+            asr_result((interval("0", start=1.0, end=2.0),)),
             FakeMetadataReaderPort(()),
         )
 
@@ -218,7 +220,7 @@ class ASRIntervalFrameMapperTests(unittest.TestCase):
             )
         with self.assertRaises(ContractMismatchError):
             mapper.map_interval(
-                interval("speech", start=1.0, end=2.0),
+                interval("0", start=1.0, end=2.0),
                 (frame("V002_00000_015", timestamp=1.5, video_id="V002"),),
             )
         with self.assertRaises(ValueError):

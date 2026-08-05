@@ -96,6 +96,7 @@ class _ConcurrentVQA(_VQA):
                     frame_id=frame_id,
                     shot_id=0,
                     timestamp_sec=float(suffix),
+                    source_frame_idx=suffix * 30,
                     image_reference=f"fixture://{question.question_id}",
                 ),
             ),

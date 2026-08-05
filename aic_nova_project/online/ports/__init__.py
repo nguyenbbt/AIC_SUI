@@ -5,7 +5,7 @@ from .evidence import EvidenceHydrationPort, EvidenceReaderPort
 from .images import ImageResolverPort
 from .metadata import MetadataReaderPort
 from .objects import ObjectReaderPort
-from .records import ASRSearchHit, FrameMetadata, FrameSearchHit, VideoSearchHit
+from .records import ASRSearchHit, FrameMetadata, FrameSearchHit, VideoMetadata, VideoSearchHit
 from .search import ElasticsearchSearchPort, MilvusSearchPort
 from .visual_corpus import (
     OrderedVisualBatch,
@@ -32,6 +32,7 @@ __all__ = [
     "OrderedVisualFrame",
     "TextEncoderPort",
     "VideoSearchHit",
+    "VideoMetadata",
     "VisualCorpusPort",
     "VLMPort",
     "validate_ordered_visual_batch",

@@ -170,6 +170,8 @@ class _FrameBranchBase(_BranchBase):
                     video_id=metadata.video_id,
                     shot_id=metadata.shot_id,
                     timestamp_sec=metadata.timestamp_sec,
+                    source_frame_idx=metadata.source_frame_idx,
+                    image_rel_path=metadata.image_rel_path,
                     rank=rank,
                     raw_score=hit.raw_score,
                     provenance=CandidateProvenance(
@@ -310,7 +312,7 @@ class _VideoBranchBase(_BranchBase):
 
 
 class VisualSemanticBranch(_FrameBranchBase):
-    """PE-Core text-to-frame retrieval with mandatory batch hydration.
+    """OpenCLIP text-to-frame retrieval with mandatory batch hydration.
 
     One ``BranchResult`` is produced per query variant. This class deliberately
     does not aggregate q0/q1/q2, normalize scores, fuse branches or deduplicate

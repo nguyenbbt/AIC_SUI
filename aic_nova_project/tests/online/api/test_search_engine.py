@@ -18,6 +18,8 @@ def fused_frame(frame_id: str = "V001_00000_015") -> FusedFrameCandidate:
         video_id="V001",
         shot_id=0,
         timestamp_sec=1.5,
+        source_frame_idx=45,
+        image_rel_path=f"keyframes/V001/{frame_id}.webp",
         final_score=0.9,
         branch_scores={RetrievalBranch.VISUAL_DENSE: 0.9},
         evidence=(),
@@ -186,10 +188,8 @@ class SearchEngineAPITests(unittest.TestCase):
             adapted,
             (
                 {
-                    "frame_id": "V001_00000_015",
                     "video_id": "V001",
-                    "timestamp_sec": 1.5,
-                    "score": 0.9,
+                    "frame_id": 45,
                 },
             ),
         )

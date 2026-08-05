@@ -63,6 +63,8 @@ def frame(frame_id: str, *, video_id: str, final_score: float) -> FusedFrameCand
         video_id=video_id,
         shot_id=0,
         timestamp_sec=1.0,
+        source_frame_idx=30,
+        image_rel_path=f"keyframes/{video_id}/{frame_id}.webp",
         final_score=final_score,
         branch_scores={RetrievalBranch.VISUAL_DENSE: min(final_score, 1.0)},
         evidence=(),

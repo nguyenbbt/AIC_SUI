@@ -43,7 +43,7 @@ class BrokenSummaryMilvusPort(FakeMilvusSearchPort):
 
 class InvalidSummaryPort(FakeMilvusSearchPort):
     def search_summary(self, vector, top_k):
-        return (FrameSearchHit(frame_id="F001", video_id="V001", raw_score=0.5),)
+        return (FrameSearchHit(frame_id="V001_00000_050", video_id="V001", raw_score=0.5),)
 
 
 class SummaryBranchTests(unittest.TestCase):

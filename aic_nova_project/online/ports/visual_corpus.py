@@ -6,23 +6,29 @@ import math
 from collections.abc import Iterable, Sequence
 from typing import Annotated, Protocol, runtime_checkable
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from online.domain.base import FiniteFloat, NonEmptyStr, StrictFrozenModel, StrictIntValue
 from online.domain.errors import ContractMismatchError
-from online.domain.identifiers import validate_canonical_frame_id
+from online.domain.identifiers import validate_canonical_frame_id, validate_relative_artifact_path
 
 
 class OrderedVisualFrame(StrictFrozenModel):
-    """One organizer CLIP vector at its local ordered position in a video."""
+    """One self-indexed visual vector at its ordered position in a video."""
 
     frame_id: NonEmptyStr
     video_id: NonEmptyStr
-    keyframe_no: StrictIntValue = Field(ge=1)
+    shot_id: StrictIntValue = Field(ge=0)
     local_index: StrictIntValue = Field(ge=0)
     timestamp_sec: Annotated[FiniteFloat, Field(ge=0.0)]
     source_frame_idx: StrictIntValue = Field(ge=0)
+    image_rel_path: NonEmptyStr
     vector: tuple[FiniteFloat, ...] = Field(min_length=1)
+
+    @field_validator("image_rel_path")
+    @classmethod
+    def validate_image_path(cls, value: str) -> str:
+        return validate_relative_artifact_path(value)
 
     @model_validator(mode="after")
     def validate_record(self) -> "OrderedVisualFrame":
@@ -30,12 +36,10 @@ class OrderedVisualFrame(StrictFrozenModel):
             validate_canonical_frame_id(
                 self.frame_id,
                 video_id=self.video_id,
-                keyframe_no=self.keyframe_no,
+                shot_id=self.shot_id,
             )
         except ContractMismatchError as exc:
             raise ValueError(exc.message) from exc
-        if self.local_index != self.keyframe_no - 1:
-            raise ValueError("local_index must equal keyframe_no - 1")
         norm = math.sqrt(sum(value * value for value in self.vector))
         if not math.isclose(norm, 1.0, rel_tol=1e-4, abs_tol=1e-4):
             raise ValueError("visual vector must be L2-normalized")

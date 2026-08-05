@@ -40,6 +40,18 @@ Cần chốt:
 - Diagnostics.
 - Competition output adapter.
 
+**Đã được tài liệu vòng sơ tuyển AIC 2026 chốt một phần:**
+
+- Textual KIS: `<video_id>, <frame_id>`.
+- Q&A: `<video_id>, <frame_id>, <answer>`.
+- TRAKE: `<video_id>, <frame_id_1>, ..., <frame_id_n>` theo đúng thứ tự event.
+- `frame_id` bên ngoài là chỉ số frame gốc, được map trực tiếp từ
+  `source_frame_idx` nội bộ.
+- Tối đa 100 câu trả lời cho mỗi truy vấn; thứ tự câu trả lời ảnh hưởng R@k.
+
+Phần còn mở của OQ-002 là transport cụ thể: endpoint, HTTP/JSON wrapper hoặc
+CSV, tên header/file, delimiter, authentication và protocol gửi bài.
+
 ---
 
 ## OQ-003 — Top-k theo branch

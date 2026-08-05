@@ -26,12 +26,13 @@ from online.ports import (
 class MinimalVisualCorpus:
     def __init__(self) -> None:
         self.frame = OrderedVisualFrame(
-            frame_id="L21_V001_001",
+            frame_id="L21_V001_00000_015",
             video_id="L21_V001",
-            keyframe_no=1,
+            shot_id=0,
             local_index=0,
             timestamp_sec=0.0,
             source_frame_idx=0,
+            image_rel_path="keyframes/L21_V001/0a.webp",
             vector=(1.0, 0.0),
         )
 
@@ -103,7 +104,7 @@ class AdvancedPortContractTests(unittest.TestCase):
         for field, value in (
             ("frame_id", "shot_00000_pos_015"),
             ("video_id", "L21_V002"),
-            ("keyframe_no", 2),
+            ("shot_id", 2),
             ("source_frame_idx", True),
             ("vector", (2.0, 0.0)),
             ("vector", (float("nan"), 0.0)),
@@ -122,30 +123,33 @@ class AdvancedPortContractTests(unittest.TestCase):
     def test_stream_validator_accepts_ordered_batches_and_preserves_order(self) -> None:
         frames = (
             OrderedVisualFrame(
-                frame_id="L21_V001_001",
+                frame_id="L21_V001_00000_015",
                 video_id="L21_V001",
-                keyframe_no=1,
+                shot_id=0,
                 local_index=0,
                 timestamp_sec=0.0,
                 source_frame_idx=0,
+                image_rel_path="keyframes/L21_V001/0a.webp",
                 vector=(1.0, 0.0),
             ),
             OrderedVisualFrame(
-                frame_id="L21_V001_002",
+                frame_id="L21_V001_00000_050",
                 video_id="L21_V001",
-                keyframe_no=2,
+                shot_id=0,
                 local_index=1,
                 timestamp_sec=1.0 / 30.0,
                 source_frame_idx=0,
+                image_rel_path="keyframes/L21_V001/0b.webp",
                 vector=(0.0, 1.0),
             ),
             OrderedVisualFrame(
-                frame_id="L21_V001_003",
+                frame_id="L21_V001_00001_050",
                 video_id="L21_V001",
-                keyframe_no=3,
+                shot_id=1,
                 local_index=2,
                 timestamp_sec=2.0,
                 source_frame_idx=60,
+                image_rel_path="keyframes/L21_V001/1.webp",
                 vector=(1.0, 0.0),
             ),
         )
@@ -158,37 +162,40 @@ class AdvancedPortContractTests(unittest.TestCase):
     ) -> None:
         frame0 = MinimalVisualCorpus().frame
         frame1 = OrderedVisualFrame(
-            frame_id="L21_V001_002",
+            frame_id="L21_V001_00000_050",
             video_id="L21_V001",
-            keyframe_no=2,
+            shot_id=0,
             local_index=1,
             timestamp_sec=1.0 / 30.0,
             source_frame_idx=0,
+            image_rel_path="keyframes/L21_V001/0b.webp",
             vector=(0.0, 1.0),
         )
         frame2 = OrderedVisualFrame(
-            frame_id="L21_V001_003",
+            frame_id="L21_V001_00001_050",
             video_id="L21_V001",
-            keyframe_no=3,
+            shot_id=1,
             local_index=2,
             timestamp_sec=2.0,
             source_frame_idx=60,
+            image_rel_path="keyframes/L21_V001/1.webp",
             vector=(1.0, 0.0),
         )
         wrong_video = frame1.model_copy(
-            update={"video_id": "L21_V002", "frame_id": "L21_V002_002"}
+            update={"video_id": "L21_V002", "frame_id": "L21_V002_00000_050"}
         )
         duplicate_frame_id = frame0.model_copy(update={"local_index": 1})
         duplicate_local_index = frame1.model_copy(
-            update={"frame_id": "L21_V001_001", "keyframe_no": 1, "local_index": 0}
+            update={"frame_id": "L21_V001_00000_015", "shot_id": 0, "local_index": 0}
         )
         dimension_change = OrderedVisualFrame(
-            frame_id="L21_V001_002",
+            frame_id="L21_V001_00000_050",
             video_id="L21_V001",
-            keyframe_no=2,
+            shot_id=0,
             local_index=1,
             timestamp_sec=1.0,
             source_frame_idx=30,
+            image_rel_path="keyframes/L21_V001/dim.webp",
             vector=(1.0, 0.0, 0.0),
         )
 

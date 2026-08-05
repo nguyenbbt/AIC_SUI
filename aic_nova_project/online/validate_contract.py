@@ -10,6 +10,7 @@ from typing import Any
 from online.adapters.contract_validator import OfflineContractValidator, ValidationStatus
 from online.adapters.elasticsearch import ElasticsearchSearchAdapter
 from online.adapters.milvus import MilvusSearchAdapter
+from online.adapters.manifest import DatasetManifestGate
 from online.adapters.sqlite import SQLiteReadAdapter
 from online.config import OnlineDataConfig
 from online.lifecycle import InfrastructureLifecycle
@@ -38,7 +39,10 @@ def main() -> int:
         milvus = MilvusSearchAdapter(config.milvus)
         elasticsearch = ElasticsearchSearchAdapter(config.elasticsearch)
         sqlite = SQLiteReadAdapter(config.sqlite)
+        manifest = DatasetManifestGate(config.dataset)
         lifecycle = InfrastructureLifecycle()
+        if config.dataset.manifest_required:
+            lifecycle.register("dataset_manifest", manifest, required=True)
         lifecycle.register("milvus", milvus, required=True)
         lifecycle.register("elasticsearch", elasticsearch, required=False)
         lifecycle.register("sqlite", sqlite, required=True)
@@ -54,6 +58,7 @@ def main() -> int:
             milvus=milvus,
             elasticsearch=elasticsearch,
             sqlite=sqlite,
+            manifest_gate=manifest if config.dataset.manifest_required else None,
             encoder_smoke_vectors=smoke_vectors,
         ).validate()
         print(report.model_dump_json(indent=2))

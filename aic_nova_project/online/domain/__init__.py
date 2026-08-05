@@ -43,6 +43,7 @@ from .query import (
     QueryOptions,
     TextQueryVariant,
 )
+from .manifest import DatasetManifest
 from .trake import (
     DANTE_DEFAULT_LAMBDA,
     DANTE_MAX_LAMBDA,
@@ -96,6 +97,7 @@ __all__ = [
     "DANTE_POLICY_VERSION",
     "DANTEPolicy",
     "DimensionMismatchError",
+    "DatasetManifest",
     "EvidenceId",
     "EvidenceReference",
     "EvidenceType",

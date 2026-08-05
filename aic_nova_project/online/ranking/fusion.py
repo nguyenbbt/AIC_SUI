@@ -139,6 +139,8 @@ class WeightedFrameFusion:
             video_id=representative.video_id,
             shot_id=representative.shot_id,
             timestamp_sec=representative.timestamp_sec,
+            source_frame_idx=representative.source_frame_idx,
+            image_rel_path=representative.image_rel_path,
             final_score=final_score,
             branch_scores=branch_scores,
             evidence=tuple(evidence),
@@ -177,7 +179,13 @@ def _validate_frame_contract(candidates: Sequence[FrameCandidate]) -> None:
     for candidate in candidates[1:]:
         mismatches = {
             field
-            for field in ("video_id", "shot_id", "timestamp_sec")
+            for field in (
+                "video_id",
+                "shot_id",
+                "source_frame_idx",
+                "timestamp_sec",
+                "image_rel_path",
+            )
             if getattr(candidate, field) != getattr(first, field)
         }
         if mismatches:

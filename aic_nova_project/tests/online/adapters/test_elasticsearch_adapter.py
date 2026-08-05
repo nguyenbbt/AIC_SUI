@@ -40,7 +40,7 @@ class ElasticsearchAdapterTests(unittest.TestCase):
         )
 
     def test_exact_query_body_and_ocr_mapping(self) -> None:
-        self.client.response = {"hits": {"hits": [{"_score": 4.5, "_source": {"frame_id": "F1", "video_id": "V1", "shot_id": "2"}}]}}
+        self.client.response = {"hits": {"hits": [{"_score": 4.5, "_source": {"frame_id": "V1_00002_050", "video_id": "V1", "shot_id": "2"}}]}}
         result = self.adapter.search_ocr("xin chào", 7, fuzzy=False)
         self.assertEqual(result[0].shot_id, 2)
         self.assertEqual(
@@ -53,7 +53,7 @@ class ElasticsearchAdapterTests(unittest.TestCase):
         )
 
     def test_fuzzy_body_asr_and_summary_mapping(self) -> None:
-        self.client.response = {"hits": {"hits": [{"_score": 3, "_source": {"video_id": "V1", "interval_id": "i1", "start_time": 1, "end_time": 2, "cleaned_text": "text"}}]}}
+        self.client.response = {"hits": {"hits": [{"_score": 3, "_source": {"video_id": "V1", "interval_id": "0", "start_time_sec": 1, "end_time_sec": 2, "cleaned_text": "text"}}]}}
         asr = self.adapter.search_asr("hello", 2, fuzzy=True)
         self.assertEqual(asr[0].start_time_sec, 1)
         self.assertEqual(self.client.last_call["body"]["query"]["match"]["cleaned_text"]["fuzziness"], "AUTO")
@@ -93,6 +93,55 @@ class ElasticsearchAdapterTests(unittest.TestCase):
         }
         with self.assertRaises(ContractMismatchError):
             self.adapter.search_summary("hello", 1)
+
+    def test_asr_overlap_lookup_uses_closed_interval_filters_and_stable_sort(self) -> None:
+        self.client.response = {
+            "hits": {
+                "hits": [
+                    {
+                        "_source": {
+                            "video_id": "V1",
+                            "interval_id": "0",
+                            "start_time_sec": 1.0,
+                            "end_time_sec": 2.0,
+                            "cleaned_text": "text",
+                        }
+                    }
+                ]
+            }
+        }
+
+        result = self.adapter.find_documents_overlapping_interval(
+            index="asr_transcripts",
+            video_id="V1",
+            start_sec=1.5,
+            end_sec=3.0,
+            source_fields=("video_id", "interval_id"),
+            limit=20,
+        )
+
+        self.assertEqual(result[0]["interval_id"], "0")
+        body = self.client.last_call["body"]
+        self.assertIn({"range": {"start_time_sec": {"lte": 3.0}}}, body["query"]["bool"]["filter"])
+        self.assertIn({"range": {"end_time_sec": {"gte": 1.5}}}, body["query"]["bool"]["filter"])
+        self.assertEqual(body["sort"][1], {"interval_id": {"order": "asc"}})
+        for invalid_shot_id in ("02", "-1", "２", -1):
+            self.client.response = {
+                "hits": {
+                    "hits": [
+                        {
+                            "_score": 1,
+                            "_source": {
+                                "frame_id": "V1_00002_050",
+                                "video_id": "V1",
+                                "shot_id": invalid_shot_id,
+                            },
+                        }
+                    ]
+                }
+            }
+            with self.assertRaises(ContractMismatchError):
+                self.adapter.search_ocr("hello", 1)
         self.client.response = {
             "hits": {
                 "hits": [

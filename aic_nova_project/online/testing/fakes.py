@@ -22,6 +22,7 @@ from online.ports.records import (
     ASRSearchHit,
     FrameMetadata,
     FrameSearchHit,
+    VideoMetadata,
     VideoSearchHit,
 )
 
@@ -378,6 +379,37 @@ class FakeMetadataReaderPort:
             )
         )
 
+    def get_videos_by_ids(self, video_ids: Sequence[str]) -> Mapping[str, VideoMetadata]:
+        ids = self._validate_ids(video_ids)
+        video_ids_present = {frame.video_id for frame in self._frames.values()}
+        return {
+            video_id: VideoMetadata(
+                video_id=video_id,
+                source_video_rel_path=f"videos/{video_id}.mp4",
+                fps=30.0,
+                duration_sec=max(
+                    (
+                        frame.timestamp_sec
+                        for frame in self._frames.values()
+                        if frame.video_id == video_id
+                    ),
+                    default=0.0,
+                ),
+                frame_count=max(
+                    (
+                        frame.source_frame_idx + 1
+                        for frame in self._frames.values()
+                        if frame.video_id == video_id
+                    ),
+                    default=1,
+                ),
+                width=1920,
+                height=1080,
+            )
+            for video_id in ids
+            if video_id in video_ids_present
+        }
+
 
 class FakeObjectReaderPort:
     def __init__(self, objects: Mapping[str, Sequence[ObjectDetection]]) -> None:
@@ -422,8 +454,7 @@ class FakeObjectReaderPort:
                 if value.confidence >= min_confidence
                 and (
                     label is None
-                    or value.label_normalized == label
-                    or value.class_mid == label
+                    or value.label == label.casefold()
                 )
             )
         return output
@@ -486,97 +517,82 @@ def build_integration_fixture() -> IntegrationFixture:
 
     frames = (
         FrameMetadata(
-            frame_id="L21_V001_001", video_id="L21_V001", keyframe_no=1,
-            local_index=0, timestamp_sec=1.5, fps=30.0, source_frame_idx=45,
-            image_rel_path="keyframes/L21_V001/001.jpg",
+            frame_id="L21_V001_00000_015", video_id="L21_V001", shot_id=0,
+            timestamp_sec=1.5, source_frame_idx=45,
+            image_rel_path="keyframes/L21_V001/shot_00000_pos_015.webp",
         ),
         FrameMetadata(
-            frame_id="L21_V001_002", video_id="L21_V001", keyframe_no=2,
-            local_index=1, timestamp_sec=5.0, fps=30.0, source_frame_idx=150,
-            image_rel_path="keyframes/L21_V001/002.jpg",
+            frame_id="L21_V001_00001_050", video_id="L21_V001", shot_id=1,
+            timestamp_sec=5.0, source_frame_idx=150,
+            image_rel_path="keyframes/L21_V001/shot_00001_pos_050.webp",
         ),
         FrameMetadata(
-            frame_id="L21_V001_003", video_id="L21_V001", keyframe_no=3,
-            local_index=2, timestamp_sec=10.0, fps=30.0, source_frame_idx=300,
-            image_rel_path="keyframes/L21_V001/003.jpg",
+            frame_id="L21_V001_00002_085", video_id="L21_V001", shot_id=2,
+            timestamp_sec=10.0, source_frame_idx=300,
+            image_rel_path="keyframes/L21_V001/shot_00002_pos_085.webp",
         ),
         FrameMetadata(
-            frame_id="L21_V002_001", video_id="L21_V002", keyframe_no=1,
-            local_index=0, timestamp_sec=2.5, fps=29.97, source_frame_idx=75,
-            image_rel_path="keyframes/L21_V002/001.jpg",
+            frame_id="L21_V002_00000_050", video_id="L21_V002", shot_id=0,
+            timestamp_sec=2.5, source_frame_idx=75,
+            image_rel_path="keyframes/L21_V002/shot_00000_pos_050.webp",
         ),
         FrameMetadata(
-            frame_id="L21_V002_002", video_id="L21_V002", keyframe_no=2,
-            local_index=1, timestamp_sec=17.5, fps=29.97, source_frame_idx=524,
-            image_rel_path="keyframes/L21_V002/002.jpg",
+            frame_id="L21_V002_00001_050", video_id="L21_V002", shot_id=1,
+            timestamp_sec=17.5, source_frame_idx=524,
+            image_rel_path="keyframes/L21_V002/shot_00001_pos_050.webp",
         ),
     )
     objects = {
-        "L21_V001_001": (),
-        "L21_V001_002": (
+        "L21_V001_00000_015": (),
+        "L21_V001_00001_050": (
             ObjectDetection(
-                label_display="Person",
-                label_normalized="person",
-                class_mid="/m/01g317",
-                class_label_id="0",
+                label="person",
                 confidence=0.95,
                 x_min=0.10,
                 y_min=0.10,
                 x_max=0.30,
                 y_max=0.60,
-                model_source="organizer_open_images",
+                model_source="self_indexed_detector",
             ),
         ),
-        "L21_V001_003": (
+        "L21_V001_00002_085": (
             ObjectDetection(
-                label_display="Person",
-                label_normalized="person",
-                class_mid="/m/01g317",
-                class_label_id="0",
+                label="person",
                 confidence=0.91,
                 x_min=0.12,
                 y_min=0.10,
                 x_max=0.32,
                 y_max=0.62,
-                model_source="organizer_open_images",
+                model_source="self_indexed_detector",
             ),
             ObjectDetection(
-                label_display="Person",
-                label_normalized="person",
-                class_mid="/m/01g317",
-                class_label_id="0",
+                label="person",
                 confidence=0.35,
                 x_min=0.40,
                 y_min=0.12,
                 x_max=0.60,
                 y_max=0.65,
-                model_source="organizer_open_images",
+                model_source="self_indexed_detector",
             ),
             ObjectDetection(
-                label_display="Car",
-                label_normalized="car",
-                class_mid="/m/0k4j",
-                class_label_id="1",
+                label="car",
                 confidence=0.88,
                 x_min=0.50,
                 y_min=0.35,
                 x_max=0.90,
                 y_max=0.85,
-                model_source="organizer_open_images",
+                model_source="self_indexed_detector",
             ),
         ),
-        "L21_V002_001": (
+        "L21_V002_00000_050": (
             ObjectDetection(
-                label_display="Bicycle",
-                label_normalized="bicycle",
-                class_mid=None,
-                class_label_id=None,
+                label="bicycle",
                 confidence=0.82,
                 x_min=0.05,
                 y_min=0.20,
                 x_max=0.45,
                 y_max=0.90,
-                model_source="organizer_open_images",
+                model_source="self_indexed_detector",
             ),
         ),
     }
@@ -590,24 +606,24 @@ def build_integration_fixture() -> IntegrationFixture:
     )
     ocr_dense_hits = (
         FrameSearchHit(
-            frame_id="L21_V001_002",
+            frame_id="L21_V001_00001_050",
             video_id="L21_V001",
             raw_score=0.84,
         ),
         FrameSearchHit(
-            frame_id="L21_V002_002",
+            frame_id="L21_V002_00001_050",
             video_id="L21_V002",
             raw_score=0.61,
         ),
     )
     ocr_lexical_hits = (
         FrameSearchHit(
-            frame_id="L21_V001_002",
+            frame_id="L21_V001_00001_050",
             video_id="L21_V001",
             raw_score=7.2,
         ),
         FrameSearchHit(
-            frame_id="L21_V002_002",
+            frame_id="L21_V002_00001_050",
             video_id="L21_V002",
             raw_score=5.1,
         ),
@@ -615,7 +631,7 @@ def build_integration_fixture() -> IntegrationFixture:
     asr_dense_hits = (
         ASRSearchHit(
             video_id="L21_V001",
-            interval_id="overlap",
+                interval_id="0",
             start_time_sec=1.0,
             end_time_sec=6.0,
             raw_score=0.9,
@@ -623,7 +639,7 @@ def build_integration_fixture() -> IntegrationFixture:
         ),
         ASRSearchHit(
             video_id="L21_V001",
-            interval_id="boundary",
+                interval_id="1",
             start_time_sec=10.0,
             end_time_sec=12.0,
             raw_score=0.8,
@@ -631,7 +647,7 @@ def build_integration_fixture() -> IntegrationFixture:
         ),
         ASRSearchHit(
             video_id="L21_V002",
-            interval_id="no_overlap",
+                interval_id="2",
             start_time_sec=8.0,
             end_time_sec=9.0,
             raw_score=0.7,
@@ -645,7 +661,7 @@ def build_integration_fixture() -> IntegrationFixture:
     )
     summary_lexical_hits = tuple(summary_dense_hits)
     return IntegrationFixture(
-        schema_version="organizer-v1",
+        schema_version="self-indexed-v2",
         frames=frames,
         objects=objects,
         visual_hits=visual_hits,
@@ -656,9 +672,12 @@ def build_integration_fixture() -> IntegrationFixture:
         summary_dense_hits=summary_dense_hits,
         summary_lexical_hits=summary_lexical_hits,
         missing_metadata_hit=FrameSearchHit(
-            frame_id="L21_V999_001", video_id="L21_V999", raw_score=0.1
+            frame_id="L21_V999_00000_050",
+            video_id="L21_V999",
+            shot_id=0,
+            raw_score=0.1,
         ),
         metadata_mismatch_hit=FrameSearchHit.model_construct(
-            frame_id="L21_V001_001", video_id="L21_V999", raw_score=0.05
+            frame_id="L21_V001_00000_015", video_id="L21_V999", raw_score=0.05
         ),
     )

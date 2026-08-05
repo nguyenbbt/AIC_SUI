@@ -96,6 +96,6 @@ def serialize_mapping(value: Mapping[_K, _V]) -> dict[_K, _V]:
 
 
 def ensure_bbox_order(model: Any) -> Any:
-    if model.x_max < model.x_min or model.y_max < model.y_min:
-        raise ValueError("bbox max coordinates must be >= min coordinates")
+    if model.x_max <= model.x_min or model.y_max <= model.y_min:
+        raise ValueError("bbox max coordinates must be greater than min coordinates")
     return model

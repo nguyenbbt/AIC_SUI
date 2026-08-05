@@ -1,5 +1,9 @@
 # 14 — Phân công code TRAKE/DANTE và VQA cho A, B, C
 
+> **Contract migration notice (2026-08-05):** Keep the DANTE/VQA task split,
+> but use the OpenCLIP visual space and self-indexed frame metadata defined by
+> `docs/22-OFFLINE-TO-ONLINE-DATA-CONTRACT-SELF-INDEXED-V2.md`.
+
 ## 1. Trạng thái và phạm vi
 
 Đây là kế hoạch triển khai chính thức sau khi:

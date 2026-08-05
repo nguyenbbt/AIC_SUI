@@ -78,6 +78,8 @@ def visual_frame(
         shot_id=local_index,
         local_index=local_index,
         timestamp_sec=float(local_index),
+        source_frame_idx=local_index * 30,
+        image_rel_path=f"keyframes/{video_id}/{local_index:05d}.webp",
         vector=vector,
     )
 

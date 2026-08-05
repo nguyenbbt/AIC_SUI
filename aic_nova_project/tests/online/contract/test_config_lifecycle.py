@@ -36,6 +36,8 @@ class ConfigLifecycleTests(unittest.TestCase):
                 "AIC_ONLINE_MILVUS_SEARCH_EF": "64",
                 "AIC_ONLINE_ES_FUZZY_ENABLED": "true",
                 "AIC_ONLINE_SQLITE_BATCH_SIZE": "100",
+                "AIC_ONLINE_DATASET_EXPECTED_FINGERPRINT": "sha256:" + "a" * 64,
+                "AIC_ONLINE_DATASET_MANIFEST_REQUIRED": "true",
             },
             clear=False,
         ):
@@ -43,8 +45,17 @@ class ConfigLifecycleTests(unittest.TestCase):
         self.assertEqual(config.milvus.search_ef, 64)
         self.assertTrue(config.elasticsearch.fuzzy_enabled)
         self.assertEqual(config.sqlite.batch_size, 100)
+        self.assertEqual(config.dataset.expected_fingerprint, "sha256:" + "a" * 64)
+        self.assertTrue(config.dataset.manifest_required)
         with self.assertRaises(ValidationError):
             SQLiteResourceConfig(metadata_table="metadata; DROP TABLE objects")
+        with patch.dict(
+            os.environ,
+            {"AIC_ONLINE_DATASET_MANIFEST_REQUIRED": "maybe"},
+            clear=True,
+        ):
+            with self.assertRaises(ValueError):
+                OnlineDataConfig.from_env()
 
     def test_health_distinguishes_required_and_optional_failures(self) -> None:
         lifecycle = InfrastructureLifecycle()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 import threading
 from collections.abc import Mapping, Sequence
 from typing import Any, Callable
@@ -234,9 +235,9 @@ class ElasticsearchSearchAdapter:
                 "Elasticsearch source field must be an integer",
                 details={"field": field},
             )
-        if isinstance(value, int):
+        if isinstance(value, int) and value >= 0:
             return value
-        if isinstance(value, str) and value.isdigit():
+        if isinstance(value, str) and re.fullmatch(r"0|[1-9][0-9]*", value):
             return int(value)
         raise ContractMismatchError(
             "Elasticsearch source field must be an integer",
@@ -286,7 +287,13 @@ class ElasticsearchSearchAdapter:
     def search_asr(
         self, query: str, top_k: int, *, fuzzy: bool | None = None
     ) -> Sequence[ASRSearchHit]:
-        fields = ("video_id", "interval_id", "start_time", "end_time", "cleaned_text")
+        fields = (
+            "video_id",
+            "interval_id",
+            "start_time_sec",
+            "end_time_sec",
+            "cleaned_text",
+        )
         hits = self._search(
             self.config.asr_index,
             query,
@@ -303,8 +310,8 @@ class ElasticsearchSearchAdapter:
                     ASRSearchHit(
                         video_id=self._required_str(source, "video_id"),
                         interval_id=self._required_str(source, "interval_id"),
-                        start_time_sec=self._required_float(source, "start_time"),
-                        end_time_sec=self._required_float(source, "end_time"),
+                        start_time_sec=self._required_float(source, "start_time_sec"),
+                        end_time_sec=self._required_float(source, "end_time_sec"),
                         text=self._optional_str(source, "cleaned_text"),
                         raw_score=score,
                     )
@@ -433,6 +440,68 @@ class ElasticsearchSearchAdapter:
                 ),
             )
         return self._extract_sources(response, "exact lookup")
+
+    def find_documents_overlapping_interval(
+        self,
+        *,
+        index: str,
+        video_id: str,
+        start_sec: float,
+        end_sec: float,
+        source_fields: Sequence[str],
+        limit: int,
+    ) -> Sequence[Mapping[str, Any]]:
+        """Read ASR documents whose closed intervals overlap a requested window."""
+
+        self._validate_lookup(source_fields, limit)
+        if (
+            not isinstance(index, str)
+            or not index.strip()
+            or index != index.strip()
+            or not isinstance(video_id, str)
+            or not video_id.strip()
+            or video_id != video_id.strip()
+        ):
+            raise InvalidQueryError("index and video_id must be canonical strings")
+        if (
+            isinstance(start_sec, bool)
+            or isinstance(end_sec, bool)
+            or not isinstance(start_sec, (int, float))
+            or not isinstance(end_sec, (int, float))
+            or not math.isfinite(float(start_sec))
+            or not math.isfinite(float(end_sec))
+            or float(start_sec) < 0.0
+            or float(end_sec) < float(start_sec)
+        ):
+            raise InvalidQueryError("ASR lookup window must be finite and ordered")
+        body = {
+            "size": limit,
+            "_source": list(source_fields),
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"video_id": video_id}},
+                        {"range": {"start_time_sec": {"lte": float(end_sec)}}},
+                        {"range": {"end_time_sec": {"gte": float(start_sec)}}},
+                    ]
+                }
+            },
+            "sort": [
+                {"start_time_sec": {"order": "asc"}},
+                {"interval_id": {"order": "asc"}},
+            ],
+        }
+        with self._read_guard.read():
+            response = call_backend(
+                "find_documents_overlapping_interval",
+                index,
+                lambda: self._get_client().search(
+                    index=index,
+                    body=body,
+                    request_timeout=self.config.timeout_sec,
+                ),
+            )
+        return self._extract_sources(response, "interval lookup")
 
     @staticmethod
     def _validate_lookup(source_fields: Sequence[str], limit: int) -> None:

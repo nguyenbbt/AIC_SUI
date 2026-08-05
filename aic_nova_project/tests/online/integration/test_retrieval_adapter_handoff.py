@@ -79,7 +79,7 @@ class _MilvusBackend:
                 {
                     "entity": {
                         "video_id": "V001",
-                        "interval_id": "interval-1",
+                        "interval_id": "0",
                         "start_time_sec": 1.0,
                         "end_time_sec": 3.0,
                     },
@@ -139,9 +139,9 @@ class _ElasticsearchClient:
         elif index == self.config.asr_index:
             source = {
                 "video_id": "V001",
-                "interval_id": "interval-1",
-                "start_time": 1.0,
-                "end_time": 3.0,
+                "interval_id": "0",
+                "start_time_sec": 1.0,
+                "end_time_sec": 3.0,
                 "cleaned_text": "người mặc áo đỏ đi xe đạp",
             }
             score = 4.5
@@ -185,12 +185,13 @@ class RetrievalAdapterHandoffTests(unittest.TestCase):
         connection = sqlite3.connect(":memory:", check_same_thread=False)
         connection.execute(
             "CREATE TABLE metadata ("
-            "frame_id TEXT PRIMARY KEY, video_id TEXT, shot_id INTEGER, timestamp REAL)"
+            "frame_id TEXT PRIMARY KEY, video_id TEXT, shot_id INTEGER, "
+            "source_frame_idx INTEGER, timestamp REAL, image_rel_path TEXT)"
         )
         connection.execute(
-            "INSERT INTO metadata(frame_id, video_id, shot_id, timestamp) "
-            "VALUES (?, ?, ?, ?)",
-            ("V001_00000_015", "V001", 0, 1.5),
+            "INSERT INTO metadata(frame_id, video_id, shot_id, source_frame_idx, timestamp, image_rel_path) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("V001_00000_015", "V001", 0, 45, 1.5, "keyframes/V001/V001_00000_015.jpg"),
         )
         connection.commit()
         metadata = SQLiteReadAdapter(config.sqlite, connection=connection)

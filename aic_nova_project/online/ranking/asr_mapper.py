@@ -167,6 +167,8 @@ class ASRIntervalFrameMapper:
                 video_id=frame.video_id,
                 shot_id=frame.shot_id,
                 timestamp_sec=frame.timestamp_sec,
+                source_frame_idx=frame.source_frame_idx,
+                image_rel_path=frame.image_rel_path,
                 rank=interval.rank,
                 raw_score=raw_score,
                 normalized_score=normalized_score,

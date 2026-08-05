@@ -1,5 +1,10 @@
 # 06 — DESIGN DECISIONS
 
+> **Current contract override (2026-08-05):** Decisions that assume PE-Core or
+> organizer-provided keyframes/features are superseded by
+> `docs/22-OFFLINE-TO-ONLINE-DATA-CONTRACT-SELF-INDEXED-V2.md`. The active visual
+> space is OpenCLIP `ViT-B-32::openai` over team-extracted keyframes.
+
 ## DD-001 — Tách Offline và Online
 
 **Status:** CONFIRMED_DESIGN

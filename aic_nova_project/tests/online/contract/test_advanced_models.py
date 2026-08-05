@@ -42,7 +42,7 @@ def _match(
     *,
     local_index: int,
     frame_id: str,
-    keyframe_no: int,
+    shot_id: int,
     source_frame_idx: int,
     video_id: str = "L21_V001",
 ) -> TRAKEFrameMatch:
@@ -50,23 +50,24 @@ def _match(
         event_id=event_id,
         frame_id=frame_id,
         video_id=video_id,
-        keyframe_no=keyframe_no,
+        shot_id=shot_id,
         local_index=local_index,
         timestamp_sec=float(local_index),
         source_frame_idx=source_frame_idx,
+        image_rel_path=f"keyframes/{video_id}/{frame_id}.webp",
         similarity_score=0.75,
     )
 
 
 def _image() -> ImageEvidence:
     return ImageEvidence(
-        evidence_id="image:L21_V001_001",
+        evidence_id="image:L21_V001_00000_050",
         video_id="L21_V001",
-        frame_id="L21_V001_001",
-        keyframe_no=1,
+        frame_id="L21_V001_00000_050",
+        shot_id=0,
         timestamp_sec=0.0,
         source_frame_idx=0,
-        image_reference="fixture://images/L21_V001_001",
+        image_reference="fixture://images/L21_V001_00000_050",
     )
 
 
@@ -81,15 +82,15 @@ class TRAKEAdvancedModelTests(unittest.TestCase):
                 _match(
                     "e1",
                     local_index=0,
-                    frame_id="L21_V001_001",
-                    keyframe_no=1,
+                    frame_id="L21_V001_00000_050",
+                    shot_id=0,
                     source_frame_idx=0,
                 ),
                 _match(
                     "e2",
                     local_index=3,
-                    frame_id="L21_V001_004",
-                    keyframe_no=4,
+                    frame_id="L21_V001_00003_050",
+                    shot_id=3,
                     source_frame_idx=90,
                 ),
             ),
@@ -135,8 +136,8 @@ class TRAKEAdvancedModelTests(unittest.TestCase):
         first = _match(
             "e1",
             local_index=1,
-            frame_id="L21_V001_002",
-            keyframe_no=2,
+            frame_id="L21_V001_00001_050",
+            shot_id=1,
             source_frame_idx=30,
         )
         cases = (
@@ -145,8 +146,8 @@ class TRAKEAdvancedModelTests(unittest.TestCase):
                 _match(
                     "e2",
                     local_index=2,
-                    frame_id="L21_V002_003",
-                    keyframe_no=3,
+                    frame_id="L21_V002_00002_050",
+                    shot_id=2,
                     source_frame_idx=60,
                     video_id="L21_V002",
                 ),
@@ -156,8 +157,8 @@ class TRAKEAdvancedModelTests(unittest.TestCase):
                 _match(
                     "e2",
                     local_index=1,
-                    frame_id="L21_V001_002",
-                    keyframe_no=2,
+                    frame_id="L21_V001_00001_050",
+                    shot_id=1,
                     source_frame_idx=30,
                 ),
             ),
@@ -166,8 +167,8 @@ class TRAKEAdvancedModelTests(unittest.TestCase):
                 _match(
                     "e3",
                     local_index=2,
-                    frame_id="L21_V001_003",
-                    keyframe_no=3,
+                    frame_id="L21_V001_00002_050",
+                    shot_id=2,
                     source_frame_idx=60,
                 ),
             ),
@@ -184,19 +185,20 @@ class TRAKEAdvancedModelTests(unittest.TestCase):
     def test_match_rejects_non_canonical_identity_non_finite_score_and_boolean(self) -> None:
         base = {
             "event_id": "e1",
-            "frame_id": "L21_V001_001",
+            "frame_id": "L21_V001_00000_050",
             "video_id": "L21_V001",
-            "keyframe_no": 1,
+            "shot_id": 0,
             "local_index": 0,
             "timestamp_sec": 0.0,
             "source_frame_idx": 0,
+            "image_rel_path": "keyframes/L21_V001/0.webp",
             "similarity_score": 0.7,
         }
         for field, value in (
             ("frame_id", "shot_00000_pos_015"),
             ("video_id", "L21_V002"),
-            ("keyframe_no", 2),
-            ("local_index", 1),
+            ("shot_id", 2),
+            ("local_index", -1),
             ("similarity_score", float("nan")),
             ("similarity_score", True),
             ("local_index", True),
@@ -249,7 +251,7 @@ class VQAAdvancedModelTests(unittest.TestCase):
             answer="Có",
             answer_type=VQAAnswerType.YES_NO,
             confidence=VLMConfidence.HIGH,
-            evidence_ids=("image:L21_V001_001",),
+            evidence_ids=("image:L21_V001_00000_050",),
         )
         self.assertEqual(answered.answer, "Có")
         insufficient = VLMResponse(
@@ -291,15 +293,15 @@ class VQAAdvancedModelTests(unittest.TestCase):
     def test_evidence_types_preserve_candidate_level(self) -> None:
         image = _image()
         ocr = OCREvidence(
-            evidence_id="ocr:L21_V001_001",
+            evidence_id="ocr:L21_V001_00000_050",
             video_id="L21_V001",
-            frame_id="L21_V001_001",
+            frame_id="L21_V001_00000_050",
             text="BẢNG HIỆU",
         )
         asr = ASREvidence(
             evidence_id="asr:L21_V001:interval_1",
             video_id="L21_V001",
-            interval_id="interval_1",
+            interval_id="1",
             start_time_sec=1.0,
             end_time_sec=4.0,
             text="Xin chào",
@@ -328,14 +330,14 @@ class VQAAdvancedModelTests(unittest.TestCase):
             "summary",
         ))
         self.assertFalse(hasattr(restored.evidence[-1], "frame_id"))
-        self.assertEqual(restored.evidence[2].interval_id, "interval_1")  # type: ignore[union-attr]
+        self.assertEqual(restored.evidence[2].interval_id, "1")  # type: ignore[union-attr]
 
     def test_asr_interval_and_summary_level_validation(self) -> None:
         with self.assertRaises(ValidationError):
             ASREvidence(
                 evidence_id="asr:1",
                 video_id="L21_V001",
-                interval_id="interval_1",
+                interval_id="1",
                 start_time_sec=4.0,
                 end_time_sec=1.0,
                 text="text",
@@ -345,7 +347,7 @@ class VQAAdvancedModelTests(unittest.TestCase):
                 evidence_id="summary:L21_V001",
                 video_id="L21_V001",
                 text="summary",
-                frame_id="L21_V001_001",  # type: ignore[call-arg]
+                frame_id="L21_V001_00000_050",  # type: ignore[call-arg]
             )
 
     def test_public_evidence_rejects_absolute_paths_and_wrong_frame_identity(self) -> None:
@@ -358,8 +360,8 @@ class VQAAdvancedModelTests(unittest.TestCase):
                 ImageEvidence(
                     evidence_id="image:1",
                     video_id="L21_V001",
-                    frame_id="L21_V001_001",
-                    keyframe_no=1,
+                    frame_id="L21_V001_00000_050",
+                    shot_id=0,
                     timestamp_sec=0.0,
                     source_frame_idx=0,
                     image_reference=reference,
@@ -375,11 +377,11 @@ class VQAAdvancedModelTests(unittest.TestCase):
                 ImageEvidence(
                     evidence_id=reference,
                     video_id="L21_V001",
-                    frame_id="L21_V001_001",
-                    keyframe_no=1,
+                    frame_id="L21_V001_00000_050",
+                    shot_id=0,
                     timestamp_sec=0.0,
                     source_frame_idx=0,
-                    image_reference="fixture://images/L21_V001_001",
+                    image_reference="fixture://images/L21_V001_00000_050",
                 )
             with self.assertRaises(ValidationError):
                 VLMResponse(
@@ -393,7 +395,7 @@ class VQAAdvancedModelTests(unittest.TestCase):
             OCREvidence(
                 evidence_id="ocr:1",
                 video_id="L21_V002",
-                frame_id="L21_V001_001",
+                frame_id="L21_V001_00000_050",
                 text="text",
             )
 

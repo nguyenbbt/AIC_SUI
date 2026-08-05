@@ -1,5 +1,10 @@
 # Online Data & Infrastructure setup
 
+The active Offline boundary is `self-indexed-v2`: the team extracts keyframes
+from raw videos and indexes OpenCLIP `ViT-B-32::openai` visual vectors. See
+`docs/22-OFFLINE-TO-ONLINE-DATA-CONTRACT-SELF-INDEXED-V2.md` before connecting
+real resources.
+
 The Online adapter boundary supports Python 3.11+; the database SDKs must be
 verified in the target deployment image before runtime integration is claimed.
 The contract and adapter unit tests do not require Milvus, Elasticsearch,
@@ -40,6 +45,10 @@ The optional runtime profile requires configured, non-production resources:
 $env:AIC_ONLINE_MILVUS_URI = "http://localhost:19530"
 $env:AIC_ONLINE_ES_URI = "http://localhost:9200"
 $env:AIC_ONLINE_SQLITE_PATH = "data\metadata.db"
+$env:AIC_ONLINE_SQLITE_VIDEOS_TABLE = "videos"
+$env:AIC_ONLINE_DATASET_MANIFEST_PATH = "data\dataset-manifest.json"
+$env:AIC_ONLINE_DATA_ROOT = "data"
+$env:AIC_ONLINE_DATASET_EXPECTED_FINGERPRINT = "sha256:<fingerprint-from-offline>"
 python -m online.validate_contract
 python -m online.validate_contract --fail-on-partial
 ```
@@ -58,6 +67,36 @@ real visual-to-frame vertical slice have all been checked.
 Unit tests intentionally do not prove SDK/service/model compatibility. Runtime
 validation must be performed against a disposable or read-only environment;
 production indexes are never used as test fixtures.
+
+## Self-indexed production adapters
+
+The production-side adapters that do not depend on a selected LLM/VLM provider
+are implemented:
+
+- `DatasetManifestGate` accepts only a strict READY `self-indexed-v2` manifest,
+  pins its identity for the process lifetime, and detects a dataset switch.
+- `MilvusSQLiteVisualCorpusAdapter` reads full visual vectors, exact-JOINs them
+  to SQLite metadata and emits deterministic per-video timelines for DANTE.
+- `FilesystemImageResolver` checks that keyframe files remain below the
+  configured data root and exposes only relative references.
+- `ElasticsearchEvidenceHydrator` reads OCR by `frame_id`, ASR by closed-window
+  overlap and summary by `video_id`.
+
+Data-backed TRAKE can be enabled with:
+
+```powershell
+$env:AIC_ONLINE_TRAKE_ENABLED = "true"
+```
+
+VQA data adapters are also wired by `build_online_runtime`, but enabling VQA
+requires the host application to inject an explicit production `VLMPort`. No
+model or external provider is silently selected. A provider may inject a
+`QueryRewriteService`; otherwise VQA safely reuses the original question.
+
+Production mode requires the manifest gate and a pinned
+`AIC_ONLINE_DATASET_EXPECTED_FINGERPRINT`. Conversion of relative keyframe
+references into provider-specific image uploads belongs to the selected VLM
+adapter.
 
 ## Person-C Ranking Policy Status
 

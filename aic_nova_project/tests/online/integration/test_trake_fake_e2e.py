@@ -21,9 +21,9 @@ def test_trake_shared_fixture_runs_end_to_end_deterministically() -> None:
     execution = asyncio.run(scenario())
 
     assert tuple(result.video_id for result in execution.results) == (
-        "V001",
-        "V003",
-        "V002",
+        "L21_V001",
+        "L21_V003",
+        "L21_V002",
     )
     winner = execution.results[0]
     assert winner.video_id == fixture.expected_dante_video_id
@@ -41,4 +41,3 @@ def test_trake_shared_fixture_runs_end_to_end_deterministically() -> None:
     )
     assert execution.diagnostics.invalid_sequence_count == 1
     assert len(encoder.calls) == 1
-

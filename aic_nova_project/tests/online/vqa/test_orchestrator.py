@@ -17,7 +17,7 @@ QUESTION = VQAQuestion(question_id="q1", question="Ai?", answer_type=VQAAnswerTy
 
 
 def frame() -> FusedFrameCandidate:
-    return FusedFrameCandidate(frame_id="V001_00000_001", video_id="V001", shot_id=0, timestamp_sec=1, final_score=1, branch_scores={}, evidence=(), diagnostics=CandidateDiagnostics())
+    return FusedFrameCandidate(frame_id="V001_00000_001", video_id="V001", shot_id=0, timestamp_sec=1, source_frame_idx=30, image_rel_path="keyframes/V001/001.webp", final_score=1, branch_scores={}, evidence=(), diagnostics=CandidateDiagnostics())
 
 
 class Retriever:
@@ -33,7 +33,7 @@ class Metadata:
         return {}
 
     def get_ordered_frames_by_video(self, video_id):
-        return (FrameMetadata(frame_id="V001_00000_001", video_id="V001", shot_id=0, timestamp_sec=1),)
+        return (FrameMetadata(frame_id="V001_00000_001", video_id="V001", shot_id=0, timestamp_sec=1, source_frame_idx=30, image_rel_path="keyframes/V001/001.webp"),)
 
 
 class Images:
@@ -43,7 +43,7 @@ class Images:
     def resolve_images(self, frame_ids):
         if not self.available:
             return {}
-        return {"V001_00000_001": ImageEvidence(evidence_id="image-1", video_id="V001", frame_id="V001_00000_001", shot_id=0, timestamp_sec=1, image_reference="fixture://image/1")}
+        return {"V001_00000_001": ImageEvidence(evidence_id="image-1", video_id="V001", frame_id="V001_00000_001", shot_id=0, timestamp_sec=1, source_frame_idx=30, image_reference="fixture://image/1")}
 
 
 class Hydrator:

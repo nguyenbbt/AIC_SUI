@@ -22,6 +22,8 @@ def candidate(frame_id: str, video_id: str, score: float, timestamp: float) -> F
         video_id=video_id,
         shot_id=0,
         timestamp_sec=timestamp,
+        source_frame_idx=int(timestamp * 30),
+        image_rel_path=f"keyframes/{video_id}/{frame_id}.webp",
         final_score=score,
         branch_scores={},
         evidence=(),
@@ -32,8 +34,8 @@ def candidate(frame_id: str, video_id: str, score: float, timestamp: float) -> F
 class Metadata:
     def __init__(self) -> None:
         self.frames = {
-            "V001": tuple(FrameMetadata(frame_id=f"V001_00000_{index:03d}", video_id="V001", shot_id=0, timestamp_sec=float(index)) for index in range(5)),
-            "V002": tuple(FrameMetadata(frame_id=f"V002_00000_{index:03d}", video_id="V002", shot_id=0, timestamp_sec=float(index)) for index in range(3)),
+            "V001": tuple(FrameMetadata(frame_id=f"V001_00000_{index:03d}", video_id="V001", shot_id=0, timestamp_sec=float(index), source_frame_idx=index * 30, image_rel_path=f"keyframes/V001/{index:03d}.webp") for index in range(5)),
+            "V002": tuple(FrameMetadata(frame_id=f"V002_00000_{index:03d}", video_id="V002", shot_id=0, timestamp_sec=float(index), source_frame_idx=index * 30, image_rel_path=f"keyframes/V002/{index:03d}.webp") for index in range(3)),
         }
 
     def get_frames_by_ids(self, frame_ids):
@@ -57,6 +59,7 @@ class Images:
                 frame_id=frame_id,
                 shot_id=0,
                 timestamp_sec=float(frame_id[-3:]),
+                source_frame_idx=int(frame_id[-3:]) * 30,
                 image_reference=f"fixture://images/{frame_id}",
             )
             for frame_id in frame_ids
@@ -80,7 +83,7 @@ class Hydrator:
     def get_asr_evidence(self, video_id, start_sec, end_sec):
         self.asr_calls.append((video_id, start_sec, end_sec))
         return (
-            ASREvidence(evidence_id=f"asr-{video_id}-{start_sec}", video_id=video_id, interval_id=f"i-{start_sec}", start_time_sec=start_sec, end_time_sec=end_sec, text="ASR"),
+            ASREvidence(evidence_id=f"asr-{video_id}-{start_sec}", video_id=video_id, interval_id="0", start_time_sec=start_sec, end_time_sec=end_sec, text="ASR"),
         )
 
     def get_summary_evidence(self, video_ids):
@@ -192,7 +195,7 @@ def select_with(*, hydrator=None, metadata=None, images=None, budget=SMALL_BUDGE
             ASREvidence(
                 evidence_id="asr-wrong-video",
                 video_id="V002",
-                interval_id="i1",
+                interval_id="1",
                 start_time_sec=0,
                 end_time_sec=1,
                 text="x",
@@ -202,7 +205,7 @@ def select_with(*, hydrator=None, metadata=None, images=None, budget=SMALL_BUDGE
             ASREvidence(
                 evidence_id="asr-outside",
                 video_id="V001",
-                interval_id="i2",
+                interval_id="2",
                 start_time_sec=10,
                 end_time_sec=11,
                 text="x",
@@ -229,6 +232,7 @@ def test_image_metadata_must_match_requested_frame(field: str) -> None:
         frame_id="V001_00000_002",
         shot_id=0,
         timestamp_sec=2,
+        source_frame_idx=60,
         image_reference="fixture://image/1",
     )
     wrong_value = {"video_id": "V002", "shot_id": 1, "timestamp_sec": 3.0}[field]
@@ -246,10 +250,10 @@ def test_image_metadata_must_match_requested_frame(field: str) -> None:
     "frames",
     (
         (object(),),
-        (FrameMetadata(frame_id="V002_00000_001", video_id="V002", shot_id=0, timestamp_sec=1),),
+        (FrameMetadata(frame_id="V002_00000_001", video_id="V002", shot_id=0, timestamp_sec=1, source_frame_idx=30, image_rel_path="keyframes/V002/001.webp"),),
         (
-            FrameMetadata(frame_id="V001_00000_002", video_id="V001", shot_id=0, timestamp_sec=2),
-            FrameMetadata(frame_id="V001_00000_002", video_id="V001", shot_id=0, timestamp_sec=2),
+            FrameMetadata(frame_id="V001_00000_002", video_id="V001", shot_id=0, timestamp_sec=2, source_frame_idx=60, image_rel_path="keyframes/V001/002.webp"),
+            FrameMetadata(frame_id="V001_00000_002", video_id="V001", shot_id=0, timestamp_sec=2, source_frame_idx=60, image_rel_path="keyframes/V001/002.webp"),
         ),
     ),
 )

@@ -15,8 +15,12 @@ from typing import Any, Protocol
 from fastapi import FastAPI
 
 from online.adapters.elasticsearch import ElasticsearchSearchAdapter
+from online.adapters.evidence import ElasticsearchEvidenceHydrator
+from online.adapters.images import FilesystemImageResolver
+from online.adapters.manifest import DatasetManifestGate
 from online.adapters.milvus import MilvusSearchAdapter
 from online.adapters.sqlite import SQLiteReadAdapter
+from online.adapters.visual_corpus import MilvusSQLiteVisualCorpusAdapter
 from online.config import OnlineDataConfig
 from online.domain.enums import RetrievalBranch
 from online.lifecycle import (
@@ -46,7 +50,7 @@ from online.ranking.normalizers import RRFScoreNormalizer
 from online.ranking.object_filter import ObjectProcessingConfig
 from online.ranking.policy import RankingPolicyConfig
 from online.ranking.summary import SummaryPropagationConfig, SummaryScorePropagator
-from online.retrieval.encoders import PECoreTextEncoder, VietnameseTextEncoder
+from online.retrieval.encoders import OpenCLIPTextEncoder, VietnameseTextEncoder
 from online.retrieval.factory import build_retrieval_service
 from online.retrieval.query_builder import BASELINE_KIS_BRANCHES
 from online.retrieval.service import RetrievalInvocationConfig, RetrievalService
@@ -72,6 +76,8 @@ class RuntimeCompositionConfig:
     vietnamese_expected_dimension: int | None = None
     ranking_policy: RankingPolicyConfig | None = None
     deployment_mode: str = "development"
+    trake_enabled: bool = False
+    vqa_enabled: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.deployment_mode, str):
@@ -80,6 +86,8 @@ class RuntimeCompositionConfig:
         if deployment_mode not in {"development", "test", "production"}:
             raise ValueError("deployment_mode must be development, test or production")
         object.__setattr__(self, "deployment_mode", deployment_mode)
+        if not isinstance(self.trake_enabled, bool) or not isinstance(self.vqa_enabled, bool):
+            raise ValueError("advanced mode flags must be booleans")
         if _invalid_positive_int(self.max_workers):
             raise ValueError("max_workers must be a positive integer")
         if _invalid_positive_int(self.ranking_max_workers):
@@ -139,6 +147,8 @@ class RuntimeCompositionConfig:
             vietnamese_expected_dimension=_env_optional_int(prefix, "VIETNAMESE_ENCODER_DIMENSION"),
             ranking_policy=_ranking_policy_from_env(prefix),
             deployment_mode=os.getenv(f"{prefix}DEPLOYMENT_MODE", "development").strip() or "development",
+            trake_enabled=_env_bool(prefix, "TRAKE_ENABLED", False),
+            vqa_enabled=_env_bool(prefix, "VQA_ENABLED", False),
         )
 
     def top_k_for(self, branch: RetrievalBranch) -> int:
@@ -245,9 +255,27 @@ def build_online_runtime(
     vietnamese_encoder: TextEncoderPort | None = None,
     trake_mode: TRAKEModeAdapter | None = None,
     vqa_mode: VQAModeAdapter | None = None,
+    advanced_vlm: VLMPort | None = None,
+    advanced_rewriter: QueryRewriteService | None = None,
 ) -> OnlineRuntime:
     data_config = data_config or OnlineDataConfig.from_env()
     runtime_config = runtime_config or RuntimeCompositionConfig.from_env()
+    if runtime_config.deployment_mode == "production":
+        if not data_config.dataset.manifest_required:
+            raise ValueError("production requires the dataset manifest startup gate")
+        if data_config.dataset.expected_fingerprint is None:
+            raise ValueError("production requires DATASET_EXPECTED_FINGERPRINT")
+    if runtime_config.vqa_enabled and advanced_vlm is None:
+        raise ValueError("VQA_ENABLED requires an explicitly configured VLMPort")
+    if runtime_config.vqa_enabled and vqa_mode is not None:
+        raise ValueError("vqa_mode and vqa_enabled cannot both configure VQA")
+    if runtime_config.trake_enabled and trake_mode is not None:
+        raise ValueError("trake_mode and trake_enabled cannot both configure TRAKE")
+    visual_expected_dimension = runtime_config.visual_expected_dimension
+    vietnamese_expected_dimension = runtime_config.vietnamese_expected_dimension
+    if data_config.dataset.manifest_required:
+        visual_expected_dimension = visual_expected_dimension or 512
+        vietnamese_expected_dimension = vietnamese_expected_dimension or 768
 
     sqlite_adapter = None
     if metadata is None or object_reader is None:
@@ -256,14 +284,20 @@ def build_online_runtime(
         object_reader = object_reader or sqlite_adapter
     milvus = milvus or MilvusSearchAdapter(data_config.milvus)
     elasticsearch = elasticsearch or ElasticsearchSearchAdapter(data_config.elasticsearch)
-    visual_encoder = visual_encoder or PECoreTextEncoder(
-        expected_dimension=runtime_config.visual_expected_dimension,
+    visual_encoder = visual_encoder or OpenCLIPTextEncoder(
+        expected_dimension=visual_expected_dimension,
     )
     vietnamese_encoder = vietnamese_encoder or VietnameseTextEncoder(
-        expected_dimension=runtime_config.vietnamese_expected_dimension,
+        expected_dimension=vietnamese_expected_dimension,
     )
 
     lifecycle = InfrastructureLifecycle()
+    if data_config.dataset.manifest_required:
+        lifecycle.register(
+            "dataset_manifest",
+            DatasetManifestGate(data_config.dataset),
+            required=True,
+        )
     lifecycle.register("milvus", _as_managed(milvus), required=True)
     lifecycle.register("elasticsearch", _as_managed(elasticsearch), required=False)
     if sqlite_adapter is not None:
@@ -325,7 +359,7 @@ def build_online_runtime(
         max_workers=runtime_config.ranking_max_workers,
         thread_name_prefix="aic-ranking",
     )
-    return OnlineRuntime(
+    runtime = OnlineRuntime(
         orchestrator=KISSearchOrchestrator(
             retrieval=retrieval,
             ranking=ranking,
@@ -342,7 +376,7 @@ def build_online_runtime(
                 required=True,
                 check=_encoder_readiness_probe(
                     visual_encoder,
-                    expected_dimension=runtime_config.visual_expected_dimension,
+                    expected_dimension=visual_expected_dimension,
                 ),
             ),
             RuntimeReadinessProbe(
@@ -350,11 +384,118 @@ def build_online_runtime(
                 required=False,
                 check=_encoder_readiness_probe(
                     vietnamese_encoder,
-                    expected_dimension=runtime_config.vietnamese_expected_dimension,
+                    expected_dimension=vietnamese_expected_dimension,
                 ),
             ),
         ),
     )
+    if runtime_config.trake_enabled:
+        if not callable(getattr(milvus, "iter_records", None)):
+            raise TypeError("TRAKE requires a Milvus adapter with full-corpus iteration")
+        attach_trake_mode(
+            runtime,
+            visual_corpus=MilvusSQLiteVisualCorpusAdapter(
+                data_config.milvus,
+                milvus=milvus,  # type: ignore[arg-type]
+                metadata_reader=metadata,
+            ),
+            event_encoder=visual_encoder,
+        )
+    if runtime_config.vqa_enabled:
+        image_resolver = FilesystemImageResolver(
+            data_root=data_config.dataset.data_root,
+            metadata_reader=metadata,
+        )
+        attach_vqa_mode(
+            runtime,
+            metadata_reader=metadata,
+            image_resolver=image_resolver,
+            evidence_hydrator=ElasticsearchEvidenceHydrator(
+                data_config.elasticsearch,
+                backend=elasticsearch,  # type: ignore[arg-type]
+            ),
+            vlm=advanced_vlm,
+            rewriter=advanced_rewriter,
+            readiness=_vqa_data_readiness(image_resolver, advanced_vlm),
+        )
+    return runtime
+
+
+def attach_trake_mode(
+    runtime: OnlineRuntime,
+    *,
+    visual_corpus: VisualCorpusPort,
+    event_encoder: TextEncoderPort,
+    readiness: Callable[[], None] | None = None,
+) -> OnlineRuntime:
+    if runtime.trake_mode is not None:
+        raise ValueError("TRAKE mode is already configured")
+    if not isinstance(visual_corpus, VisualCorpusPort):
+        raise TypeError("visual_corpus must implement VisualCorpusPort")
+    if not isinstance(event_encoder, TextEncoderPort):
+        raise TypeError("event_encoder must implement TextEncoderPort")
+    runtime.trake_mode = TRAKEModeAdapter(
+        TRAKEService(corpus=visual_corpus, encoder=event_encoder)
+    )
+    runtime.readiness_probes = (
+        *runtime.readiness_probes,
+        RuntimeReadinessProbe(
+            name="trake",
+            required=True,
+            check=readiness or _configured_dependency_readiness,
+        ),
+    )
+    return runtime
+
+
+def attach_vqa_mode(
+    runtime: OnlineRuntime,
+    *,
+    metadata_reader: MetadataReaderPort,
+    image_resolver: ImageResolverPort,
+    evidence_hydrator: EvidenceHydrationPort,
+    vlm: VLMPort,
+    rewriter: QueryRewriteService | None = None,
+    readiness: Callable[[], None] | None = None,
+) -> OnlineRuntime:
+    if runtime.vqa_mode is not None:
+        raise ValueError("VQA mode is already configured")
+    for name, value, protocol in (
+        ("metadata_reader", metadata_reader, MetadataReaderPort),
+        ("image_resolver", image_resolver, ImageResolverPort),
+        ("evidence_hydrator", evidence_hydrator, EvidenceHydrationPort),
+        ("vlm", vlm, VLMPort),
+    ):
+        if not isinstance(value, protocol):
+            raise TypeError(f"{name} must implement {protocol.__name__}")
+    active_rewriter = rewriter or QueryRewriteService(NoOpQueryRewriter())
+    if not isinstance(active_rewriter, QueryRewriteService):
+        raise TypeError("rewriter must be a QueryRewriteService")
+    candidate_retriever = VQACandidateRetriever(
+        rewriter=active_rewriter,
+        kis_search=runtime.orchestrator,
+    )
+    selector = EvidenceSelector(
+        metadata_reader=metadata_reader,
+        image_resolver=image_resolver,
+        evidence_hydrator=evidence_hydrator,
+    )
+    runtime.vqa_mode = VQAModeAdapter(
+        VQAOrchestrator(
+            candidate_retriever=candidate_retriever,
+            evidence_selector=selector,
+            vlm=vlm,
+        )
+    )
+    runtime.readiness_probes = (
+        *runtime.readiness_probes,
+        RuntimeReadinessProbe(
+            name="vqa",
+            required=True,
+            check=readiness or _configured_dependency_readiness,
+        ),
+    )
+    return runtime
 
 
 def attach_advanced_modes(
@@ -378,38 +519,20 @@ def attach_advanced_modes(
     if not isinstance(active_rewriter, QueryRewriteService):
         raise TypeError("rewriter must be a QueryRewriteService")
 
-    trake_service = TRAKEService(
-        corpus=dependencies.visual_corpus,
-        encoder=dependencies.event_encoder,
+    attach_trake_mode(
+        runtime,
+        visual_corpus=dependencies.visual_corpus,
+        event_encoder=dependencies.event_encoder,
+        readiness=trake_readiness,
     )
-    candidate_retriever = VQACandidateRetriever(
-        rewriter=active_rewriter,
-        kis_search=runtime.orchestrator,
-    )
-    selector = EvidenceSelector(
+    attach_vqa_mode(
+        runtime,
         metadata_reader=dependencies.metadata_reader,
         image_resolver=dependencies.image_resolver,
         evidence_hydrator=dependencies.evidence_hydrator,
-    )
-    vqa_orchestrator = VQAOrchestrator(
-        candidate_retriever=candidate_retriever,
-        evidence_selector=selector,
         vlm=dependencies.vlm,
-    )
-    runtime.trake_mode = TRAKEModeAdapter(trake_service)
-    runtime.vqa_mode = VQAModeAdapter(vqa_orchestrator)
-    runtime.readiness_probes = (
-        *runtime.readiness_probes,
-        RuntimeReadinessProbe(
-            name="trake",
-            required=True,
-            check=trake_readiness or _configured_dependency_readiness,
-        ),
-        RuntimeReadinessProbe(
-            name="vqa",
-            required=True,
-            check=vqa_readiness or _configured_dependency_readiness,
-        ),
+        rewriter=active_rewriter,
+        readiness=vqa_readiness,
     )
     runtime.advanced_resources = (*runtime.advanced_resources, *dependencies.managed_resources)
     return runtime
@@ -417,6 +540,19 @@ def attach_advanced_modes(
 
 def _configured_dependency_readiness() -> None:
     """The dependency container itself is the default configuration proof."""
+
+
+def _vqa_data_readiness(
+    image_resolver: FilesystemImageResolver,
+    vlm: VLMPort,
+) -> Callable[[], None]:
+    def check() -> None:
+        image_resolver.health_check()
+        vlm_health = getattr(vlm, "health_check", None)
+        if callable(vlm_health):
+            vlm_health()
+
+    return check
 
 
 def _validate_advanced_dependencies(dependencies: AdvancedModeDependencies) -> None:
@@ -509,6 +645,18 @@ def _env_optional_int(prefix: str, name: str) -> int | None:
 
 def _env_float(prefix: str, name: str, default: float) -> float:
     return float(os.getenv(f"{prefix}{name}", str(default)))
+
+
+def _env_bool(prefix: str, name: str, default: bool) -> bool:
+    raw = os.getenv(f"{prefix}{name}")
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{prefix}{name} must be a boolean")
 
 
 def _ranking_policy_from_env(prefix: str) -> RankingPolicyConfig:
@@ -611,6 +759,8 @@ __all__ = [
     "VARIANT_IDS",
     "build_invocation_configs",
     "build_online_runtime",
+    "attach_trake_mode",
+    "attach_vqa_mode",
     "attach_advanced_modes",
     "create_runtime_app_from_env",
 ]

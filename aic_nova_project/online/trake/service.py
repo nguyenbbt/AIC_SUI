@@ -420,6 +420,8 @@ def _hydrate_result(
             shot_id=matrix.frames[position].shot_id,
             local_index=matrix.frames[position].local_index,
             timestamp_sec=matrix.frames[position].timestamp_sec,
+            source_frame_idx=matrix.frames[position].source_frame_idx,
+            image_rel_path=matrix.frames[position].image_rel_path,
             similarity_score=matrix.similarities[event_index][position],
         )
         for event_index, (event, position) in enumerate(

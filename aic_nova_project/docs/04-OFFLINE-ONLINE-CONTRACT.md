@@ -1,5 +1,10 @@
 # 04 — OFFLINE–ONLINE CONTRACT
 
+> **Superseded contract notice (2026-08-05):** The active phase boundary is
+> `docs/22-OFFLINE-TO-ONLINE-DATA-CONTRACT-SELF-INDEXED-V2.md`. In particular,
+> the team self-indexes raw video with OpenCLIP `ViT-B-32::openai`; conflicting
+> PE-Core or older schema statements below no longer govern implementation.
+
 ## 1. Mục đích
 
 File này định nghĩa giao diện ổn định giữa Phase Offline và Phase Online.

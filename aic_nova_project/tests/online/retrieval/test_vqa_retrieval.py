@@ -11,6 +11,7 @@ from online.domain.candidates import (
 )
 from online.domain.diagnostics import BranchDiagnostics, QueryDiagnostics
 from online.domain.enums import BranchStatus, QueryMode, RetrievalBranch
+from online.domain.identifiers import parse_canonical_frame_id
 from online.domain.errors import (
     BranchTimeoutError,
     ContractMismatchError,
@@ -43,11 +44,14 @@ def _candidate(
     *,
     score: float = 0.9,
 ) -> FusedFrameCandidate:
+    identity = parse_canonical_frame_id(frame_id)
     return FusedFrameCandidate(
         frame_id=frame_id,
         video_id="V001",
-        shot_id=0,
+        shot_id=identity.shot_id,
         timestamp_sec=1.5,
+        source_frame_idx=45,
+        image_rel_path=f"keyframes/V001/{frame_id}.webp",
         final_score=score,
         branch_scores={RetrievalBranch.VISUAL_DENSE: score},
         evidence=(

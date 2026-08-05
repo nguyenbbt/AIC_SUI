@@ -38,6 +38,7 @@ from retrieval_api.advanced_models import (
     InternalVQARequest,
     InternalVQAResponse,
 )
+from retrieval_api.submission import serialize_kis_submissions
 
 
 @runtime_checkable
@@ -330,16 +331,10 @@ def _public_details(details: Mapping[str, Any]) -> dict[str, Any]:
 def competition_candidates(
     candidates: Sequence[FusedFrameCandidate],
 ) -> tuple[Mapping[str, Any], ...]:
-    """Small stable adapter for competition-style frame submissions."""
+    """Serialize the immutable submission identity without recomputation."""
 
     return tuple(
-        {
-            "frame_id": candidate.frame_id,
-            "video_id": candidate.video_id,
-            "timestamp_sec": candidate.timestamp_sec,
-            "score": candidate.final_score,
-        }
-        for candidate in candidates
+        row.model_dump(mode="json") for row in serialize_kis_submissions(candidates)
     )
 
 

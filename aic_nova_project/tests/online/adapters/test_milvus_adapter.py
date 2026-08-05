@@ -51,6 +51,18 @@ class FakeBackend:
     def sample_records(self, name, output_fields, limit):
         return ()
 
+    def iter_records(self, name, output_fields, filter_expression, batch_size):
+        if self.raise_error:
+            raise self.raise_error
+        yield (
+            {
+                "frame_id": "V1_00002_050",
+                "video_id": "V1",
+                "shot_id": 2,
+                "embedding": self.vector if hasattr(self, "vector") else (1.0, 0.0),
+            },
+        )
+
 
 class MilvusAdapterTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -61,14 +73,14 @@ class MilvusAdapterTests(unittest.TestCase):
 
     def test_maps_all_collection_levels_without_pk(self) -> None:
         self.backend.hits = {
-            "visual_features": ({"entity": {"frame_id": "F1", "video_id": "V1", "shot_id": 2}, "distance": 0.9, "pk": 99},),
-            "ocr_features": ({"entity": {"frame_id": "F1", "video_id": "V1"}, "distance": 0.8},),
-            "asr_features": ({"entity": {"video_id": "V1", "interval_id": "i1", "start_time_sec": 1, "end_time_sec": 2}, "distance": 0.7},),
+            "visual_features": ({"entity": {"frame_id": "V1_00002_050", "video_id": "V1", "shot_id": 2}, "distance": 0.9, "pk": 99},),
+            "ocr_features": ({"entity": {"frame_id": "V1_00002_050", "video_id": "V1"}, "distance": 0.8},),
+            "asr_features": ({"entity": {"video_id": "V1", "interval_id": "0", "start_time_sec": 1, "end_time_sec": 2}, "distance": 0.7},),
             "summary_features": ({"entity": {"video_id": "V1"}, "distance": 0.6},),
         }
-        self.assertEqual(self.adapter.search_visual(self.vector, 5)[0].frame_id, "F1")
+        self.assertEqual(self.adapter.search_visual(self.vector, 5)[0].frame_id, "V1_00002_050")
         self.assertIsNone(self.adapter.search_ocr(self.vector, 5)[0].shot_id)
-        self.assertEqual(self.adapter.search_asr(self.vector, 5)[0].interval_id, "i1")
+        self.assertEqual(self.adapter.search_asr(self.vector, 5)[0].interval_id, "0")
         self.assertEqual(self.adapter.search_summary(self.vector, 5)[0].video_id, "V1")
         self.assertEqual(self.backend.last_search[4], {"metric_type": "IP", "params": {"ef": 128}})
 
@@ -108,6 +120,26 @@ class MilvusAdapterTests(unittest.TestCase):
         self.backend.sample_records = lambda name, output_fields, limit: "bad"  # type: ignore[method-assign]
         with self.assertRaises(ContractMismatchError):
             self.adapter.sample_records("visual_features", ("embedding",), 1)
+
+    def test_record_iterator_is_sdk_neutral_and_validated(self) -> None:
+        batches = tuple(
+            self.adapter.iter_records(
+                "visual_features",
+                ("frame_id", "embedding"),
+                filter_expression='video_id == "V1"',
+                batch_size=10,
+            )
+        )
+        self.assertEqual(batches[0][0]["frame_id"], "V1_00002_050")
+        with self.assertRaises(InvalidQueryError):
+            tuple(
+                self.adapter.iter_records(
+                    "visual_features",
+                    ("embedding",),
+                    filter_expression=" ",
+                    batch_size=10,
+                )
+            )
 
     def test_close_is_rejected_while_a_read_is_active(self) -> None:
         entered = threading.Event()

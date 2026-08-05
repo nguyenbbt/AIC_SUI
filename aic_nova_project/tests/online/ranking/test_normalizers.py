@@ -11,8 +11,10 @@ def frame(frame_id: str, *, rank: int, raw_score: float) -> FrameCandidate:
     return FrameCandidate(
         frame_id=frame_id,
         video_id="V001",
-        shot_id=0,
+        shot_id=int(frame_id.rsplit("_", 2)[1]),
         timestamp_sec=float(rank),
+        source_frame_idx=rank * 30,
+        image_rel_path=f"keyframes/V001/{frame_id}.webp",
         rank=rank,
         raw_score=raw_score,
         provenance=CandidateProvenance(

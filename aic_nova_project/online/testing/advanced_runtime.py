@@ -43,7 +43,7 @@ from online.ports.encoders import TextEncoderPort
 from online.ports.evidence import EvidenceHydrationPort
 from online.ports.images import ImageResolverPort
 from online.ports.metadata import MetadataReaderPort
-from online.ports.records import FrameMetadata
+from online.ports.records import FrameMetadata, VideoMetadata
 from online.ports.visual_corpus import (
     OrderedVisualFrame,
     VisualCorpusPort,
@@ -1145,6 +1145,50 @@ class AdvancedRuntimeMetadataReader(_RuntimePort):
         ):
             raise ContractMismatchError(
                 "advanced fake metadata reader returned an invalid identity",
+                details={"component": "metadata_reader"},
+            )
+        return MappingProxyType(output)
+
+    def get_videos_by_ids(
+        self,
+        video_ids: Sequence[str],
+    ) -> Mapping[str, VideoMetadata]:
+        validated_ids = _validated_string_sequence(video_ids, field_name="video_ids")
+
+        def collect() -> Mapping[str, VideoMetadata]:
+            try:
+                return dict(self._delegate.get_videos_by_ids(validated_ids))
+            except DataInfrastructureError:
+                raise
+            except (TypeError, ValueError):
+                raise ContractMismatchError(
+                    "advanced fake metadata reader returned an invalid video mapping",
+                    details={"component": "metadata_reader"},
+                ) from None
+
+        raw = self._invoke(
+            method="get_videos_by_ids",
+            operation=collect,
+            empty_factory=lambda: MappingProxyType({}),
+            identifiers=validated_ids,
+            item_count=len(validated_ids),
+        )
+        try:
+            output = dict(raw)
+        except (TypeError, ValueError):
+            raise ContractMismatchError(
+                "advanced fake metadata reader returned an invalid video mapping",
+                details={"component": "metadata_reader"},
+            ) from None
+        if any(
+            not isinstance(video_id, str)
+            or not isinstance(metadata, VideoMetadata)
+            or metadata.video_id != video_id
+            or video_id not in set(validated_ids)
+            for video_id, metadata in output.items()
+        ):
+            raise ContractMismatchError(
+                "advanced fake metadata reader returned an invalid video identity",
                 details={"component": "metadata_reader"},
             )
         return MappingProxyType(output)

@@ -52,6 +52,8 @@ def frame_candidate(
         video_id=video_id,
         shot_id=shot_id,
         timestamp_sec=timestamp_sec,
+        source_frame_idx=int(timestamp_sec * 30),
+        image_rel_path=f"keyframes/{video_id}/{frame_id}.webp",
         rank=rank,
         raw_score=1.0,
         provenance=provenance(branch),
@@ -201,9 +203,9 @@ class ThreadRecordingRanking:
 class KISOrchestrationTests(unittest.TestCase):
     def test_ranking_pipeline_maps_asr_boosts_summary_filters_objects_and_dedups(self) -> None:
         frames = (
-            FrameMetadata(frame_id="V001_00000_015", video_id="V001", shot_id=0, timestamp_sec=1.5),
-            FrameMetadata(frame_id="V001_00000_050", video_id="V001", shot_id=0, timestamp_sec=5.0),
-            FrameMetadata(frame_id="V002_00000_015", video_id="V002", shot_id=0, timestamp_sec=1.5),
+            FrameMetadata(frame_id="V001_00000_015", video_id="V001", shot_id=0, timestamp_sec=1.5, source_frame_idx=45, image_rel_path="keyframes/V001/V001_00000_015.webp"),
+            FrameMetadata(frame_id="V001_00000_050", video_id="V001", shot_id=0, timestamp_sec=5.0, source_frame_idx=150, image_rel_path="keyframes/V001/V001_00000_050.webp"),
+            FrameMetadata(frame_id="V002_00000_015", video_id="V002", shot_id=0, timestamp_sec=1.5, source_frame_idx=45, image_rel_path="keyframes/V002/V002_00000_015.webp"),
         )
         bundle = KISQueryBuilder().build(
             "query",
@@ -275,8 +277,8 @@ class KISOrchestrationTests(unittest.TestCase):
                 ),
                 asr_result(
                     (
-                        asr_interval("hit", start=1.0, end=2.0, rank=1),
-                        asr_interval("miss", start=20.0, end=21.0, rank=2),
+                        asr_interval("0", start=1.0, end=2.0, rank=1),
+                        asr_interval("1", start=20.0, end=21.0, rank=2),
                     )
                 ),
                 video_result(
@@ -302,7 +304,7 @@ class KISOrchestrationTests(unittest.TestCase):
 
     def test_visual_paraphrase_failure_degrades_without_dropping_q0(self) -> None:
         frames = (
-            FrameMetadata(frame_id="V001_00000_015", video_id="V001", shot_id=0, timestamp_sec=1.5),
+            FrameMetadata(frame_id="V001_00000_015", video_id="V001", shot_id=0, timestamp_sec=1.5, source_frame_idx=45, image_rel_path="keyframes/V001/V001_00000_015.jpg"),
         )
         bundle = KISQueryBuilder().build(
             "query",
@@ -345,7 +347,7 @@ class KISOrchestrationTests(unittest.TestCase):
 
     def test_optional_branch_failure_does_not_fail_core_query(self) -> None:
         frames = (
-            FrameMetadata(frame_id="V001_00000_015", video_id="V001", shot_id=0, timestamp_sec=1.5),
+            FrameMetadata(frame_id="V001_00000_015", video_id="V001", shot_id=0, timestamp_sec=1.5, source_frame_idx=45, image_rel_path="keyframes/V001/V001_00000_015.jpg"),
         )
         bundle = KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT, query_id="optional-fail")
         ranking = KISRankingService(metadata=FakeMetadataReaderPort(frames))
@@ -378,9 +380,9 @@ class KISOrchestrationTests(unittest.TestCase):
 
     def test_asr_interval_contribution_is_not_multiplied_in_full_pipeline(self) -> None:
         frames = (
-            FrameMetadata(frame_id="V001_00000_040", video_id="V001", shot_id=0, timestamp_sec=4.0),
-            FrameMetadata(frame_id="V001_00001_060", video_id="V001", shot_id=1, timestamp_sec=6.0),
-            FrameMetadata(frame_id="V001_00002_100", video_id="V001", shot_id=2, timestamp_sec=10.0),
+            FrameMetadata(frame_id="V001_00000_040", video_id="V001", shot_id=0, timestamp_sec=4.0, source_frame_idx=120, image_rel_path="keyframes/V001/V001_00000_040.jpg"),
+            FrameMetadata(frame_id="V001_00001_060", video_id="V001", shot_id=1, timestamp_sec=6.0, source_frame_idx=180, image_rel_path="keyframes/V001/V001_00001_060.jpg"),
+            FrameMetadata(frame_id="V001_00002_100", video_id="V001", shot_id=2, timestamp_sec=10.0, source_frame_idx=300, image_rel_path="keyframes/V001/V001_00002_100.jpg"),
         )
         bundle = KISQueryBuilder().build("query", mode=QueryMode.KIS_TEXT, query_id="asr-score")
         ranking = KISRankingService(
@@ -394,7 +396,7 @@ class KISOrchestrationTests(unittest.TestCase):
             bundle,
             (
                 frame_result(RetrievalBranch.VISUAL_DENSE, ()),
-                asr_result((asr_interval("long", start=0.0, end=10.0, rank=1),)),
+                asr_result((asr_interval("0", start=0.0, end=10.0, rank=1),)),
             ),
         )
 
@@ -413,7 +415,7 @@ class KISOrchestrationTests(unittest.TestCase):
             if evidence.branch is RetrievalBranch.ASR_DENSE
         )
         self.assertTrue(asr_evidence)
-        self.assertTrue(all(evidence.source_candidate_id == "long" for evidence in asr_evidence))
+        self.assertTrue(all(evidence.source_candidate_id == "0" for evidence in asr_evidence))
         self.assertTrue(all(evidence.source_start_time_sec == 0.0 for evidence in asr_evidence))
         self.assertTrue(all(evidence.source_end_time_sec == 10.0 for evidence in asr_evidence))
         self.assertTrue(all(evidence.source_normalized_score is not None for evidence in asr_evidence))
@@ -472,7 +474,7 @@ class KISOrchestrationTests(unittest.TestCase):
             retrieval=retrieval,
             ranking=KISRankingService(
                 metadata=FakeMetadataReaderPort(
-                    (FrameMetadata(frame_id="V001_00000_015", video_id="V001", shot_id=0, timestamp_sec=1.5),)
+                    (FrameMetadata(frame_id="V001_00000_015", video_id="V001", shot_id=0, timestamp_sec=1.5, source_frame_idx=45, image_rel_path="keyframes/V001/V001_00000_015.jpg"),)
                 )
             ),
         )
@@ -540,7 +542,7 @@ class KISOrchestrationTests(unittest.TestCase):
                 retrieval=retrieval,
                 ranking=KISRankingService(
                     metadata=FakeMetadataReaderPort(
-                        (FrameMetadata(frame_id="V001_00000_015", video_id="V001", shot_id=0, timestamp_sec=1.5),)
+                        (FrameMetadata(frame_id="V001_00000_015", video_id="V001", shot_id=0, timestamp_sec=1.5, source_frame_idx=45, image_rel_path="keyframes/V001/V001_00000_015.jpg"),)
                     )
                 ),
             )

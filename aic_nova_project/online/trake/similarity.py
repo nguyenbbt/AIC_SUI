@@ -1,4 +1,4 @@
-"""Validated event encoding and per-video PE-Core cosine similarity."""
+"""Validated event encoding and per-video OpenCLIP cosine similarity."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ DEFAULT_NORM_TOLERANCE = 1e-4
 
 @dataclass(frozen=True, slots=True)
 class EncodedTRAKEEvents:
-    """Ordered event IDs and validated unit vectors in PE-Core space."""
+    """Ordered event IDs and validated unit vectors in OpenCLIP space."""
 
     event_ids: tuple[str, ...]
     vectors: tuple[tuple[float, ...], ...]
@@ -251,7 +251,7 @@ def _validated_unit_vector(
         raise ContractMismatchError(f"{label} must be a numeric sequence") from exc
     if len(raw_values) != expected_dimension:
         raise DimensionMismatchError(
-            f"{label} dimension does not match PE-Core space",
+            f"{label} dimension does not match OpenCLIP space",
             details={"expected": expected_dimension, "actual": len(raw_values)},
         )
     if any(isinstance(value, bool) for value in raw_values):

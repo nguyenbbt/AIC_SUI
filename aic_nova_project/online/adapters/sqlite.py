@@ -11,7 +11,7 @@ from pathlib import Path
 from online.config import SQLiteResourceConfig
 from online.domain.candidates import ObjectDetection
 from online.domain.errors import ContractMismatchError, InvalidQueryError, ResourceUnavailableError
-from online.ports.records import FrameMetadata
+from online.ports.records import FrameMetadata, VideoMetadata
 
 from ._errors import call_backend
 
@@ -116,7 +116,8 @@ class SQLiteReadAdapter:
             for chunk in self._chunks(ids):
                 placeholders = ",".join("?" for _ in chunk)
                 sql = (
-                    f"SELECT frame_id, video_id, shot_id, timestamp FROM {table} "
+                    f"SELECT frame_id, video_id, shot_id, source_frame_idx, "
+                    f"timestamp, image_rel_path FROM {table} "
                     f"WHERE frame_id IN ({placeholders})"
                 )
                 rows = call_backend(
@@ -136,7 +137,8 @@ class SQLiteReadAdapter:
             raise InvalidQueryError("video_id must not be empty")
         table = self._quote_identifier(self.config.metadata_table)
         sql = (
-            f"SELECT frame_id, video_id, shot_id, timestamp FROM {table} "
+            f"SELECT frame_id, video_id, shot_id, source_frame_idx, "
+            f"timestamp, image_rel_path FROM {table} "
             "WHERE video_id = ? ORDER BY timestamp ASC, frame_id ASC"
         )
         with self._lock:
@@ -146,6 +148,30 @@ class SQLiteReadAdapter:
                 lambda: self._conn().execute(sql, (video_id,)).fetchall(),
             )
         return tuple(self._frame_from_row(row) for row in rows)
+
+    def get_videos_by_ids(self, video_ids: Sequence[str]) -> Mapping[str, VideoMetadata]:
+        ids = self._validate_ids(video_ids, "video_ids")
+        if not ids:
+            return {}
+        table = self._quote_identifier(self.config.videos_table)
+        output: dict[str, VideoMetadata] = {}
+        with self._lock:
+            for chunk in self._chunks(ids):
+                placeholders = ",".join("?" for _ in chunk)
+                sql = (
+                    "SELECT video_id, source_video_rel_path, fps, duration_sec, "
+                    f"frame_count, width, height FROM {table} "
+                    f"WHERE video_id IN ({placeholders})"
+                )
+                rows = call_backend(
+                    "get_videos_by_ids",
+                    "sqlite",
+                    lambda sql=sql, chunk=chunk: self._conn().execute(sql, chunk).fetchall(),
+                )
+                for row in rows:
+                    video = self._video_from_row(row)
+                    output[video.video_id] = video
+        return output
 
     def get_objects_by_frame_ids(
         self,
@@ -171,20 +197,26 @@ class SQLiteReadAdapter:
         ):
             raise InvalidQueryError("min_confidence must be within [0, 1]")
 
-        table = self._quote_identifier(self.config.objects_table)
+        objects_table = self._quote_identifier(self.config.objects_table)
+        metadata_table = self._quote_identifier(self.config.metadata_table)
+        videos_table = self._quote_identifier(self.config.videos_table)
         output: dict[str, list[ObjectDetection]] = {frame_id: [] for frame_id in ids}
         with self._lock:
             for chunk in self._chunks(ids):
                 placeholders = ",".join("?" for _ in chunk)
-                predicates = [f"frame_id IN ({placeholders})", "confidence >= ?"]
+                predicates = [f"o.frame_id IN ({placeholders})", "o.confidence >= ?"]
                 parameters: list[object] = [*chunk, min_confidence]
                 if label is not None:
-                    predicates.append("label = ?")
-                    parameters.append(label)
+                    predicates.append("o.label = ?")
+                    parameters.append(label.casefold())
                 sql = (
-                    "SELECT frame_id, label, confidence, x_min, y_min, x_max, y_max, model_source "
-                    f"FROM {table} WHERE {' AND '.join(predicates)} "
-                    "ORDER BY frame_id ASC, confidence DESC, label ASC, id ASC"
+                    "SELECT o.frame_id, o.label, o.confidence, o.x_min, o.y_min, "
+                    "o.x_max, o.y_max, o.model_source, v.width, v.height "
+                    f"FROM {objects_table} AS o "
+                    f"JOIN {metadata_table} AS m ON m.frame_id = o.frame_id "
+                    f"JOIN {videos_table} AS v ON v.video_id = m.video_id "
+                    f"WHERE {' AND '.join(predicates)} "
+                    "ORDER BY o.frame_id ASC, o.confidence DESC, o.label ASC, o.id ASC"
                 )
                 rows = call_backend(
                     "get_objects_by_frame_ids",
@@ -204,12 +236,12 @@ class SQLiteReadAdapter:
                             raise ValueError("invalid object identifier/label")
                         output[frame_id].append(
                             ObjectDetection(
-                                label=label_value,
+                                label=label_value.casefold(),
                                 confidence=self._row_float(row, "confidence"),
-                                x_min=self._row_float(row, "x_min"),
-                                y_min=self._row_float(row, "y_min"),
-                                x_max=self._row_float(row, "x_max"),
-                                y_max=self._row_float(row, "y_max"),
+                                x_min=self._normalized_coordinate(row, "x_min", "width"),
+                                y_min=self._normalized_coordinate(row, "y_min", "height"),
+                                x_max=self._normalized_coordinate(row, "x_max", "width"),
+                                y_max=self._normalized_coordinate(row, "y_max", "height"),
                                 model_source=(
                                     None
                                     if row["model_source"] is None
@@ -236,17 +268,50 @@ class SQLiteReadAdapter:
                 or not isinstance(video_id, str)
                 or not video_id.strip()
                 or row["shot_id"] is None
+                or row["source_frame_idx"] is None
                 or row["timestamp"] is None
+                or row["image_rel_path"] is None
             ):
                 raise ValueError("missing metadata field")
             return FrameMetadata(
                 frame_id=frame_id,
                 video_id=video_id,
                 shot_id=SQLiteReadAdapter._row_int(row, "shot_id"),
+                source_frame_idx=SQLiteReadAdapter._row_int(row, "source_frame_idx"),
                 timestamp_sec=SQLiteReadAdapter._row_float(row, "timestamp"),
+                image_rel_path=SQLiteReadAdapter._row_text(row, "image_rel_path"),
             )
         except Exception as exc:
             raise ContractMismatchError("Invalid metadata row returned by SQLite") from exc
+
+    @staticmethod
+    def _video_from_row(row: sqlite3.Row) -> VideoMetadata:
+        try:
+            return VideoMetadata(
+                video_id=SQLiteReadAdapter._row_text(row, "video_id"),
+                source_video_rel_path=SQLiteReadAdapter._row_text(
+                    row, "source_video_rel_path"
+                ),
+                fps=SQLiteReadAdapter._row_float(row, "fps"),
+                duration_sec=SQLiteReadAdapter._row_float(row, "duration_sec"),
+                frame_count=SQLiteReadAdapter._row_int(row, "frame_count"),
+                width=SQLiteReadAdapter._row_int(row, "width"),
+                height=SQLiteReadAdapter._row_int(row, "height"),
+            )
+        except Exception as exc:
+            raise ContractMismatchError("Invalid video row returned by SQLite") from exc
+
+    @staticmethod
+    def _normalized_coordinate(
+        row: sqlite3.Row,
+        coordinate_field: str,
+        size_field: str,
+    ) -> float:
+        coordinate = SQLiteReadAdapter._row_float(row, coordinate_field)
+        size = SQLiteReadAdapter._row_int(row, size_field)
+        if size <= 0 or coordinate < 0.0 or coordinate > size:
+            raise ValueError("object bounding box is outside video dimensions")
+        return coordinate / size
 
     @staticmethod
     def _row_text(row: sqlite3.Row, field: str) -> str:
@@ -277,7 +342,11 @@ class SQLiteReadAdapter:
         return value
 
     def table_columns(self, table_name: str) -> Mapping[str, str]:
-        if table_name not in {self.config.metadata_table, self.config.objects_table}:
+        if table_name not in {
+            self.config.videos_table,
+            self.config.metadata_table,
+            self.config.objects_table,
+        }:
             raise InvalidQueryError("table is not managed by the Online adapter")
         table = self._quote_identifier(table_name)
         with self._lock:
@@ -294,7 +363,11 @@ class SQLiteReadAdapter:
         fields: Sequence[str],
         limit: int,
     ) -> Sequence[Mapping[str, object]]:
-        if table_name not in {self.config.metadata_table, self.config.objects_table}:
+        if table_name not in {
+            self.config.videos_table,
+            self.config.metadata_table,
+            self.config.objects_table,
+        }:
             raise InvalidQueryError("table is not managed by the Online adapter")
         if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
             raise InvalidQueryError("limit must be >= 1")

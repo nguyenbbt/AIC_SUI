@@ -1,5 +1,9 @@
 # 05 — ONLINE PIPELINE TARGET
 
+> **Migration notice (2026-08-05):** Read this flow together with
+> `docs/22-OFFLINE-TO-ONLINE-DATA-CONTRACT-SELF-INDEXED-V2.md`. Document 22 wins
+> for identifiers, fields, model identity, image paths and submission identity.
+
 ## 1. Mục tiêu
 
 Phase Online nhận query và trả kết quả với độ trễ thấp mà không chạy lại Offline preprocessing.

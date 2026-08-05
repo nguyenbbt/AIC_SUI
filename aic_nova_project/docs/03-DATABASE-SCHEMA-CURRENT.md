@@ -1,5 +1,10 @@
 # 03 — DATABASE SCHEMA CURRENT
 
+> **Superseded contract notice (2026-08-05):** For active Offline-to-Online
+> fields, model identity, frame identity and submission semantics, use
+> `docs/22-OFFLINE-TO-ONLINE-DATA-CONTRACT-SELF-INDEXED-V2.md`. Conflicting
+> content below is historical context only.
+
 ## 1. Tổng quan
 
 Hệ thống dùng Polyglot Persistence:

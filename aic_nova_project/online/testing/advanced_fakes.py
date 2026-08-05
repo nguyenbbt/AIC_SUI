@@ -542,14 +542,16 @@ def _visual_frame(
     local_index: int,
     vector: tuple[float, ...],
 ) -> OrderedVisualFrame:
-    keyframe_no = local_index + 1
     return OrderedVisualFrame(
-        frame_id=f"{video_id}_{keyframe_no:03d}",
+        frame_id=f"{video_id}_{local_index:05d}_050",
         video_id=video_id,
-        keyframe_no=keyframe_no,
+        shot_id=local_index,
         local_index=local_index,
         timestamp_sec=float(local_index * 2),
         source_frame_idx=local_index * 60,
+        image_rel_path=(
+            f"keyframes/{video_id}/shot_{local_index:05d}_pos_050.webp"
+        ),
         vector=vector,
     )
 
@@ -558,14 +560,10 @@ def _metadata(frame: OrderedVisualFrame) -> FrameMetadata:
     return FrameMetadata(
         frame_id=frame.frame_id,
         video_id=frame.video_id,
-        keyframe_no=frame.keyframe_no,
-        local_index=frame.local_index,
+        shot_id=frame.shot_id,
         timestamp_sec=frame.timestamp_sec,
-        fps=30.0,
         source_frame_idx=frame.source_frame_idx,
-        image_rel_path=(
-            f"keyframes/{frame.video_id}/{frame.keyframe_no:03d}.jpg"
-        ),
+        image_rel_path=frame.image_rel_path,
     )
 
 
@@ -573,10 +571,10 @@ def _fused(frame: OrderedVisualFrame, score: float) -> FusedFrameCandidate:
     return FusedFrameCandidate(
         frame_id=frame.frame_id,
         video_id=frame.video_id,
-        keyframe_no=frame.keyframe_no,
-        local_index=frame.local_index,
+        shot_id=frame.shot_id,
         timestamp_sec=frame.timestamp_sec,
         source_frame_idx=frame.source_frame_idx,
+        image_rel_path=frame.image_rel_path,
         final_score=score,
         branch_scores={RetrievalBranch.VISUAL_DENSE: score},
         evidence=(
@@ -683,7 +681,7 @@ def build_advanced_modes_fixture() -> AdvancedModesFixture:
         ASREvidence(
             evidence_id="asr:L21_V001:interval-1",
             video_id="L21_V001",
-            interval_id="interval-1",
+            interval_id="0",
             start_time_sec=6.0,
             end_time_sec=10.0,
             text="Anh ấy nâng chiếc cốc lên.",
@@ -691,7 +689,7 @@ def build_advanced_modes_fixture() -> AdvancedModesFixture:
         ASREvidence(
             evidence_id="asr:L21_V002:interval-1",
             video_id="L21_V002",
-            interval_id="interval-1",
+            interval_id="0",
             start_time_sec=3.0,
             end_time_sec=6.0,
             text="Một cảnh khác trong phòng.",
@@ -715,7 +713,7 @@ def build_advanced_modes_fixture() -> AdvancedModesFixture:
             evidence_id=f"image:{frame.frame_id}",
             video_id=frame.video_id,
             frame_id=frame.frame_id,
-            keyframe_no=frame.keyframe_no,
+            shot_id=frame.shot_id,
             timestamp_sec=frame.timestamp_sec,
             source_frame_idx=frame.source_frame_idx,
             image_reference=f"fixture://advanced-images/{frame.frame_id}",

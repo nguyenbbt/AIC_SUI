@@ -7,8 +7,8 @@ from online.adapters.contract_validator import (
     OfflineContractValidator,
     ValidationStatus,
 )
-from online.config import OnlineDataConfig
-from online.ports.records import FrameMetadata
+from online.config import DatasetResourceConfig, OnlineDataConfig
+from online.ports.records import FrameMetadata, VideoMetadata
 
 
 class FakeMilvusInspector:
@@ -16,7 +16,7 @@ class FakeMilvusInspector:
         self.records = {
             "visual_features": [{"frame_id": "V1_00000_050", "video_id": "V1", "shot_id": 0, "embedding": [1.0, 0.0]}],
             "ocr_features": [{"frame_id": "V1_00000_050", "video_id": "V1", "embedding": [1.0, 0.0]}],
-            "asr_features": [{"video_id": "V1", "interval_id": "i1", "start_time_sec": 0.0, "end_time_sec": 2.0, "embedding": [1.0, 0.0]}],
+            "asr_features": [{"video_id": "V1", "interval_id": "0", "start_time_sec": 0.0, "end_time_sec": 2.0, "embedding": [1.0, 0.0]}],
             "summary_features": [{"video_id": "V1", "embedding": [1.0, 0.0]}],
         }
         self.fields = {
@@ -42,14 +42,14 @@ class FakeMilvusInspector:
 class FakeElasticsearchInspector:
     TYPES = {
         "ocr_texts": {"frame_id": "keyword", "video_id": "keyword", "shot_id": "keyword", "ocr_text_concat": "text"},
-        "asr_transcripts": {"video_id": "keyword", "interval_id": "keyword", "start_time": "float", "end_time": "float", "cleaned_text": "text"},
+        "asr_transcripts": {"video_id": "keyword", "interval_id": "keyword", "start_time_sec": "float", "end_time_sec": "float", "cleaned_text": "text"},
         "video_summaries": {"video_id": "keyword", "summary": "text"},
     }
 
     def __init__(self) -> None:
         self.documents = {
             "ocr_texts": [{"frame_id": "V1_00000_050", "video_id": "V1", "shot_id": "0", "ocr_text_concat": "text"}],
-            "asr_transcripts": [{"video_id": "V1", "interval_id": "i1", "start_time": 0.0, "end_time": 2.0, "cleaned_text": "speech"}],
+            "asr_transcripts": [{"video_id": "V1", "interval_id": "0", "start_time_sec": 0.0, "end_time_sec": 2.0, "cleaned_text": "speech"}],
             "video_summaries": [{"video_id": "V1", "summary": "summary"}],
         }
 
@@ -86,16 +86,21 @@ class FakeElasticsearchInspector:
 
 class FakeSQLiteInspector:
     COLUMNS = {
-        "metadata": {"frame_id": "TEXT", "video_id": "TEXT", "shot_id": "INTEGER", "timestamp": "REAL"},
+        "videos": {"video_id": "TEXT", "source_video_rel_path": "TEXT", "fps": "REAL", "duration_sec": "REAL", "frame_count": "INTEGER", "width": "INTEGER", "height": "INTEGER"},
+        "metadata": {"frame_id": "TEXT", "video_id": "TEXT", "shot_id": "INTEGER", "source_frame_idx": "INTEGER", "timestamp": "REAL", "image_rel_path": "TEXT"},
         "objects": {"id": "INTEGER", "frame_id": "TEXT", "label": "TEXT", "confidence": "REAL", "x_min": "REAL", "y_min": "REAL", "x_max": "REAL", "y_max": "REAL", "model_source": "TEXT"},
     }
 
     def __init__(self) -> None:
         self.metadata = {
-            "V1_00000_050": FrameMetadata(frame_id="V1_00000_050", video_id="V1", shot_id=0, timestamp_sec=1.0)
+            "V1_00000_050": FrameMetadata(frame_id="V1_00000_050", video_id="V1", shot_id=0, source_frame_idx=30, timestamp_sec=1.0, image_rel_path="keyframes/V1/V1_00000_050.jpg")
+        }
+        self.videos = {
+            "V1": VideoMetadata(video_id="V1", source_video_rel_path="videos/V1.mp4", fps=30.0, duration_sec=2.0, frame_count=60, width=1920, height=1080)
         }
         self.rows = {
-            "metadata": [{"frame_id": "V1_00000_050", "video_id": "V1", "shot_id": 0, "timestamp": 1.0}],
+            "videos": [{"video_id": "V1", "source_video_rel_path": "videos/V1.mp4", "fps": 30.0, "duration_sec": 2.0, "frame_count": 60, "width": 1920, "height": 1080}],
+            "metadata": [{"frame_id": "V1_00000_050", "video_id": "V1", "shot_id": 0, "source_frame_idx": 30, "timestamp": 1.0, "image_rel_path": "keyframes/V1/V1_00000_050.jpg"}],
             "objects": [{"id": 1, "frame_id": "V1_00000_050", "label": "person", "confidence": 0.9, "x_min": 0.0, "y_min": 0.0, "x_max": 1.0, "y_max": 1.0, "model_source": "yolo"}],
         }
 
@@ -108,6 +113,9 @@ class FakeSQLiteInspector:
     def get_frames_by_ids(self, frame_ids):
         return {frame_id: self.metadata[frame_id] for frame_id in frame_ids if frame_id in self.metadata}
 
+    def get_videos_by_ids(self, video_ids):
+        return {video_id: self.videos[video_id] for video_id in video_ids if video_id in self.videos}
+
 
 class ContractValidatorTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -117,7 +125,7 @@ class ContractValidatorTests(unittest.TestCase):
 
     def validator(self):
         return OfflineContractValidator(
-            OnlineDataConfig(),
+            OnlineDataConfig(dataset=DatasetResourceConfig(manifest_required=False)),
             milvus=self.milvus,
             elasticsearch=self.es,
             sqlite=self.sqlite,
@@ -145,15 +153,36 @@ class ContractValidatorTests(unittest.TestCase):
             any(check.name == "canonical_id.milvus.visual" for check in report.failed_checks)
         )
 
+    def test_fail_when_metadata_source_frame_exceeds_video_bounds(self) -> None:
+        self.sqlite.metadata["V1_00000_050"] = self.sqlite.metadata[
+            "V1_00000_050"
+        ].model_copy(update={"source_frame_idx": 60})
+        report = self.validator().validate()
+        self.assertEqual(report.status, ValidationStatus.FAIL)
+        self.assertTrue(
+            any(check.name == "join.metadata_to_videos" for check in report.failed_checks)
+        )
+
+    def test_object_bbox_outside_video_is_reported_as_optional_warning(self) -> None:
+        self.sqlite.rows["objects"][0]["x_max"] = 2000.0
+        report = self.validator().validate()
+        self.assertEqual(report.status, ValidationStatus.PARTIAL)
+        check = next(
+            check for check in report.checks if check.name == "join.objects_to_metadata"
+        )
+        self.assertEqual(check.status, CheckStatus.WARNING)
+
     def test_same_malformed_id_across_resources_still_fails(self) -> None:
         malformed = "shot_00000_pos_050"
         self.milvus.records["visual_features"][0]["frame_id"] = malformed
         self.sqlite.metadata = {
-            malformed: FrameMetadata(
+            malformed: FrameMetadata.model_construct(
                 frame_id=malformed,
                 video_id="V1",
                 shot_id=0,
                 timestamp_sec=1.0,
+                source_frame_idx=30,
+                image_rel_path="keyframes/V1/malformed.jpg",
             )
         }
         self.sqlite.rows["metadata"][0]["frame_id"] = malformed
@@ -165,7 +194,7 @@ class ContractValidatorTests(unittest.TestCase):
 
     def test_missing_encoder_smoke_is_explicit_not_run_and_not_pass(self) -> None:
         validator = OfflineContractValidator(
-            OnlineDataConfig(),
+            OnlineDataConfig(dataset=DatasetResourceConfig(manifest_required=False)),
             milvus=self.milvus,
             elasticsearch=self.es,
             sqlite=self.sqlite,

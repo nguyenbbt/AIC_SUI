@@ -79,11 +79,11 @@ class AdvancedFixtureContractTests(unittest.TestCase):
         self.assertEqual(
             selected,
             (
-                "image:L21_V001_005",
-                "image:L21_V002_003",
-                "image:L21_V001_004",
-                "ocr:L21_V001_005",
-                "ocr:L21_V002_003",
+                "image:L21_V001_00004_050",
+                "image:L21_V002_00002_050",
+                "image:L21_V001_00003_050",
+                "ocr:L21_V001_00004_050",
+                "ocr:L21_V002_00002_050",
                 "asr:L21_V001:interval-1",
                 "asr:L21_V002:interval-1",
                 "summary:L21_V001",
@@ -93,8 +93,8 @@ class AdvancedFixtureContractTests(unittest.TestCase):
         self.assertEqual(
             answer,
             (
-                "image:L21_V001_005",
-                "ocr:L21_V001_005",
+                "image:L21_V001_00004_050",
+                "ocr:L21_V001_00004_050",
                 "asr:L21_V001:interval-1",
                 "summary:L21_V001",
             ),
@@ -134,7 +134,7 @@ class AdvancedFixtureContractTests(unittest.TestCase):
                 validate_canonical_frame_id(
                     frame.frame_id,
                     video_id=video_id,
-                    keyframe_no=frame.keyframe_no,
+                    shot_id=frame.shot_id,
                 )
                 dimensions.add(len(frame.vector))
                 self.assertTrue(
@@ -211,7 +211,7 @@ class AdvancedFixtureContractTests(unittest.TestCase):
     def test_evidence_hydration_never_returns_records_outside_request(self) -> None:
         hydrator = self.fixture.evidence_hydrator()
         requested_frame = self.fixture.ocr_evidence[0].frame_id
-        ocr = hydrator.get_ocr_evidence((requested_frame, "L21_V001_006"))
+        ocr = hydrator.get_ocr_evidence((requested_frame, "L21_V001_00005_050"))
         self.assertEqual(tuple(item.frame_id for item in ocr), (requested_frame,))
 
         asr = hydrator.get_asr_evidence("L21_V001", 7.0, 8.0)

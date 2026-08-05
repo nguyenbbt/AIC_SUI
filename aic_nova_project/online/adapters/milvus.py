@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Protocol
 
 from online.config import MilvusResourceConfig
@@ -37,6 +37,14 @@ class MilvusBackend(Protocol):
     def sample_records(
         self, name: str, output_fields: Sequence[str], limit: int
     ) -> Sequence[Mapping[str, Any]]: ...
+
+    def iter_records(
+        self,
+        name: str,
+        output_fields: Sequence[str],
+        filter_expression: str,
+        batch_size: int,
+    ) -> Iterable[Sequence[Mapping[str, Any]]]: ...
 
 
 class _PymilvusBackend:
@@ -126,6 +134,31 @@ class _PymilvusBackend:
         collection = self._collection(name)
         collection.load()
         return tuple(collection.query(expr="pk >= 0", output_fields=list(output_fields), limit=limit))
+
+    def iter_records(
+        self,
+        name: str,
+        output_fields: Sequence[str],
+        filter_expression: str,
+        batch_size: int,
+    ) -> Iterable[Sequence[Mapping[str, Any]]]:
+        collection = self._collection(name)
+        collection.load()
+        iterator = collection.query_iterator(
+            batch_size=batch_size,
+            expr=filter_expression,
+            output_fields=list(output_fields),
+        )
+        try:
+            while True:
+                batch = iterator.next()
+                if not batch:
+                    break
+                yield tuple(batch)
+        finally:
+            close = getattr(iterator, "close", None)
+            if callable(close):
+                close()
 
 
 class MilvusSearchAdapter:
@@ -479,6 +512,71 @@ class MilvusSearchAdapter:
         if any(not isinstance(record, Mapping) for record in records):
             raise ContractMismatchError("Milvus sample record is invalid")
         return tuple(records)
+
+    def iter_records(
+        self,
+        name: str,
+        output_fields: Sequence[str],
+        *,
+        filter_expression: str,
+        batch_size: int,
+    ) -> Iterable[tuple[Mapping[str, Any], ...]]:
+        """Stream SDK-neutral scalar/vector records through a bounded iterator."""
+
+        if not isinstance(name, str) or not name.strip() or name != name.strip():
+            raise InvalidQueryError("collection name must be a canonical string")
+        if (
+            isinstance(output_fields, (str, bytes))
+            or not output_fields
+            or any(
+                not isinstance(field, str)
+                or not field.strip()
+                or field != field.strip()
+                for field in output_fields
+            )
+        ):
+            raise InvalidQueryError("output_fields must contain non-empty field names")
+        if (
+            not isinstance(filter_expression, str)
+            or not filter_expression.strip()
+            or filter_expression != filter_expression.strip()
+        ):
+            raise InvalidQueryError("filter_expression must be a non-empty canonical string")
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+            raise InvalidQueryError("batch_size must be a positive integer")
+
+        def generate() -> Iterable[tuple[Mapping[str, Any], ...]]:
+            with self._read_guard.read():
+                self._ensure_connected()
+                raw_batches = call_backend(
+                    "iter_records",
+                    name,
+                    lambda: self._backend.iter_records(
+                        name,
+                        output_fields,
+                        filter_expression,
+                        batch_size,
+                    ),
+                )
+                try:
+                    for raw_batch in raw_batches:
+                        if (
+                            not isinstance(raw_batch, Sequence)
+                            or isinstance(raw_batch, (str, bytes))
+                            or not raw_batch
+                            or any(not isinstance(record, Mapping) for record in raw_batch)
+                        ):
+                            raise ContractMismatchError("Milvus record iterator returned an invalid batch")
+                        yield tuple(raw_batch)
+                except (ContractMismatchError, ResourceUnavailableError):
+                    raise
+                except Exception as exc:
+                    raise ResourceUnavailableError(
+                        "Milvus record iterator failed",
+                        details={"resource": name},
+                    ) from exc
+
+        return generate()
 
 
 class _GetterMapping(Mapping[str, Any]):

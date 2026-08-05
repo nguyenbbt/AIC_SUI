@@ -11,7 +11,7 @@ from pydantic import AfterValidator, Field, field_validator, model_validator
 
 from .base import FiniteFloat, NonEmptyStr, StrictFrozenModel, StrictIntValue
 from .errors import ContractMismatchError
-from .identifiers import validate_canonical_frame_id
+from .identifiers import validate_canonical_frame_id, validate_interval_id
 
 
 class VQAAnswerType(str, Enum):
@@ -122,7 +122,7 @@ class EvidenceReference(StrictFrozenModel):
 class ImageEvidence(EvidenceReference):
     evidence_type: Literal[EvidenceType.IMAGE] = EvidenceType.IMAGE
     frame_id: NonEmptyStr
-    keyframe_no: StrictIntValue = Field(ge=1)
+    shot_id: StrictIntValue = Field(ge=0)
     timestamp_sec: Annotated[FiniteFloat, Field(ge=0.0)]
     source_frame_idx: StrictIntValue = Field(ge=0)
     image_reference: ImageReference
@@ -132,7 +132,7 @@ class ImageEvidence(EvidenceReference):
         _validate_frame_identity(
             self.frame_id,
             self.video_id,
-            keyframe_no=self.keyframe_no,
+            shot_id=self.shot_id,
         )
         return self
 
@@ -154,6 +154,11 @@ class ASREvidence(EvidenceReference):
     start_time_sec: Annotated[FiniteFloat, Field(ge=0.0)]
     end_time_sec: Annotated[FiniteFloat, Field(ge=0.0)]
     text: NonEmptyStr
+
+    @field_validator("interval_id")
+    @classmethod
+    def validate_canonical_interval_id(cls, value: str) -> str:
+        return validate_interval_id(value)
 
     @model_validator(mode="after")
     def validate_interval(self) -> "ASREvidence":
@@ -247,13 +252,13 @@ class VQAResult(StrictFrozenModel):
 def _validate_frame_identity(
     frame_id: str,
     video_id: str,
-    keyframe_no: int | None = None,
+    shot_id: int | None = None,
 ) -> None:
     try:
         validate_canonical_frame_id(
             frame_id,
             video_id=video_id,
-            keyframe_no=keyframe_no,
+            shot_id=shot_id,
         )
     except ContractMismatchError as exc:
         raise ValueError(exc.message) from exc

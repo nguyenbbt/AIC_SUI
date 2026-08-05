@@ -21,6 +21,8 @@ def frame(frame_id: str, video_id: str, score: float, timestamp: float = 10.0) -
         video_id=video_id,
         shot_id=0,
         timestamp_sec=timestamp,
+        source_frame_idx=max(0, int(timestamp * 30)),
+        image_rel_path=f"keyframes/{video_id}/{frame_id}.webp",
         final_score=score,
         branch_scores={RetrievalBranch.VISUAL_DENSE: min(score, 1.0)},
         evidence=(),
@@ -29,7 +31,7 @@ def frame(frame_id: str, video_id: str, score: float, timestamp: float = 10.0) -
 
 
 def metadata(frame_id: str, video_id: str, timestamp: float) -> FrameMetadata:
-    return FrameMetadata(frame_id=frame_id, video_id=video_id, shot_id=0, timestamp_sec=timestamp)
+    return FrameMetadata(frame_id=frame_id, video_id=video_id, shot_id=0, timestamp_sec=timestamp, source_frame_idx=max(0, int(timestamp * 30)), image_rel_path=f"keyframes/{video_id}/{frame_id}.webp")
 
 
 def chunk(stable_id: str, kind: str, text: str, *, video: str = "V1", rank: int = 0, order: int = 0, start: float | None = None, end: float | None = None) -> _TextEvidenceChunk:
@@ -95,10 +97,10 @@ def test_text_chunk_rejects_invalid_asr_times(start: object, end: object) -> Non
 
 
 def test_primary_selection_guarantees_diversity_then_fills_caps_and_deduplicates() -> None:
-    candidates = [frame(f"V1_{i}", "V1", 20 - i) for i in range(5)]
-    candidates += [frame(f"V2_{i}", "V2", 10 - i) for i in range(4)]
-    candidates += [frame(f"V3_{i}", "V3", 5 - i) for i in range(3)]
-    candidates += [frame("V4_0", "V4", 4), frame("V1_0", "V1", 1)]
+    candidates = [frame(f"V1_00000_{i:03d}", "V1", 20 - i) for i in range(5)]
+    candidates += [frame(f"V2_00000_{i:03d}", "V2", 10 - i) for i in range(4)]
+    candidates += [frame(f"V3_00000_{i:03d}", "V3", 5 - i) for i in range(3)]
+    candidates += [frame("V4_00000_000", "V4", 4), frame("V1_00000_000", "V1", 1)]
 
     selected = select_primary_frames(tuple(reversed(candidates)))
     assert [item.video_id for item in selected[:3]] == ["V1", "V2", "V3"]
@@ -109,25 +111,25 @@ def test_primary_selection_guarantees_diversity_then_fills_caps_and_deduplicates
 
 
 def test_primary_equal_score_uses_frame_id_and_output_is_deterministic() -> None:
-    values = (frame("V2_B", "V2", 1), frame("V1_A", "V1", 1), frame("V1_C", "V1", 1))
-    expected = ("V1_A", "V2_B", "V1_C")
+    values = (frame("V2_00000_002", "V2", 1), frame("V1_00000_001", "V1", 1), frame("V1_00000_003", "V1", 1))
+    expected = ("V1_00000_001", "V2_00000_002", "V1_00000_003")
     assert tuple(item.frame_id for item in select_primary_frames(values)) == expected
     assert tuple(item.frame_id for item in select_primary_frames(tuple(reversed(values)))) == expected
 
 
 def test_neighbors_handle_boundaries_dedup_and_total_image_cap() -> None:
-    sequence = tuple(metadata(f"V1_{i}", "V1", float(i)) for i in range(14))
-    primaries = tuple(frame(f"V1_{i}", "V1", 20 - i, float(i)) for i in range(8))
+    sequence = tuple(metadata(f"V1_00000_{i:03d}", "V1", float(i)) for i in range(14))
+    primaries = tuple(frame(f"V1_00000_{i:03d}", "V1", 20 - i, float(i)) for i in range(8))
     neighbors = select_neighbor_frames(primaries, {"V1": sequence})
-    assert tuple(item.frame_id for item in neighbors) == ("V1_8",)
+    assert tuple(item.frame_id for item in neighbors) == ("V1_00000_008",)
     assert len(primaries) + len(neighbors) <= 12
 
-    boundary = select_neighbor_frames((frame("V1_0", "V1", 1, 0),), {"V1": sequence})
-    assert tuple(item.frame_id for item in boundary) == ("V1_1",)
+    boundary = select_neighbor_frames((frame("V1_00000_000", "V1", 1, 0),), {"V1": sequence})
+    assert tuple(item.frame_id for item in boundary) == ("V1_00000_001",)
 
 
 def test_asr_overlap_is_inclusive_at_plus_minus_five_seconds() -> None:
-    primary = (frame("V1_F", "V1", 1, 10),)
+    primary = (frame("V1_00000_050", "V1", 1, 10),)
     chunks = (
         chunk("before", "asr", "x", start=0, end=4.99),
         chunk("left", "asr", "x", start=0, end=5),

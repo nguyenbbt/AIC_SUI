@@ -17,8 +17,11 @@ from online.domain.errors import (
 )
 
 
-PE_CORE_MODEL_ID = "hf-hub:timm/PE-Core-bigG-14-448"
+OPENCLIP_MODEL_ID = "ViT-B-32::openai"
+# Compatibility alias for existing imports. The runtime is OpenCLIP, not PE-Core.
+PE_CORE_MODEL_ID = OPENCLIP_MODEL_ID
 VIETNAMESE_MODEL_NAME = "dangvantuan/vietnamese-embedding"
+VIETNAMESE_MODEL_REVISION = "4ab46e46ba5902328ba0742e489e75f787932f2b"
 
 
 class _TextEmbeddingBackend(Protocol):
@@ -194,8 +197,8 @@ class _ValidatedTextEncoder:
         return tuple(output)
 
 
-class PECoreTextEncoder(_ValidatedTextEncoder):
-    """Text tower paired with Offline PE-Core-bigG-14-448 image vectors."""
+class OpenCLIPTextEncoder(_ValidatedTextEncoder):
+    """Text tower paired with Offline OpenCLIP ViT-B-32/openai vectors."""
 
     def __init__(
         self,
@@ -217,7 +220,7 @@ class PECoreTextEncoder(_ValidatedTextEncoder):
         self.device = device.strip()
         self.precision = precision
         factory = backend_factory or (
-            lambda: _PECoreBackend(
+            lambda: _OpenCLIPBackend(
                 model_id=self.model_id,
                 device=self.device,
                 precision=self.precision,
@@ -241,6 +244,7 @@ class VietnameseTextEncoder(_ValidatedTextEncoder):
         max_length: int = 256,
         batch_size: int = 128,
         cache_dir: str | None = None,
+        revision: str = VIETNAMESE_MODEL_REVISION,
         expected_dimension: int | None = None,
         backend_factory: Callable[[], _TextEmbeddingBackend] | None = None,
     ) -> None:
@@ -258,6 +262,9 @@ class VietnameseTextEncoder(_ValidatedTextEncoder):
         self.max_length = max_length
         self.batch_size = batch_size
         self.cache_dir = cache_dir
+        if not isinstance(revision, str) or not revision.strip():
+            raise ValueError("revision must be non-empty")
+        self.revision = revision.strip()
         factory = backend_factory or (
             lambda: _VietnameseSentenceTransformerBackend(
                 model_name=self.model_name,
@@ -265,6 +272,7 @@ class VietnameseTextEncoder(_ValidatedTextEncoder):
                 max_length=self.max_length,
                 batch_size=self.batch_size,
                 cache_dir=self.cache_dir,
+                revision=self.revision,
             )
         )
         super().__init__(
@@ -274,13 +282,13 @@ class VietnameseTextEncoder(_ValidatedTextEncoder):
         )
 
 
-class _PECoreBackend:
+class _OpenCLIPBackend:
     def __init__(self, *, model_id: str, device: str, precision: str) -> None:
         try:
             import open_clip
             import torch
         except ImportError as exc:
-            raise RuntimeError("PE-Core runtime dependencies are unavailable") from exc
+            raise RuntimeError("OpenCLIP runtime dependencies are unavailable") from exc
 
         self._torch = torch
         self._device = "cuda" if device == "auto" and torch.cuda.is_available() else device
@@ -337,6 +345,7 @@ class _VietnameseSentenceTransformerBackend:
         max_length: int,
         batch_size: int,
         cache_dir: str | None,
+        revision: str,
     ) -> None:
         try:
             from sentence_transformers import SentenceTransformer
@@ -348,6 +357,7 @@ class _VietnameseSentenceTransformerBackend:
             kwargs["device"] = device
         if cache_dir is not None:
             kwargs["cache_folder"] = cache_dir
+        kwargs["revision"] = revision
         self._model = SentenceTransformer(model_name, **kwargs)
         self._model.max_seq_length = max_length
         self._batch_size = batch_size
@@ -372,9 +382,15 @@ class _VietnameseSentenceTransformerBackend:
         return embeddings.tolist() if hasattr(embeddings, "tolist") else embeddings
 
 
+PECoreTextEncoder = OpenCLIPTextEncoder
+
+
 __all__ = [
+    "OPENCLIP_MODEL_ID",
     "PE_CORE_MODEL_ID",
     "VIETNAMESE_MODEL_NAME",
+    "VIETNAMESE_MODEL_REVISION",
+    "OpenCLIPTextEncoder",
     "PECoreTextEncoder",
     "VietnameseTextEncoder",
 ]

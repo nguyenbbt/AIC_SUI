@@ -21,6 +21,8 @@ def frame(
         video_id="V001",
         shot_id=0,
         timestamp_sec=1.0,
+        source_frame_idx=30,
+        image_rel_path=f"keyframes/V001/{frame_id}.webp",
         rank=rank,
         raw_score=100.0 - rank,
         normalized_score=normalized_score,

@@ -55,20 +55,20 @@ class PortConformanceTests(unittest.TestCase):
             {frame.video_id for frame in fixture.frames},
             {"L21_V001", "L21_V002"},
         )
-        self.assertEqual({hit.interval_id for hit in fixture.asr_hits}, {"overlap", "boundary", "no_overlap"})
+        self.assertEqual({hit.interval_id for hit in fixture.asr_hits}, {"0", "1", "2"})
         self.assertNotIn(
             fixture.missing_metadata_hit.frame_id,
             fixture.metadata().get_frames_by_ids([fixture.missing_metadata_hit.frame_id]),
         )
         filtered = fixture.object_reader().get_objects_by_frame_ids(
-            ["L21_V001_003"], label="person", min_confidence=0.5
+            ["L21_V001_00002_085"], label="person", min_confidence=0.5
         )
-        self.assertEqual(len(filtered["L21_V001_003"]), 1)
-        self.assertEqual(filtered["L21_V001_003"][0].label_display, "Person")
-        by_mid = fixture.object_reader().get_objects_by_frame_ids(
-            ["L21_V001_003"], label="/m/0k4j", min_confidence=0.5
+        self.assertEqual(len(filtered["L21_V001_00002_085"]), 1)
+        self.assertEqual(filtered["L21_V001_00002_085"][0].label, "person")
+        by_label = fixture.object_reader().get_objects_by_frame_ids(
+            ["L21_V001_00002_085"], label="car", min_confidence=0.5
         )
-        self.assertEqual(by_mid["L21_V001_003"][0].label_normalized, "car")
+        self.assertEqual(by_label["L21_V001_00002_085"][0].label, "car")
 
     def test_fakes_validate_inputs_record_calls_and_preserve_empty_success(self) -> None:
         fixture = build_integration_fixture()

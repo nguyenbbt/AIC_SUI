@@ -22,7 +22,7 @@ from online.domain.errors import DataInfrastructureError, ErrorCode
 from online.domain.identifiers import validate_canonical_frame_id
 
 
-VALIDATOR_VERSION = "3"
+VALIDATOR_VERSION = "4-self-indexed-v2"
 
 
 class ValidationStatus(str, Enum):
@@ -137,8 +137,8 @@ class OfflineContractValidator:
             {
                 "video_id": "keyword",
                 "interval_id": "keyword",
-                "start_time": "float",
-                "end_time": "float",
+                "start_time_sec": "float",
+                "end_time_sec": "float",
                 "cleaned_text": "text",
             },
             False,
@@ -149,12 +149,26 @@ class OfflineContractValidator:
         ),
     }
     SQLITE_REQUIREMENTS = {
+        "videos": (
+            {
+                "video_id": "TEXT",
+                "source_video_rel_path": "TEXT",
+                "fps": "REAL",
+                "duration_sec": "REAL",
+                "frame_count": "INTEGER",
+                "width": "INTEGER",
+                "height": "INTEGER",
+            },
+            True,
+        ),
         "metadata": (
             {
                 "frame_id": "TEXT",
                 "video_id": "TEXT",
                 "shot_id": "INTEGER",
+                "source_frame_idx": "INTEGER",
                 "timestamp": "REAL",
+                "image_rel_path": "TEXT",
             },
             True,
         ),
@@ -168,6 +182,7 @@ class OfflineContractValidator:
                 "y_min": "REAL",
                 "x_max": "REAL",
                 "y_max": "REAL",
+                "model_source": "TEXT",
             },
             False,
         ),
@@ -180,6 +195,7 @@ class OfflineContractValidator:
         milvus: Any,
         elasticsearch: Any,
         sqlite: Any,
+        manifest_gate: Any | None = None,
         encoder_smoke_vectors: Mapping[str, Callable[[], Sequence[float]]] | None = None,
         sample_size: int = 5,
         norm_tolerance: float = 1e-2,
@@ -192,6 +208,7 @@ class OfflineContractValidator:
         self.milvus = milvus
         self.elasticsearch = elasticsearch
         self.sqlite = sqlite
+        self.manifest_gate = manifest_gate
         self.encoder_smoke_vectors = dict(encoder_smoke_vectors or {})
         self.sample_size = sample_size
         self.norm_tolerance = norm_tolerance
@@ -637,6 +654,58 @@ class OfflineContractValidator:
 
     def _validate_frame_joins(self) -> None:
         if not (
+            self._available.get("sqlite:metadata")
+            and self._available.get("sqlite:videos")
+        ):
+            self._not_run(
+                "join.metadata_to_videos",
+                required=True,
+                reason="metadata or videos table is unavailable",
+            )
+        else:
+            records = self._samples.get("sqlite:metadata", ())
+            frame_ids = [
+                record["frame_id"]
+                for record in records
+                if isinstance(record.get("frame_id"), str)
+            ]
+            video_ids = tuple(
+                dict.fromkeys(
+                    record["video_id"]
+                    for record in records
+                    if isinstance(record.get("video_id"), str)
+                )
+            )
+            frames = self.sqlite.get_frames_by_ids(frame_ids)
+            videos = self.sqlite.get_videos_by_ids(video_ids)
+            matches = (
+                bool(records)
+                and len(frame_ids) == len(records)
+                and len(frames) == len(set(frame_ids))
+            )
+            for record in records:
+                frame_id = record.get("frame_id")
+                video_id = record.get("video_id")
+                frame = frames.get(frame_id) if isinstance(frame_id, str) else None
+                video = videos.get(video_id) if isinstance(video_id, str) else None
+                if (
+                    frame is None
+                    or video is None
+                    or frame.video_id != video.video_id
+                    or frame.source_frame_idx >= video.frame_count
+                    or frame.timestamp_sec > video.duration_sec + max(1.0 / video.fps, 0.05)
+                ):
+                    matches = False
+                    break
+            self._record(
+                "join.metadata_to_videos",
+                ok=matches,
+                required=True,
+                success="metadata samples JOIN videos and stay within source bounds",
+                failure="metadata samples do not JOIN videos or exceed source bounds",
+            )
+
+        if not (
             self._available.get("milvus:visual")
             and self._available.get("sqlite:metadata")
         ):
@@ -869,9 +938,42 @@ class OfflineContractValidator:
             if isinstance(record.get("frame_id"), str)
         ]
         metadata = self.sqlite.get_frames_by_ids(ids)
-        matches = bool(records) and len(ids) == len(records) and all(
-            frame_id in metadata for frame_id in ids
+        video_ids = tuple(
+            dict.fromkeys(
+                metadata[frame_id].video_id
+                for frame_id in ids
+                if frame_id in metadata
+            )
         )
+        videos = self.sqlite.get_videos_by_ids(video_ids)
+        matches = bool(records) and len(ids) == len(records)
+        for record in records:
+            frame_id = record.get("frame_id")
+            frame = metadata.get(frame_id) if isinstance(frame_id, str) else None
+            video = videos.get(frame.video_id) if frame is not None else None
+            try:
+                x_min = float(record.get("x_min"))
+                y_min = float(record.get("y_min"))
+                x_max = float(record.get("x_max"))
+                y_max = float(record.get("y_max"))
+                confidence = float(record.get("confidence"))
+                label = record.get("label")
+                if (
+                    frame is None
+                    or video is None
+                    or not isinstance(label, str)
+                    or not label
+                    or label != label.casefold()
+                    or not all(math.isfinite(value) for value in (x_min, y_min, x_max, y_max, confidence))
+                    or not 0.0 <= confidence <= 1.0
+                    or not 0.0 <= x_min < x_max <= video.width
+                    or not 0.0 <= y_min < y_max <= video.height
+                ):
+                    matches = False
+                    break
+            except (TypeError, ValueError):
+                matches = False
+                break
         self._record(
             "join.objects_to_metadata",
             ok=matches,
@@ -950,6 +1052,16 @@ class OfflineContractValidator:
         self._sample_counts = {}
         self._resources_checked = []
 
+        if self.manifest_gate is not None:
+            self._resources_checked.append("dataset_manifest")
+            self._guard("dataset_manifest.ready_identity", True, self.manifest_gate.health_check)
+        elif self.config.dataset.manifest_required:
+            self._not_run(
+                "dataset_manifest.ready_identity",
+                required=True,
+                reason="required dataset manifest gate was not supplied",
+            )
+
         milvus_resources = {
             "visual": self.config.milvus.visual_collection,
             "ocr": self.config.milvus.ocr_collection,
@@ -997,6 +1109,7 @@ class OfflineContractValidator:
         self._guard("elasticsearch.analysis_icu", False, self._validate_icu_plugin)
 
         sqlite_resources = {
+            "videos": self.config.sqlite.videos_table,
             "metadata": self.config.sqlite.metadata_table,
             "objects": self.config.sqlite.objects_table,
         }
@@ -1027,6 +1140,7 @@ class OfflineContractValidator:
         self._guard("join.frame", True, self._validate_frame_joins)
         self._ensure_check_names(
             (
+                ("join.metadata_to_videos", True),
                 ("join.visual_to_metadata", True),
                 ("join.ocr_dense_to_metadata", False),
                 ("join.ocr_lexical_to_metadata", False),

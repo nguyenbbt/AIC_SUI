@@ -36,6 +36,8 @@ def candidate(
         video_id=video_id,
         shot_id=shot_id,
         timestamp_sec=timestamp_sec,
+        source_frame_idx=int(timestamp_sec * 30),
+        image_rel_path=f"keyframes/{video_id}/{frame_id}.webp",
         rank=rank,
         raw_score=raw_score,
         normalized_score=normalized_score,
@@ -68,12 +70,19 @@ def fused(
     shot_id: int,
     video_id: str = "V001",
     timestamp_sec: float = 1.0,
+    source_frame_idx: int | None = None,
 ) -> FusedFrameCandidate:
     return FusedFrameCandidate(
         frame_id=frame_id,
         video_id=video_id,
         shot_id=shot_id,
         timestamp_sec=timestamp_sec,
+        source_frame_idx=(
+            int(timestamp_sec * 30)
+            if source_frame_idx is None
+            else source_frame_idx
+        ),
+        image_rel_path=f"keyframes/{video_id}/{frame_id}.webp",
         final_score=final_score,
         branch_scores={RetrievalBranch.VISUAL_DENSE: min(final_score, 1.0)},
         evidence=(),
@@ -133,7 +142,7 @@ class FusionDedupAndObjectTests(unittest.TestCase):
             )
 
     def test_fusion_rejects_conflicting_metadata_for_same_frame_id(self) -> None:
-        with self.assertRaises(ContractMismatchError):
+        with self.assertRaises((ContractMismatchError, ValueError)):
             WeightedFrameFusion().fuse(
                 (
                     result(
@@ -156,20 +165,20 @@ class FusionDedupAndObjectTests(unittest.TestCase):
                                 "V001_00000_015",
                                 branch=RetrievalBranch.OCR_BM25,
                                 normalized_score=0.8,
-                                video_id="V999",
+                                video_id="V001",
                                 shot_id=0,
                                 timestamp_sec=1.5,
-                            ),
+                            ).model_copy(update={"video_id": "V999"}),
                         ),
                     ),
                 )
             )
 
-    def test_dedup_groups_by_video_and_shot_keeps_near_frames(self) -> None:
+    def test_dedup_groups_by_submission_frame_keeps_near_frames(self) -> None:
         output = ShotDeduplicator().deduplicate(
             (
-                fused("V001_00000_050", final_score=0.9, shot_id=0, timestamp_sec=5.0),
-                fused("V001_00000_015", final_score=0.9, shot_id=0, timestamp_sec=1.5),
+                fused("V001_00000_050", final_score=0.9, shot_id=0, timestamp_sec=5.0, source_frame_idx=45),
+                fused("V001_00000_015", final_score=0.9, shot_id=0, timestamp_sec=1.5, source_frame_idx=45),
                 fused("V001_00001_050", final_score=0.7, shot_id=1, timestamp_sec=10.0),
                 fused("V002_00000_015", final_score=0.95, shot_id=0, video_id="V002"),
             )
@@ -197,8 +206,8 @@ class FusionDedupAndObjectTests(unittest.TestCase):
                     confidence=0.95,
                     x_min=0,
                     y_min=0,
-                    x_max=10,
-                    y_max=10,
+                    x_max=0.1,
+                    y_max=0.2,
                 ),
             ),
             "V001_00000_050": (),

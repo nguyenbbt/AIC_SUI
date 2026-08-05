@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from .base import FiniteFloat, NonEmptyStr, StrictFrozenModel, StrictIntValue
 from .errors import ContractMismatchError
-from .identifiers import validate_canonical_frame_id
+from .identifiers import validate_canonical_frame_id, validate_relative_artifact_path
 
 
 DANTE_POLICY_VERSION = "dante-index-gap-v1"
@@ -56,11 +56,17 @@ class TRAKEFrameMatch(StrictFrozenModel):
     event_id: NonEmptyStr
     frame_id: NonEmptyStr
     video_id: NonEmptyStr
-    keyframe_no: StrictIntValue = Field(ge=1)
+    shot_id: StrictIntValue = Field(ge=0)
     local_index: StrictIntValue = Field(ge=0)
     timestamp_sec: Annotated[FiniteFloat, Field(ge=0.0)]
     source_frame_idx: StrictIntValue = Field(ge=0)
+    image_rel_path: NonEmptyStr
     similarity_score: FiniteFloat
+
+    @field_validator("image_rel_path")
+    @classmethod
+    def validate_image_path(cls, value: str) -> str:
+        return validate_relative_artifact_path(value)
 
     @model_validator(mode="after")
     def validate_frame_identity(self) -> "TRAKEFrameMatch":
@@ -68,12 +74,10 @@ class TRAKEFrameMatch(StrictFrozenModel):
             validate_canonical_frame_id(
                 self.frame_id,
                 video_id=self.video_id,
-                keyframe_no=self.keyframe_no,
+                shot_id=self.shot_id,
             )
         except ContractMismatchError as exc:
             raise ValueError(exc.message) from exc
-        if self.local_index != self.keyframe_no - 1:
-            raise ValueError("local_index must equal keyframe_no - 1")
         return self
 
 

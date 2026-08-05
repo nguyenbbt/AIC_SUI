@@ -1,5 +1,9 @@
 # 15 — Kế hoạch ba người code song song TRAKE/DANTE và VQA
 
+> **Contract migration notice (2026-08-05):** This is historical execution
+> planning. For current model, schema and identifier rules, use
+> `docs/22-OFFLINE-TO-ONLINE-DATA-CONTRACT-SELF-INDEXED-V2.md`.
+
 ## 1. Kết luận ngắn
 
 Ba người **có thể code song song ngay**, dù chưa có dữ liệu thật.

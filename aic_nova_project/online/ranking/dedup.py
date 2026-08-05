@@ -1,4 +1,4 @@
-"""Shot-level deduplication and near-frame grouping."""
+"""Competition-frame deduplication and near-frame grouping."""
 
 from __future__ import annotations
 
@@ -9,9 +9,14 @@ from online.domain.candidates import FusedFrameCandidate, NearFrameRef
 
 
 class ShotDeduplicator:
-    """Keep one representative frame per ``(video_id, shot_id)`` group."""
+    """Keep one result per submission identity ``(video_id, source_frame_idx)``.
 
-    name = "shot_dedup"
+    The historical class name is retained as a compatibility import.  The
+    self-indexed-v2 contract permits multiple internal keyframe IDs to point at
+    the same decoded raw frame, so shot IDs are not a valid submission dedup key.
+    """
+
+    name = "source_frame_dedup_v2"
 
     def deduplicate(self, candidates: Sequence[FusedFrameCandidate]) -> tuple[FusedFrameCandidate, ...]:
         if isinstance(candidates, (str, bytes)):
@@ -22,7 +27,7 @@ class ShotDeduplicator:
 
         groups: dict[tuple[str, int], list[FusedFrameCandidate]] = defaultdict(list)
         for candidate in values:
-            groups[(candidate.video_id, candidate.shot_id)].append(candidate)
+            groups[(candidate.video_id, candidate.source_frame_idx)].append(candidate)
 
         representatives = tuple(
             self._represent_group(group)
@@ -58,6 +63,8 @@ class ShotDeduplicator:
             video_id=representative.video_id,
             shot_id=representative.shot_id,
             timestamp_sec=representative.timestamp_sec,
+            source_frame_idx=representative.source_frame_idx,
+            image_rel_path=representative.image_rel_path,
             final_score=representative.final_score,
             branch_scores=representative.branch_scores,
             evidence=representative.evidence,

@@ -1,5 +1,9 @@
 # 11 — PHÂN CÔNG PHÁT TRIỂN ONLINE CHO NHÓM 3 NGƯỜI
 
+> **Contract migration notice (2026-08-05):** Ownership boundaries remain
+> useful, but technical payload/model statements are governed by
+> `docs/22-OFFLINE-TO-ONLINE-DATA-CONTRACT-SELF-INDEXED-V2.md`.
+
 ## 0. Mục đích và cách dùng tài liệu
 
 Tài liệu này là kế hoạch làm việc chung cho ba người phụ trách Phase Online.
@@ -1491,4 +1495,3 @@ phạm và sửa ở đúng owner.
 - Có timeout/degradation policy.
 - Có full rehearsal bằng quy trình người dùng thực tế.
 - Không còn workaround thủ công không được ghi lại.
-

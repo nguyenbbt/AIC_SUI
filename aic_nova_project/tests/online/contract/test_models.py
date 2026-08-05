@@ -25,7 +25,7 @@ from online.domain.trake import TRAKEFrameMatch
 from online.domain.vqa import ImageEvidence
 from online.ports.records import FrameMetadata, FrameSearchHit
 from online.ports.visual_corpus import OrderedVisualFrame
-from online.testing.organizer_fixtures import build_organizer_frame_metadata
+from online.testing.organizer_fixtures import build_self_indexed_frame_metadata
 
 
 FIXTURE_PATH = Path(__file__).parents[1] / "fixtures" / "candidates.json"
@@ -66,6 +66,12 @@ class DomainContractTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             ASRIntervalCandidate.model_validate(payload)
 
+    def test_interval_id_is_unpadded_non_negative_decimal(self) -> None:
+        payload = self.fixture["asr_interval"]
+        for invalid in ("", "00", "01", "-1", "interval-1", " 1", "1 "):
+            with self.assertRaises(ValidationError):
+                ASRIntervalCandidate.model_validate({**payload, "interval_id": invalid})
+
     def test_object_constraint_rejects_negative_count(self) -> None:
         with self.assertRaises(ValidationError):
             ObjectConstraint(
@@ -75,26 +81,20 @@ class DomainContractTests(unittest.TestCase):
                 min_confidence=0.5,
             )
 
-    def test_object_detection_uses_organizer_schema_and_normalized_bbox(self) -> None:
+    def test_object_detection_uses_self_indexed_schema_and_normalized_bbox(self) -> None:
         detection = ObjectDetection(
-            label_display="Person",
-            label_normalized="person",
-            class_mid="/m/01g317",
-            class_label_id="0",
+            label="person",
             confidence=0.95,
             x_min=0.10,
             y_min=0.20,
             x_max=0.60,
             y_max=0.90,
-            model_source="organizer_open_images",
+            model_source="yolo",
         )
         self.assertEqual(
             set(ObjectDetection.model_fields),
             {
-                "label_display",
-                "label_normalized",
-                "class_mid",
-                "class_label_id",
+                "label",
                 "confidence",
                 "x_min",
                 "y_min",
@@ -107,28 +107,22 @@ class DomainContractTests(unittest.TestCase):
             ObjectDetection.model_validate_json(detection.model_dump_json()),
             detection,
         )
-        optional_ids = detection.model_copy(
-            update={"class_mid": None, "class_label_id": None}
-        )
-        self.assertIsNone(optional_ids.class_mid)
-        self.assertIsNone(optional_ids.class_label_id)
+        without_source = detection.model_copy(update={"model_source": None})
+        self.assertIsNone(without_source.model_source)
 
-    def test_object_detection_rejects_legacy_or_invalid_organizer_records(self) -> None:
+    def test_object_detection_rejects_legacy_or_invalid_records(self) -> None:
         base = {
-            "label_display": "Person",
-            "label_normalized": "person",
-            "class_mid": "/m/01g317",
-            "class_label_id": "0",
+            "label": "person",
             "confidence": 0.95,
             "x_min": 0.10,
             "y_min": 0.20,
             "x_max": 0.60,
             "y_max": 0.90,
-            "model_source": "organizer_open_images",
+            "model_source": "yolo",
         }
         for field, value in (
-            ("label_normalized", "Person"),
-            ("label_normalized", " PERSON "),
+            ("label", "Person"),
+            ("label", " PERSON "),
             ("confidence", 1.01),
             ("x_min", -0.01),
             ("y_min", 1.01),
@@ -136,14 +130,14 @@ class DomainContractTests(unittest.TestCase):
             ("y_max", -0.01),
             ("x_min", 0.70),
             ("y_min", 0.95),
+            ("x_max", 0.10),
+            ("y_max", 0.20),
             ("model_source", " "),
         ):
             with self.assertRaises(ValidationError):
                 ObjectDetection.model_validate({**base, field: value})
         with self.assertRaises(ValidationError):
-            ObjectDetection.model_validate({key: value for key, value in base.items() if key != "model_source"})
-        with self.assertRaises(ValidationError):
-            ObjectDetection.model_validate({**base, "label": "person"})
+            ObjectDetection.model_validate({**base, "label_display": "Person"})
 
     def test_error_diagnostics_redact_secrets_and_vectors(self) -> None:
         error = ResourceUnavailableError(
@@ -175,33 +169,35 @@ class DomainContractTests(unittest.TestCase):
             candidate.rank = 2  # type: ignore[misc]
 
     def test_canonical_id_parser_handles_underscored_video_id(self) -> None:
-        for frame_id, video_id, keyframe_no in (
-            ("L21_V001_001", "L21_V001", 1),
-            ("L26_V498_123", "L26_V498", 123),
+        for frame_id, video_id, shot_id, position_code in (
+            ("L21_V001_00000_015", "L21_V001", 0, 15),
+            ("L26_V498_00123_100", "L26_V498", 123, 100),
         ):
             parsed = parse_canonical_frame_id(frame_id)
             self.assertEqual(parsed.video_id, video_id)
-            self.assertEqual(parsed.keyframe_no, keyframe_no)
+            self.assertEqual(parsed.shot_id, shot_id)
+            self.assertEqual(parsed.position_code, position_code)
         validate_canonical_frame_id(
-            "L21_V001_123",
+            "L21_V001_00123_085",
             video_id="L21_V001",
-            keyframe_no=123,
+            shot_id=123,
+            position_code=85,
         )
         for invalid in (
             "shot_00012_pos_105",
-            "L21_V001_000",
+            "L21_V001_001",
             "L21_V001_00012_105",
-            " L21_V001_001",
-            "L21_V001_001 ",
+            " L21_V001_00000_015",
+            "L21_V001_00000_015 ",
         ):
             with self.assertRaises(Exception):
                 parse_canonical_frame_id(invalid)
         with self.assertRaises(Exception):
-            validate_canonical_frame_id("L21_V001_001", video_id="L21_V002")
+            validate_canonical_frame_id("L21_V001_00000_015", video_id="L21_V002")
         with self.assertRaises(Exception):
-            validate_canonical_frame_id("L21_V001_001", keyframe_no=2)
+            validate_canonical_frame_id("L21_V001_00000_015", shot_id=2)
 
-    def test_shared_frame_models_expose_only_organizer_identity(self) -> None:
+    def test_shared_frame_models_expose_self_indexed_identity(self) -> None:
         for model in (
             FrameSearchHit,
             FrameMetadata,
@@ -211,53 +207,59 @@ class DomainContractTests(unittest.TestCase):
             TRAKEFrameMatch,
             ImageEvidence,
         ):
-            self.assertNotIn("shot_id", model.model_fields)
+            self.assertIn("shot_id", model.model_fields)
         self.assertEqual(
             set(FrameMetadata.model_fields),
             {
                 "frame_id",
                 "video_id",
-                "keyframe_no",
-                "local_index",
+                "shot_id",
                 "timestamp_sec",
-                "fps",
                 "source_frame_idx",
                 "image_rel_path",
             },
         )
         self.assertEqual(
             set(FrameSearchHit.model_fields),
-            {"frame_id", "video_id", "raw_score"},
+            {"frame_id", "video_id", "shot_id", "raw_score"},
         )
 
-    def test_organizer_metadata_rejects_semantic_and_ordering_mismatches(self) -> None:
-        base = build_organizer_frame_metadata()[0].model_dump()
+    def test_self_indexed_metadata_rejects_semantic_mismatches(self) -> None:
+        base = build_self_indexed_frame_metadata()[0].model_dump()
         for field, value in (
-            ("frame_id", "L21_V001_002"),
+            ("frame_id", "L21_V001_00001_015"),
             ("video_id", "L21_V002"),
-            ("keyframe_no", 2),
-            ("local_index", 1),
-            ("fps", 0.0),
+            ("shot_id", 2),
             ("source_frame_idx", -1),
         ):
             with self.assertRaises(ValidationError):
                 FrameMetadata.model_validate({**base, field: value})
+        for invalid_path in (
+            "C:/data/keyframe.webp",
+            "/data/keyframe.webp",
+            "../keyframe.webp",
+            "keyframes\\V1\\frame.webp",
+            "https://example.test/frame.webp",
+        ):
+            with self.assertRaises(ValidationError):
+                FrameMetadata.model_validate({**base, "image_rel_path": invalid_path})
         with self.assertRaises(ValidationError):
             FrameSearchHit(
-                frame_id="L21_V001_001",
+                frame_id="L21_V001_00000_015",
                 video_id="L21_V002",
+                shot_id=0,
                 raw_score=0.5,
             )
 
-    def test_organizer_base_fixture_preserves_duplicate_source_frame(self) -> None:
-        frames = build_organizer_frame_metadata()
+    def test_self_indexed_base_fixture_preserves_duplicate_source_frame(self) -> None:
+        frames = build_self_indexed_frame_metadata()
         self.assertEqual(
             tuple(frame.frame_id for frame in frames),
             (
-                "L21_V001_001",
-                "L21_V001_002",
-                "L21_V001_003",
-                "L21_V002_001",
+                "L21_V001_00000_015",
+                "L21_V001_00000_050",
+                "L21_V001_00001_085",
+                "L21_V002_00000_050",
             ),
         )
         self.assertEqual(frames[0].source_frame_idx, frames[1].source_frame_idx)
@@ -277,12 +279,12 @@ class DomainContractTests(unittest.TestCase):
             normalized_score=0.8,
         )
         result = FusedFrameCandidate(
-            frame_id="L21_V001_001",
+            frame_id="L21_V001_00000_015",
             video_id="L21_V001",
-            keyframe_no=1,
-            local_index=0,
+            shot_id=0,
             timestamp_sec=0.0,
             source_frame_idx=0,
+            image_rel_path="keyframes/L21_V001/L21_V001_00000_015.jpg",
             final_score=0.8,
             branch_scores={RetrievalBranch.VISUAL_DENSE: 0.8},
             evidence=(evidence,),
@@ -298,15 +300,15 @@ class DomainContractTests(unittest.TestCase):
 
     def test_strict_strings_canonical_ids_and_numeric_scores_reject_ambiguous_input(self) -> None:
         with self.assertRaises(Exception):
-            parse_canonical_frame_id(" L21_V001_001")
+            parse_canonical_frame_id(" L21_V001_00000_015")
         with self.assertRaises(Exception):
-            parse_canonical_frame_id("L21_V001_001 ")
+            parse_canonical_frame_id("L21_V001_00000_015 ")
         with self.assertRaises(ValidationError):
             FrameCandidate.model_validate({**self.fixture["frame"], "raw_score": True})
         with self.assertRaises(ValidationError):
             FrameCandidate.model_validate({**self.fixture["frame"], "rank": True})
         with self.assertRaises(ValidationError):
-            FrameCandidate.model_validate({**self.fixture["frame"], "keyframe_no": True})
+            FrameCandidate.model_validate({**self.fixture["frame"], "shot_id": True})
         with self.assertRaises(ValidationError):
             FrameCandidate.model_validate({**self.fixture["frame"], "video_id": " L21_V001"})
         with self.assertRaises(ValidationError):

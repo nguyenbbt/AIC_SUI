@@ -24,8 +24,9 @@ User query
 → mode-specific output
 ```
 
-The repository currently contains both Offline source and the beginning of the
-Online source under `online/`.
+The repository contains both Offline source and a complete SDK-free Online
+implementation under `online/`; real database/model validation remains a
+separate runtime gate.
 
 This file is shared by all three Online developers. The three roles from
 `docs/11-ONLINE-TEAM-TASK-ASSIGNMENT.md` are:
@@ -62,21 +63,26 @@ mode names remain open under OQ-002.
 Before analyzing, planning or modifying source code, read these files in order:
 
 1. `AGENTS.md`
-2. `docs/00-READ-ME-FIRST.md`
-3. `docs/01-SYSTEM-OVERVIEW.md`
-4. `docs/02-OFFLINE-PIPELINE-ACTUAL.md`
-5. `docs/03-DATABASE-SCHEMA-CURRENT.md`
-6. `docs/04-OFFLINE-ONLINE-CONTRACT.md`
-7. `docs/05-ONLINE-PIPELINE-TARGET.md`
-8. `docs/06-DESIGN-DECISIONS.md`
-9. `docs/07-OUT-OF-SCOPE.md`
-10. `docs/08-OPEN-QUESTIONS.md`
-11. `docs/09-IMPLEMENTATION-PLAN.md`
-12. `docs/10-OFFLINE-CODE-ISSUES.md`
-13. `docs/11-ONLINE-TEAM-TASK-ASSIGNMENT.md`
-14. `docs/13-ONLINE-NEXT-STEPS-ADVANCED-MODES.md`
-15. `docs/14-TRAKE-DANTE-VQA-CODING-ASSIGNMENT.md`
-16. `docs/15-THREE-PERSON-PARALLEL-CODING-PLAN.md`
+2. `docs/22-OFFLINE-TO-ONLINE-DATA-CONTRACT-SELF-INDEXED-V2.md`
+3. `docs/00-READ-ME-FIRST.md`
+4. `docs/01-SYSTEM-OVERVIEW.md`
+5. `docs/02-OFFLINE-PIPELINE-ACTUAL.md`
+6. `docs/03-DATABASE-SCHEMA-CURRENT.md`
+7. `docs/04-OFFLINE-ONLINE-CONTRACT.md`
+8. `docs/05-ONLINE-PIPELINE-TARGET.md`
+9. `docs/06-DESIGN-DECISIONS.md`
+10. `docs/07-OUT-OF-SCOPE.md`
+11. `docs/08-OPEN-QUESTIONS.md`
+12. `docs/09-IMPLEMENTATION-PLAN.md`
+13. `docs/10-OFFLINE-CODE-ISSUES.md`
+14. `docs/11-ONLINE-TEAM-TASK-ASSIGNMENT.md`
+15. `docs/13-ONLINE-NEXT-STEPS-ADVANCED-MODES.md`
+16. `docs/14-TRAKE-DANTE-VQA-CODING-ASSIGNMENT.md`
+17. `docs/15-THREE-PERSON-PARALLEL-CODING-PLAN.md`
+
+Document 22 is the current phase-boundary contract. It supersedes organizer-
+provided keyframe/feature assumptions and legacy PE-Core references in older
+planning documents.
 
 `docs/10-OFFLINE-CODE-ISSUES.md` is an audit snapshot. Re-verify an issue against
 the checked-out code before claiming that it is still present.
@@ -105,16 +111,19 @@ milestone and inspecting its source dependencies.
 When information differs, use this precedence:
 
 1. The user's latest explicit instruction.
-2. `docs/06-DESIGN-DECISIONS.md` for approved architecture/behavior.
-3. `docs/04-OFFLINE-ONLINE-CONTRACT.md` for the phase boundary.
-4. `docs/03-DATABASE-SCHEMA-CURRENT.md` for database resources and fields.
-5. `docs/11-ONLINE-TEAM-TASK-ASSIGNMENT.md` for approved team boundaries and
+2. `docs/22-OFFLINE-TO-ONLINE-DATA-CONTRACT-SELF-INDEXED-V2.md` for the current
+   phase boundary, schema, model identity and submission identity.
+3. `docs/06-DESIGN-DECISIONS.md` for approved architecture/behavior not
+   superseded by document 22.
+4. `docs/04-OFFLINE-ONLINE-CONTRACT.md` for historical phase-boundary context.
+5. `docs/03-DATABASE-SCHEMA-CURRENT.md` for historical/current schema context.
+6. `docs/11-ONLINE-TEAM-TASK-ASSIGNMENT.md` for approved team boundaries and
    internal model/port conventions.
-6. `docs/05-ONLINE-PIPELINE-TARGET.md` for target Online data flow.
-7. Current source code for what is implemented now.
-8. `docs/09-IMPLEMENTATION-PLAN.md` for milestone order.
-9. Module-level README files.
-10. `docs/10-OFFLINE-CODE-ISSUES.md`, historical discussions and old notes.
+7. `docs/05-ONLINE-PIPELINE-TARGET.md` for target Online data flow.
+8. Current source code for what is implemented now.
+9. `docs/09-IMPLEMENTATION-PLAN.md` for milestone order.
+10. Module-level README files.
+11. `docs/10-OFFLINE-CODE-ISSUES.md`, historical discussions and old notes.
 
 The explicit internal enum clarification in Section 1 of this file supersedes
 legacy `KIS_VISUAL` wording in older documents; it does not finalize the public
@@ -178,7 +187,7 @@ milestone, add tests and preserve unrelated user changes.
 The logical Offline Pipeline is:
 
 1. Shot detection and keyframe extraction.
-2. PE-Core visual embedding.
+2. OpenCLIP `ViT-B-32::openai` visual embedding.
 3. ASR transcription, cleaning and video summarization.
 4. OCR extraction.
 5. Object detection.
@@ -232,6 +241,7 @@ Expected database and tables:
 
 ```text
 data/metadata.db
+videos
 metadata
 objects
 ```
@@ -315,6 +325,8 @@ frame_id
 video_id
 shot_id
 timestamp_sec
+source_frame_idx
+image_rel_path
 ```
 
 ### ASR interval level
@@ -410,7 +422,7 @@ Milestones:
 
 1. `B0`: confirm domain/port contract and create B-side fakes.
 2. `B1`: `QueryBundle`, validation and query parser/builder.
-3. `B2`: PE-Core text encoder and Vietnamese text encoder.
+3. `B2`: OpenCLIP `ViT-B-32::openai` text encoder and Vietnamese text encoder.
 4. `B3`: visual semantic branch.
 5. `B4`: OCR lexical and semantic branches.
 6. `B5`: ASR lexical and semantic branches.
@@ -496,8 +508,10 @@ Milestones:
 7. `C6`: deterministic deduplication and near-frame grouping.
 8. `C7`: shared search orchestrator.
 9. `C8`: API, mode routing, health and error mapping after OQ-002.
-10. `C9`: VQA evidence contracts/fake orchestration under DD-030–DD-031; actual
-    image resolution and real-data VQA remain blocked by OQ-012.
+10. `C9`: VQA evidence contracts/fake orchestration under DD-030–DD-031;
+    the filesystem image resolver and Elasticsearch evidence hydrator are
+    implemented; provider-specific VLM integration still requires model/runtime
+    selection.
 11. `C10`: UI/backend object-constraint contract.
 
 Person C must consume `RetrievalService`/`BranchResult` instead of running new
@@ -551,7 +565,7 @@ not receive a video file, frame or image query from the organizer in baseline.
 
 ### TRAKE
 
-Baseline TRAKE uses PE-Core visual-semantic event scores and DANTE per video.
+Baseline TRAKE uses OpenCLIP visual-semantic event scores and DANTE per video.
 DANTE must never transition between videos. Do not add OCR, ASR, summary, Stable
 Diffusion or QUEST to the baseline DANTE matrix without approval.
 
@@ -608,7 +622,8 @@ Do not silently decide:
 - Normalization/fusion method and weights.
 - Summary boost.
 - Object hard/soft default and position calculation.
-- Image path resolution.
+- VLM-provider-specific image upload/transport beyond the validated relative
+  `image_rel_path`.
 - Stable Diffusion or QUEST activation.
 - Database retry/pooling/circuit-breaker lifecycle.
 - Missing metadata policy.
@@ -618,8 +633,10 @@ do not determine these algorithms or production parameters.
 
 DANTE scope/distance/lambda/output and VQA evidence/model/prompt are no longer
 open: follow DD-026–DD-031 and
-`docs/14-TRAKE-DANTE-VQA-CODING-ASSIGNMENT.md` exactly. OQ-012 still blocks the
-actual image resolver, but not VQA contract/fake implementation.
+`docs/14-TRAKE-DANTE-VQA-CODING-ASSIGNMENT.md` exactly. Document 22 resolves the
+stored image path contract. The filesystem resolver now verifies and preserves
+that relative path; provider-specific VLM transport still requires a
+model/runtime decision.
 
 ---
 
@@ -646,6 +663,9 @@ Online suite:
 7. API startup probes required/optional encoders, rejects experimental policies
    in production mode, sanitizes public errors and drains retrieval/ranking
    executors before infrastructure shutdown.
+8. A strict READY manifest gate, Milvus+SQLite full visual corpus adapter,
+   filesystem image resolver and Elasticsearch evidence hydrator are implemented
+   for self-indexed TRAKE/VQA integration.
 
 `NEED_RUNTIME_VERIFICATION` still applies to installed encoder/database SDKs,
 running services, actual schemas, stored vectors and Offline-produced records.

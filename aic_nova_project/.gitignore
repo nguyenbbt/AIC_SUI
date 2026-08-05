@@ -43,6 +43,7 @@ preprocessing.log
 
 # Testing
 .pytest_cache/
+.online-test-*.db
 
 # Data and models
 data/

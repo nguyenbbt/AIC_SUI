@@ -55,7 +55,10 @@ from .sqlite_fixture import SQLITE_FIXTURE_SCHEMA_VERSION, create_sqlite_fixture
 from .organizer_fixtures import (
     ORGANIZER_FIXTURE_SCHEMA_VERSION,
     ORGANIZER_FRAME_METADATA,
+    SELF_INDEXED_FIXTURE_SCHEMA_VERSION,
+    SELF_INDEXED_FRAME_METADATA,
     build_organizer_frame_metadata,
+    build_self_indexed_frame_metadata,
 )
 
 __all__ = [
@@ -99,6 +102,8 @@ __all__ = [
     "ORGANIZER_FIXTURE_SCHEMA_VERSION",
     "ORGANIZER_FRAME_METADATA",
     "RuntimeCall",
+    "SELF_INDEXED_FIXTURE_SCHEMA_VERSION",
+    "SELF_INDEXED_FRAME_METADATA",
     "SQLITE_FIXTURE_SCHEMA_VERSION",
     "VLMCall",
     "VisualCorpusCall",
@@ -107,6 +112,7 @@ __all__ = [
     "build_happy_path_advanced_runtime_bundle",
     "build_integration_fixture",
     "build_organizer_frame_metadata",
+    "build_self_indexed_frame_metadata",
     "create_advanced_runtime_bundle",
     "create_sqlite_fixture",
 ]

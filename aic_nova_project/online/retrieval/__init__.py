@@ -17,8 +17,11 @@ from .branches import (
     VisualSemanticBranch,
 )
 from .encoders import (
+    OPENCLIP_MODEL_ID,
     PE_CORE_MODEL_ID,
     VIETNAMESE_MODEL_NAME,
+    VIETNAMESE_MODEL_REVISION,
+    OpenCLIPTextEncoder,
     PECoreTextEncoder,
     VietnameseTextEncoder,
 )
@@ -53,6 +56,8 @@ __all__ = [
     "OCR_LEXICAL_SOURCE_RESOURCE",
     "OCRLexicalBranch",
     "OCRSemanticBranch",
+    "OPENCLIP_MODEL_ID",
+    "OpenCLIPTextEncoder",
     "PE_CORE_MODEL_ID",
     "PECoreTextEncoder",
     "RetrievalExecution",
@@ -64,6 +69,7 @@ __all__ = [
     "SummaryLexicalBranch",
     "SummarySemanticBranch",
     "VIETNAMESE_MODEL_NAME",
+    "VIETNAMESE_MODEL_REVISION",
     "VietnameseTextEncoder",
     "VISUAL_SOURCE_RESOURCE",
     "VisualSemanticBranch",

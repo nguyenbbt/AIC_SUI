@@ -108,7 +108,12 @@ class EvidenceSelector:
         requested_frames = tuple(primary) + neighbors
         requested_ids = tuple(item.frame_id for item in requested_frames)
         expected_frames = {
-            item.frame_id: (item.video_id, item.shot_id, item.timestamp_sec)
+            item.frame_id: (
+                item.video_id,
+                item.shot_id,
+                item.source_frame_idx,
+                item.timestamp_sec,
+            )
             for item in requested_frames
         }
         images_by_frame = self._resolve_images(requested_ids, expected_frames)
@@ -241,7 +246,7 @@ class EvidenceSelector:
     def _resolve_images(
         self,
         requested_ids: Sequence[str],
-        expected_frames: Mapping[str, tuple[str, int, float]],
+        expected_frames: Mapping[str, tuple[str, int, int, float]],
     ) -> Mapping[str, ImageEvidence]:
         images = _call_port(
             stage="images",
@@ -255,7 +260,13 @@ class EvidenceSelector:
                 raise ContractMismatchError("image resolver returned invalid or unrequested evidence")
             if (
                 item.frame_id != key
-                or (item.video_id, item.shot_id, item.timestamp_sec) != expected
+                or (
+                    item.video_id,
+                    item.shot_id,
+                    item.source_frame_idx,
+                    item.timestamp_sec,
+                )
+                != expected
             ):
                 raise ContractMismatchError("resolved image metadata does not match the requested frame")
         return images

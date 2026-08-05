@@ -45,6 +45,7 @@ def test_vqa_internal_route_uses_real_rewrite_and_seven_branch_kis_handoff() -> 
             frame_id=frame.frame_id,
             shot_id=frame.shot_id,
             timestamp_sec=frame.timestamp_sec,
+            source_frame_idx=frame.source_frame_idx,
             image_reference=f"fixture://wave3/{frame.frame_id}",
         )
         for frame in kis_fixture.frames

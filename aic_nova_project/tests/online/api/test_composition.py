@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from online.config import OnlineDataConfig
+from online.config import DatasetResourceConfig, OnlineDataConfig
 from online.domain.enums import RetrievalBranch
 from online.ports.records import FrameMetadata, FrameSearchHit
 from online.testing import (
@@ -74,6 +74,8 @@ def runtime_with_fakes() -> tuple[object, ManagedMilvus, ManagedElasticsearch]:
         video_id="V001",
         shot_id=0,
         timestamp_sec=1.5,
+        source_frame_idx=45,
+        image_rel_path="keyframes/V001/V001_00000_015.jpg",
     )
     milvus = ManagedMilvus(
         visual=(
@@ -87,7 +89,9 @@ def runtime_with_fakes() -> tuple[object, ManagedMilvus, ManagedElasticsearch]:
     )
     elasticsearch = ManagedElasticsearch()
     runtime = build_online_runtime(
-        data_config=OnlineDataConfig(),
+        data_config=OnlineDataConfig(
+            dataset=DatasetResourceConfig(manifest_required=False)
+        ),
         runtime_config=RuntimeCompositionConfig(default_top_k=3, default_timeout_sec=1.0),
         milvus=milvus,
         elasticsearch=elasticsearch,
@@ -114,6 +118,7 @@ class RuntimeCompositionTests(unittest.TestCase):
                 "AIC_ONLINE_RANKING_NORMALIZATION_RRF_K": "17",
                 "AIC_ONLINE_RANKING_QUERY_Q1_WEIGHT": "0.25",
                 "AIC_ONLINE_RANKING_ASR_MAX_FRAMES_PER_INTERVAL": "9",
+                "AIC_ONLINE_TRAKE_ENABLED": "true",
             },
             clear=True,
         ):
@@ -125,6 +130,7 @@ class RuntimeCompositionTests(unittest.TestCase):
         self.assertEqual(config.ranking_policy.normalization_rrf_k, 17)
         self.assertEqual(config.ranking_policy.query_variant_weights["q1"], 0.25)
         self.assertEqual(config.ranking_policy.asr_max_frames_per_interval, 9)
+        self.assertTrue(config.trake_enabled)
         invocation_configs = build_invocation_configs(config)
         self.assertEqual(invocation_configs[(RetrievalBranch.VISUAL_DENSE, "q0")].top_k, 7)
         self.assertEqual(invocation_configs[(RetrievalBranch.OCR_DENSE, "q1")].top_k, 11)
@@ -151,6 +157,8 @@ class RuntimeCompositionTests(unittest.TestCase):
             video_id="V001",
             shot_id=0,
             timestamp_sec=1.5,
+            source_frame_idx=45,
+            image_rel_path="keyframes/V001/V001_00000_015.jpg",
         )
         runtime = build_online_runtime(
             data_config=OnlineDataConfig(),
@@ -230,6 +238,29 @@ class RuntimeCompositionTests(unittest.TestCase):
             with self.subTest(invalid_timeout=invalid_timeout):
                 with self.assertRaises(ValueError):
                     RuntimeCompositionConfig(default_timeout_sec=invalid_timeout)
+
+        with patch.dict(
+            "os.environ",
+            {"AIC_ONLINE_TRAKE_ENABLED": "sometimes"},
+            clear=True,
+        ):
+            with self.assertRaises(ValueError):
+                RuntimeCompositionConfig.from_env()
+
+    def test_vqa_runtime_flag_requires_explicit_vlm(self) -> None:
+        with self.assertRaisesRegex(ValueError, "VLMPort"):
+            build_online_runtime(
+                data_config=OnlineDataConfig(
+                    dataset=DatasetResourceConfig(manifest_required=False)
+                ),
+                runtime_config=RuntimeCompositionConfig(vqa_enabled=True),
+                milvus=ManagedMilvus(),
+                elasticsearch=ManagedElasticsearch(),
+                metadata=FakeMetadataReaderPort(()),
+                object_reader=FakeObjectReaderPort({}),
+                visual_encoder=FakeTextEncoder(),
+                vietnamese_encoder=FakeTextEncoder(),
+            )
 
     def test_advanced_readiness_is_mode_specific_and_does_not_call_vlm(self) -> None:
         runtime, _, _ = runtime_with_fakes()
