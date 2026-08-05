@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import math
+import hashlib
+import json
+import re
+import sqlite3 as audit_sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Any
 
 from pydantic import AfterValidator, Field, PlainSerializer
@@ -22,7 +27,43 @@ from online.domain.errors import DataInfrastructureError, ErrorCode
 from online.domain.identifiers import validate_canonical_frame_id
 
 
-VALIDATOR_VERSION = "4-self-indexed-v2"
+VALIDATOR_VERSION = "5-self-indexed-v2-full-audit"
+
+
+class _ExactDigest:
+    """Exact duplicate detection plus an order-independent bounded digest."""
+
+    _MASK = (1 << 256) - 1
+
+    def __init__(self) -> None:
+        # An empty SQLite filename creates a private temporary on-disk database.
+        self._database = audit_sqlite3.connect("")
+        self._database.execute("CREATE TABLE audit_keys (key TEXT PRIMARY KEY)")
+        self.count = 0
+        self._sum = 0
+        self._xor = 0
+
+    def add(self, values: Sequence[object]) -> None:
+        serialized = json.dumps(
+            list(values), ensure_ascii=False, separators=(",", ":")
+        )
+        try:
+            self._database.execute(
+                "INSERT INTO audit_keys (key) VALUES (?)", (serialized,)
+            )
+        except audit_sqlite3.IntegrityError as exc:
+            raise ValueError(f"duplicate domain key: {serialized}") from exc
+        value = int.from_bytes(hashlib.sha256(serialized.encode("utf-8")).digest())
+        self.count += 1
+        self._sum = (self._sum + value) & self._MASK
+        self._xor ^= value
+
+    @property
+    def signature(self) -> str:
+        return f"{self.count}:{self._sum:064x}:{self._xor:064x}"
+
+    def close(self) -> None:
+        self._database.close()
 
 
 class ValidationStatus(str, Enum):
@@ -63,6 +104,12 @@ class ContractValidationReport(StrictFrozenModel):
         AfterValidator(freeze_mapping),
         PlainSerializer(serialize_mapping, return_type=dict),
     ] = Field(default_factory=dict)
+    actual_counts: Annotated[
+        Mapping[str, Annotated[StrictIntValue, Field(ge=0)]],
+        AfterValidator(freeze_mapping),
+        PlainSerializer(serialize_mapping, return_type=dict),
+    ] = Field(default_factory=dict)
+    audit_scope: NonEmptyStr = "INCOMPLETE"
     generated_at_utc: NonEmptyStr = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
@@ -198,12 +245,24 @@ class OfflineContractValidator:
         manifest_gate: Any | None = None,
         encoder_smoke_vectors: Mapping[str, Callable[[], Sequence[float]]] | None = None,
         sample_size: int = 5,
+        audit_batch_size: int | None = None,
         norm_tolerance: float = 1e-2,
     ) -> None:
         if not isinstance(sample_size, int) or isinstance(sample_size, bool) or sample_size < 1:
             raise ValueError("sample_size must be >= 1")
         if not math.isfinite(norm_tolerance) or norm_tolerance <= 0:
             raise ValueError("norm_tolerance must be finite and > 0")
+        resolved_audit_batch_size = (
+            config.dataset.audit_batch_size
+            if audit_batch_size is None
+            else audit_batch_size
+        )
+        if (
+            not isinstance(resolved_audit_batch_size, int)
+            or isinstance(resolved_audit_batch_size, bool)
+            or resolved_audit_batch_size < 1
+        ):
+            raise ValueError("audit_batch_size must be >= 1")
         self.config = config
         self.milvus = milvus
         self.elasticsearch = elasticsearch
@@ -211,12 +270,15 @@ class OfflineContractValidator:
         self.manifest_gate = manifest_gate
         self.encoder_smoke_vectors = dict(encoder_smoke_vectors or {})
         self.sample_size = sample_size
+        self.audit_batch_size = resolved_audit_batch_size
         self.norm_tolerance = norm_tolerance
         self._checks: list[ContractCheck] = []
         self._dimensions: dict[str, int] = {}
         self._available: dict[str, bool] = {}
         self._samples: dict[str, tuple[Mapping[str, Any], ...]] = {}
         self._sample_counts: dict[str, int] = {}
+        self._actual_counts: dict[str, int] = {}
+        self._full_digests: dict[str, str] = {}
         self._resources_checked: list[str] = []
 
     def _record(
@@ -982,6 +1044,510 @@ class OfflineContractValidator:
             failure="object frame samples do not JOIN metadata",
         )
 
+    @staticmethod
+    def _audit_text(record: Mapping[str, Any], field: str) -> str:
+        value = record.get(field)
+        if (
+            not isinstance(value, str)
+            or not value.strip()
+            or value != value.strip()
+        ):
+            raise ValueError(f"{field} must be canonical non-empty text")
+        return value
+
+    @staticmethod
+    def _audit_int(record: Mapping[str, Any], field: str, *, minimum: int = 0) -> int:
+        value = record.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            raise ValueError(f"{field} must be an integer >= {minimum}")
+        return value
+
+    @staticmethod
+    def _audit_float(
+        record: Mapping[str, Any], field: str, *, minimum: float | None = None
+    ) -> float:
+        value = record.get(field)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{field} must be numeric")
+        result = float(value)
+        if not math.isfinite(result) or (minimum is not None and result < minimum):
+            raise ValueError(f"{field} is outside the contract")
+        return result
+
+    @staticmethod
+    def _audit_relative_path(value: str, field: str) -> str:
+        if "\\" in value:
+            raise ValueError(f"{field} must use POSIX separators")
+        path = PurePosixPath(value)
+        if (
+            path.is_absolute()
+            or value != path.as_posix()
+            or any(part in {"", ".", ".."} for part in path.parts)
+        ):
+            raise ValueError(f"{field} must be a canonical relative POSIX path")
+        return value
+
+    def _verify_dataset_file(self, relative_path: str, *, image: bool) -> None:
+        if self.manifest_gate is None:
+            return
+        root = Path(self.config.dataset.data_root).expanduser().resolve()
+        candidate = (root / Path(*relative_path.split("/"))).resolve()
+        if not candidate.is_relative_to(root) or not candidate.is_file():
+            raise ValueError("dataset artifact is missing or escapes data_root")
+        if image:
+            try:
+                from PIL import Image
+
+                with Image.open(candidate) as opened:
+                    opened.verify()
+            except Exception as exc:
+                raise ValueError("keyframe artifact cannot be decoded") from exc
+        elif candidate.stat().st_size <= 0:
+            raise ValueError("raw video artifact is empty")
+
+    def _validate_full_vector(
+        self, record: Mapping[str, Any], *, resource: str
+    ) -> None:
+        vector = record.get("embedding")
+        dimension = self._dimensions.get(resource)
+        if dimension is None:
+            raise ValueError("collection dimension was not established")
+        if not isinstance(vector, Sequence) or isinstance(vector, (str, bytes)):
+            raise ValueError("embedding must be a numeric sequence")
+        if any(isinstance(value, bool) for value in vector):
+            raise ValueError("embedding must not contain boolean values")
+        try:
+            values = tuple(float(value) for value in vector)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("embedding contains a non-numeric value") from exc
+        norm = math.sqrt(sum(value * value for value in values))
+        if (
+            len(values) != dimension
+            or not all(math.isfinite(value) for value in values)
+            or abs(norm - 1.0) > self.norm_tolerance
+        ):
+            raise ValueError("embedding is non-finite, wrong-sized or not normalized")
+
+    def _scan_full_milvus(
+        self,
+        logical_name: str,
+        resource: str,
+        fields: Mapping[str, str],
+        required: bool,
+    ) -> None:
+        check_name = f"full.milvus.{resource}"
+        availability = f"milvus:{logical_name}"
+        if not self._available.get(availability):
+            self._not_run(
+                check_name,
+                required=required,
+                reason="collection is unavailable for full scan",
+            )
+            return
+
+        digest = _ExactDigest()
+        count = 0
+        try:
+            batches = self.milvus.iter_records(
+                resource,
+                tuple(fields),
+                filter_expression="pk >= 0",
+                batch_size=self.audit_batch_size,
+            )
+            for batch in batches:
+                frame_ids: list[str] = []
+                parsed: list[tuple[Mapping[str, Any], tuple[object, ...]]] = []
+                for record in batch:
+                    if not isinstance(record, Mapping):
+                        raise ValueError("Milvus full scan returned a non-mapping record")
+                    self._validate_full_vector(record, resource=resource)
+                    if logical_name == "visual":
+                        frame_id = self._audit_text(record, "frame_id")
+                        video_id = self._audit_text(record, "video_id")
+                        shot_id = self._audit_int(record, "shot_id")
+                        validate_canonical_frame_id(
+                            frame_id, video_id=video_id, shot_id=shot_id
+                        )
+                        key = (frame_id, video_id, shot_id)
+                        frame_ids.append(frame_id)
+                    elif logical_name == "ocr":
+                        frame_id = self._audit_text(record, "frame_id")
+                        video_id = self._audit_text(record, "video_id")
+                        validate_canonical_frame_id(frame_id, video_id=video_id)
+                        key = (frame_id, video_id)
+                        frame_ids.append(frame_id)
+                    elif logical_name == "asr":
+                        video_id = self._audit_text(record, "video_id")
+                        interval_id = self._audit_text(record, "interval_id")
+                        if re.fullmatch(r"0|[1-9][0-9]*", interval_id) is None:
+                            raise ValueError("interval_id is not canonical")
+                        start = self._audit_float(record, "start_time_sec", minimum=0.0)
+                        end = self._audit_float(record, "end_time_sec", minimum=start)
+                        key = (video_id, interval_id)
+                    else:
+                        video_id = self._audit_text(record, "video_id")
+                        key = (video_id,)
+                    digest.add(key)
+                    parsed.append((record, key))
+                    count += 1
+
+                if logical_name in {"visual", "ocr"}:
+                    metadata = self.sqlite.get_frames_by_ids(frame_ids)
+                    if len(metadata) != len(frame_ids):
+                        raise ValueError("Milvus frame key does not JOIN SQLite metadata")
+                    for record, key in parsed:
+                        frame_id = str(key[0])
+                        row = metadata.get(frame_id)
+                        if row is None or row.video_id != record.get("video_id"):
+                            raise ValueError("Milvus frame metadata differs from SQLite")
+                        if logical_name == "visual" and row.shot_id != record.get("shot_id"):
+                            raise ValueError("Milvus visual shot_id differs from SQLite")
+        finally:
+            signature = digest.signature
+            digest.close()
+
+        manifest_key = {
+            "visual": "visual_features",
+            "ocr": "ocr_features",
+            "asr": "asr_features",
+            "summary": "summary_features",
+        }[logical_name]
+        self._actual_counts[manifest_key] = count
+        self._full_digests[availability] = signature
+        self._record(
+            check_name,
+            ok=count > 0,
+            required=required,
+            success=f"full collection scan passed; count={count}",
+            failure="collection is empty",
+            code=ErrorCode.DIMENSION_MISMATCH,
+        )
+
+    def _scan_full_elasticsearch(
+        self,
+        logical_name: str,
+        resource: str,
+        fields: Mapping[str, str],
+        required: bool,
+    ) -> None:
+        check_name = f"full.elasticsearch.{resource}"
+        availability = f"es:{logical_name}"
+        if not self._available.get(availability):
+            self._not_run(
+                check_name,
+                required=required,
+                reason="index is unavailable for full scan",
+            )
+            return
+
+        digest = _ExactDigest()
+        count = 0
+        try:
+            batches = self.elasticsearch.iter_documents(
+                resource, tuple(fields), batch_size=self.audit_batch_size
+            )
+            for batch in batches:
+                frame_ids: list[str] = []
+                parsed: list[tuple[Mapping[str, Any], tuple[object, ...]]] = []
+                for document in batch:
+                    if not isinstance(document, Mapping):
+                        raise ValueError("Elasticsearch full scan returned an invalid document")
+                    if logical_name == "ocr":
+                        frame_id = self._audit_text(document, "frame_id")
+                        video_id = self._audit_text(document, "video_id")
+                        shot_text = self._audit_text(document, "shot_id")
+                        if re.fullmatch(r"0|[1-9][0-9]*", shot_text) is None:
+                            raise ValueError("OCR shot_id is not canonical")
+                        validate_canonical_frame_id(
+                            frame_id, video_id=video_id, shot_id=int(shot_text)
+                        )
+                        self._audit_text(document, "ocr_text_concat")
+                        key = (frame_id, video_id)
+                        frame_ids.append(frame_id)
+                    elif logical_name == "asr":
+                        video_id = self._audit_text(document, "video_id")
+                        interval_id = self._audit_text(document, "interval_id")
+                        if re.fullmatch(r"0|[1-9][0-9]*", interval_id) is None:
+                            raise ValueError("interval_id is not canonical")
+                        start = self._audit_float(document, "start_time_sec", minimum=0.0)
+                        self._audit_float(document, "end_time_sec", minimum=start)
+                        self._audit_text(document, "cleaned_text")
+                        key = (video_id, interval_id)
+                    else:
+                        video_id = self._audit_text(document, "video_id")
+                        self._audit_text(document, "summary")
+                        key = (video_id,)
+                    digest.add(key)
+                    parsed.append((document, key))
+                    count += 1
+
+                if logical_name == "ocr":
+                    metadata = self.sqlite.get_frames_by_ids(frame_ids)
+                    if len(metadata) != len(frame_ids):
+                        raise ValueError("OCR document does not JOIN SQLite metadata")
+                    for document, key in parsed:
+                        row = metadata.get(str(key[0]))
+                        if (
+                            row is None
+                            or row.video_id != document.get("video_id")
+                            or str(row.shot_id) != document.get("shot_id")
+                        ):
+                            raise ValueError("OCR document metadata differs from SQLite")
+        finally:
+            signature = digest.signature
+            digest.close()
+
+        manifest_key = {
+            "ocr": "ocr_texts",
+            "asr": "asr_transcripts",
+            "summary": "video_summaries",
+        }[logical_name]
+        self._actual_counts[manifest_key] = count
+        self._full_digests[availability] = signature
+        self._record(
+            check_name,
+            ok=count > 0,
+            required=required,
+            success=f"full index scan passed; count={count}",
+            failure="index is empty",
+        )
+
+    def _scan_full_sqlite(
+        self,
+        logical_name: str,
+        table: str,
+        fields: Mapping[str, str],
+        required: bool,
+    ) -> None:
+        check_name = f"full.sqlite.{table}"
+        availability = f"sqlite:{logical_name}"
+        if not self._available.get(availability):
+            self._not_run(
+                check_name,
+                required=required,
+                reason="table is unavailable for full scan",
+            )
+            return
+
+        digest = _ExactDigest()
+        count = 0
+        try:
+            batches = self.sqlite.iter_records(
+                table, tuple(fields), batch_size=self.audit_batch_size
+            )
+            for batch in batches:
+                if logical_name == "videos":
+                    for record in batch:
+                        video_id = self._audit_text(record, "video_id")
+                        relative = self._audit_relative_path(
+                            self._audit_text(record, "source_video_rel_path"),
+                            "source_video_rel_path",
+                        )
+                        self._audit_float(record, "fps", minimum=1e-12)
+                        self._audit_float(record, "duration_sec", minimum=0.0)
+                        self._audit_int(record, "frame_count", minimum=1)
+                        self._audit_int(record, "width", minimum=1)
+                        self._audit_int(record, "height", minimum=1)
+                        self._verify_dataset_file(relative, image=False)
+                        digest.add((video_id,))
+                        count += 1
+                    continue
+
+                frame_ids = [self._audit_text(record, "frame_id") for record in batch]
+                metadata = self.sqlite.get_frames_by_ids(frame_ids)
+                if len(metadata) != len(set(frame_ids)):
+                    raise ValueError("SQLite frame key does not resolve uniquely")
+                video_ids = tuple(dict.fromkeys(row.video_id for row in metadata.values()))
+                videos = self.sqlite.get_videos_by_ids(video_ids)
+                if len(videos) != len(video_ids):
+                    raise ValueError("SQLite frame does not JOIN a video")
+
+                for record in batch:
+                    frame_id = self._audit_text(record, "frame_id")
+                    row = metadata.get(frame_id)
+                    if row is None:
+                        raise ValueError("SQLite frame record does not hydrate")
+                    video = videos.get(row.video_id)
+                    if video is None:
+                        raise ValueError("SQLite frame record has no parent video")
+                    if logical_name == "metadata":
+                        video_id = self._audit_text(record, "video_id")
+                        shot_id = self._audit_int(record, "shot_id")
+                        source_frame_idx = self._audit_int(record, "source_frame_idx")
+                        timestamp = self._audit_float(record, "timestamp", minimum=0.0)
+                        relative = self._audit_relative_path(
+                            self._audit_text(record, "image_rel_path"),
+                            "image_rel_path",
+                        )
+                        validate_canonical_frame_id(
+                            frame_id, video_id=video_id, shot_id=shot_id
+                        )
+                        if (
+                            row.video_id != video_id
+                            or row.shot_id != shot_id
+                            or row.source_frame_idx != source_frame_idx
+                            or source_frame_idx >= video.frame_count
+                            or timestamp > video.duration_sec + max(1.0 / video.fps, 0.05)
+                        ):
+                            raise ValueError("metadata row is outside source video bounds")
+                        self._verify_dataset_file(relative, image=True)
+                        digest.add((frame_id, video_id, shot_id))
+                    else:
+                        label = self._audit_text(record, "label")
+                        confidence = self._audit_float(record, "confidence", minimum=0.0)
+                        x_min = self._audit_float(record, "x_min", minimum=0.0)
+                        y_min = self._audit_float(record, "y_min", minimum=0.0)
+                        x_max = self._audit_float(record, "x_max", minimum=0.0)
+                        y_max = self._audit_float(record, "y_max", minimum=0.0)
+                        if (
+                            label != label.casefold()
+                            or confidence > 1.0
+                            or not x_min < x_max <= video.width
+                            or not y_min < y_max <= video.height
+                        ):
+                            raise ValueError("object row violates label/confidence/bbox contract")
+                        object_id = self._audit_int(record, "id", minimum=1)
+                        digest.add((object_id, frame_id))
+                    count += 1
+        finally:
+            signature = digest.signature
+            digest.close()
+
+        self._actual_counts[logical_name] = count
+        self._full_digests[availability] = signature
+        self._record(
+            check_name,
+            ok=count > 0,
+            required=required,
+            success=f"full table scan passed; count={count}",
+            failure="table is empty",
+        )
+
+    def _compare_full_digest(
+        self,
+        name: str,
+        left: str,
+        right: str,
+        *,
+        required: bool,
+        label: str,
+    ) -> None:
+        if left not in self._full_digests or right not in self._full_digests:
+            self._not_run(name, required=required, reason=f"{label} resources were not fully scanned")
+            return
+        self._record(
+            name,
+            ok=self._full_digests[left] == self._full_digests[right],
+            required=required,
+            success=f"full {label} key sets match",
+            failure=f"full {label} key sets differ",
+        )
+
+    def _validate_manifest_counts(self) -> None:
+        if self.manifest_gate is None:
+            if self.config.dataset.manifest_required:
+                self._not_run(
+                    "full.manifest.record_counts",
+                    required=True,
+                    reason="required manifest is unavailable for count reconciliation",
+                )
+            return
+        expected = dict(self.manifest_gate.manifest.record_counts)
+        missing = sorted(set(expected) - set(self._actual_counts))
+        mismatches = {
+            key: (expected[key], self._actual_counts.get(key))
+            for key in expected
+            if self._actual_counts.get(key) != expected[key]
+        }
+        self._record(
+            "full.manifest.record_counts",
+            ok=not missing and not mismatches,
+            required=True,
+            success="manifest counts equal all fully scanned resources",
+            failure=f"manifest count mismatch; missing={missing}, mismatches={mismatches}",
+        )
+
+    def _validate_full_dataset(self) -> None:
+        milvus_resources = {
+            "visual": self.config.milvus.visual_collection,
+            "ocr": self.config.milvus.ocr_collection,
+            "asr": self.config.milvus.asr_collection,
+            "summary": self.config.milvus.summary_collection,
+        }
+        for logical_name, (fields, required) in self.MILVUS_REQUIREMENTS.items():
+            resource = milvus_resources[logical_name]
+            self._guard(
+                f"full.milvus.{resource}",
+                required,
+                lambda logical_name=logical_name, resource=resource, fields=fields, required=required: self._scan_full_milvus(
+                    logical_name, resource, fields, required
+                ),
+            )
+
+        es_resources = {
+            "ocr": self.config.elasticsearch.ocr_index,
+            "asr": self.config.elasticsearch.asr_index,
+            "summary": self.config.elasticsearch.summary_index,
+        }
+        for logical_name, (fields, required) in self.ES_REQUIREMENTS.items():
+            resource = es_resources[logical_name]
+            self._guard(
+                f"full.elasticsearch.{resource}",
+                required,
+                lambda logical_name=logical_name, resource=resource, fields=fields, required=required: self._scan_full_elasticsearch(
+                    logical_name, resource, fields, required
+                ),
+            )
+
+        sqlite_resources = {
+            "videos": self.config.sqlite.videos_table,
+            "metadata": self.config.sqlite.metadata_table,
+            "objects": self.config.sqlite.objects_table,
+        }
+        for logical_name, (fields, required) in self.SQLITE_REQUIREMENTS.items():
+            table = sqlite_resources[logical_name]
+            self._guard(
+                f"full.sqlite.{table}",
+                required,
+                lambda logical_name=logical_name, table=table, fields=fields, required=required: self._scan_full_sqlite(
+                    logical_name, table, fields, required
+                ),
+            )
+
+        self._compare_full_digest(
+            "full.join.visual_to_metadata",
+            "milvus:visual",
+            "sqlite:metadata",
+            required=True,
+            label="visual/metadata",
+        )
+        self._compare_full_digest(
+            "full.join.ocr_dense_to_lexical",
+            "milvus:ocr",
+            "es:ocr",
+            required=False,
+            label="OCR semantic/lexical",
+        )
+        self._compare_full_digest(
+            "full.join.asr_interval",
+            "milvus:asr",
+            "es:asr",
+            required=False,
+            label="ASR semantic/lexical",
+        )
+        self._compare_full_digest(
+            "full.join.summary_video",
+            "milvus:summary",
+            "es:summary",
+            required=False,
+            label="summary semantic/lexical",
+        )
+        self._guard(
+            "full.manifest.record_counts",
+            True,
+            self._validate_manifest_counts,
+        )
+
     def _validate_encoders(self) -> None:
         resources = (
             ("visual", self.config.milvus.visual_collection, True),
@@ -1050,6 +1616,8 @@ class OfflineContractValidator:
         self._available = {}
         self._samples = {}
         self._sample_counts = {}
+        self._actual_counts = {}
+        self._full_digests = {}
         self._resources_checked = []
 
         if self.manifest_gate is not None:
@@ -1159,6 +1727,7 @@ class OfflineContractValidator:
             ),
             reason="JOIN validation did not complete",
         )
+        self._validate_full_dataset()
         self._validate_encoders()
 
         if any(
@@ -1177,6 +1746,15 @@ class OfflineContractValidator:
         skipped = tuple(
             check.name for check in self._checks if check.status is CheckStatus.NOT_RUN
         )
+        full_checks = tuple(
+            check for check in self._checks if check.name.startswith("full.")
+        )
+        audit_scope = (
+            "FULL"
+            if full_checks
+            and all(check.status is CheckStatus.PASS for check in full_checks)
+            else "INCOMPLETE"
+        )
         return ContractValidationReport(
             status=status,
             checks=tuple(self._checks),
@@ -1184,5 +1762,7 @@ class OfflineContractValidator:
             resources_checked=tuple(self._resources_checked),
             checks_skipped=skipped,
             sample_counts=dict(self._sample_counts),
+            actual_counts=dict(self._actual_counts),
+            audit_scope=audit_scope,
             generated_at_utc=datetime.now(timezone.utc).isoformat(),
         )

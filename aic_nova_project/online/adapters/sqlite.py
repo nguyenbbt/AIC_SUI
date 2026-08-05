@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import sqlite3
 import threading
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 
 from online.config import SQLiteResourceConfig
@@ -392,3 +392,66 @@ class SQLiteReadAdapter:
                 ).fetchall(),
             )
         return tuple({field: row[field] for field in fields} for row in rows)
+
+    def iter_records(
+        self,
+        table_name: str,
+        fields: Sequence[str],
+        *,
+        batch_size: int,
+    ) -> Iterable[tuple[Mapping[str, object], ...]]:
+        """Stream a managed table in stable rowid order without unbounded memory."""
+
+        if table_name not in {
+            self.config.videos_table,
+            self.config.metadata_table,
+            self.config.objects_table,
+        }:
+            raise InvalidQueryError("table is not managed by the Online adapter")
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+            raise InvalidQueryError("batch_size must be a positive integer")
+        if isinstance(fields, (str, bytes)) or not fields or any(
+            not isinstance(field, str)
+            or not field.strip()
+            or field != field.strip()
+            for field in fields
+        ):
+            raise InvalidQueryError("fields must contain non-empty field names")
+        columns = self.table_columns(table_name)
+        if any(field not in columns for field in fields):
+            raise ContractMismatchError("Requested audit field is missing from SQLite table")
+        selected = ", ".join(self._quote_identifier(field) for field in fields)
+        table = self._quote_identifier(table_name)
+
+        def generate() -> Iterable[tuple[Mapping[str, object], ...]]:
+            last_rowid = 0
+            while True:
+                with self._lock:
+                    rows = call_backend(
+                        "iter_records",
+                        "sqlite",
+                        lambda last_rowid=last_rowid: self._conn().execute(
+                            f"SELECT rowid AS _audit_rowid, {selected} FROM {table} "
+                            "WHERE rowid > ? ORDER BY rowid ASC LIMIT ?",
+                            (last_rowid, batch_size),
+                        ).fetchall(),
+                    )
+                if not rows:
+                    break
+                batch = tuple(
+                    {field: row[field] for field in fields}
+                    for row in rows
+                )
+                if not batch:
+                    raise ContractMismatchError("SQLite audit iterator returned an empty batch")
+                next_rowid = rows[-1]["_audit_rowid"]
+                if (
+                    isinstance(next_rowid, bool)
+                    or not isinstance(next_rowid, int)
+                    or next_rowid <= last_rowid
+                ):
+                    raise ContractMismatchError("SQLite audit rowid did not advance")
+                last_rowid = next_rowid
+                yield batch
+
+        return generate()

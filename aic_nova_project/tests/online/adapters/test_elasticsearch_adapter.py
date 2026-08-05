@@ -21,6 +21,8 @@ class FakeClient:
         self.response = {"hits": {"hits": []}}
         self.last_call = None
         self.error = None
+        self.scroll_responses = []
+        self.cleared_scroll_id = None
 
     def search(self, **kwargs):
         if self.error:
@@ -30,6 +32,14 @@ class FakeClient:
 
     def ping(self):
         return True
+
+    def scroll(self, **kwargs):
+        self.last_call = kwargs
+        return self.scroll_responses.pop(0)
+
+    def clear_scroll(self, **kwargs):
+        self.cleared_scroll_id = kwargs["scroll_id"]
+        return {"succeeded": True}
 
 
 class ElasticsearchAdapterTests(unittest.TestCase):
@@ -154,6 +164,31 @@ class ElasticsearchAdapterTests(unittest.TestCase):
         }
         with self.assertRaises(ContractMismatchError):
             self.adapter.search_summary("hello", 1)
+
+    def test_full_document_iterator_uses_bounded_scroll_and_cleans_up(self) -> None:
+        self.client.response = {
+            "_scroll_id": "scroll-1",
+            "hits": {"hits": [{"_source": {"video_id": "V1"}}]},
+        }
+        self.client.scroll_responses = [
+            {
+                "_scroll_id": "scroll-1",
+                "hits": {"hits": [{"_source": {"video_id": "V2"}}]},
+            },
+            {"_scroll_id": "scroll-1", "hits": {"hits": []}},
+        ]
+
+        batches = tuple(
+            self.adapter.iter_documents(
+                "video_summaries", ("video_id",), batch_size=1
+            )
+        )
+
+        self.assertEqual(
+            [record["video_id"] for batch in batches for record in batch],
+            ["V1", "V2"],
+        )
+        self.assertEqual(self.client.cleared_scroll_id, "scroll-1")
 
 
 if __name__ == "__main__":

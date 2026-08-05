@@ -38,6 +38,7 @@ class ConfigLifecycleTests(unittest.TestCase):
                 "AIC_ONLINE_SQLITE_BATCH_SIZE": "100",
                 "AIC_ONLINE_DATASET_EXPECTED_FINGERPRINT": "sha256:" + "a" * 64,
                 "AIC_ONLINE_DATASET_MANIFEST_REQUIRED": "true",
+                "AIC_ONLINE_DATASET_AUDIT_BATCH_SIZE": "250",
             },
             clear=False,
         ):
@@ -47,6 +48,7 @@ class ConfigLifecycleTests(unittest.TestCase):
         self.assertEqual(config.sqlite.batch_size, 100)
         self.assertEqual(config.dataset.expected_fingerprint, "sha256:" + "a" * 64)
         self.assertTrue(config.dataset.manifest_required)
+        self.assertEqual(config.dataset.audit_batch_size, 250)
         with self.assertRaises(ValidationError):
             SQLiteResourceConfig(metadata_table="metadata; DROP TABLE objects")
         with patch.dict(

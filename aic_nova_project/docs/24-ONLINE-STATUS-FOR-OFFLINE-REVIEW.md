@@ -4,7 +4,7 @@ Ngày cập nhật: 2026-08-05
 
 Online branch: `feature/online-phase-Knguyen`
 
-Online commit: `8b42297`
+Online revision: commit mới nhất trên `feature/online-phase-Knguyen`
 
 Contract áp dụng: `self-indexed-v2`
 
@@ -28,7 +28,7 @@ File này dùng để nhóm Offline:
 
 ```text
 ONLINE_CODE_READY_FOR_OFFLINE_HANDOFF = YES
-ONLINE_SDK_FREE_TESTS                 = PASS (492)
+ONLINE_SDK_FREE_TESTS                 = PASS (500)
 OFFLINE_REAL_DATA_RECEIVED            = NO
 REAL_DATABASES_VERIFIED               = NO
 REAL_MODEL_COMPATIBILITY_VERIFIED     = NO
@@ -186,6 +186,11 @@ Secrets không được ghi vào manifest, Markdown hoặc Git.
   không trộn hai dataset version.
 - `python -m online.validate_contract --fail-on-partial` hỗ trợ kiểm tra read-only
   manifest, SQLite, Milvus và Elasticsearch.
+- Validator full-scan theo batch, không tải toàn dataset vào RAM.
+- Mọi vector/key/path được kiểm tra; duplicate domain key bị từ chối.
+- Complete key sets được so bằng deterministic digest có exact duplicate gate.
+- Count thật của 10 resource được đối chiếu với `manifest.record_counts`.
+- Sample checks chỉ là diagnostics và không thể tạo `audit_scope=FULL`.
 
 ### 4.7 KIS retrieval và ranking
 
@@ -258,7 +263,7 @@ submit/update semantics. Đây là transport layer, không ảnh hưởng Offlin
 
 ## 5. Bằng chứng kiểm thử Online
 
-Tại commit `8b42297`, các lệnh sau đã chạy thành công:
+Tại revision full-audit mới nhất trên branch Online, các lệnh sau đã chạy thành công:
 
 ```powershell
 python -m compileall -q online query_understanding retrieval_api
@@ -270,7 +275,7 @@ Kết quả:
 
 ```text
 compileall       PASS
-Online tests     492 passed, 2 warnings
+Online tests     500 passed, 2 warnings
 diff check       PASS
 ```
 

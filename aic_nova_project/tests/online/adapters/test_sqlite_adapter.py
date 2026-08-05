@@ -132,6 +132,24 @@ class SQLiteAdapterTests(unittest.TestCase):
             {"frame_id", "video_id", "shot_id", "source_frame_idx", "timestamp", "image_rel_path"},
         )
 
+    def test_full_record_iterator_is_bounded_and_complete(self) -> None:
+        batches = tuple(
+            self.adapter.iter_records(
+                "metadata", ("frame_id", "source_frame_idx"), batch_size=2
+            )
+        )
+        self.assertEqual([len(batch) for batch in batches], [2, 1])
+        self.assertEqual(
+            {record["frame_id"] for batch in batches for record in batch},
+            {"V001_00000_015", "V001_00000_050", "V001_00001_050"},
+        )
+        with self.assertRaises(InvalidQueryError):
+            tuple(
+                self.adapter.iter_records(
+                    "metadata", ("frame_id",), batch_size=0
+                )
+            )
+
     def test_invalid_object_and_metadata_rows_translate_to_contract_error(self) -> None:
         connection = self.adapter._conn()
         connection.execute("PRAGMA query_only=OFF")

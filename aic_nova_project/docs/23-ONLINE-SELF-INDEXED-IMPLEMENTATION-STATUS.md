@@ -127,8 +127,10 @@ Nguồn chuẩn: `docs/22-OFFLINE-TO-ONLINE-DATA-CONTRACT-SELF-INDEXED-V2.md`.
 - `DatasetManifestGate` pin dataset ID/fingerprint khi startup.
 - Phát hiện manifest đổi sau startup và yêu cầu restart.
 - Production bắt buộc bật manifest gate và cấu hình expected fingerprint.
-- `online.validate_contract` kiểm tra manifest cùng SQLite, Milvus và
-  Elasticsearch bằng read-only operations.
+- `online.validate_contract` full-scan SQLite, Milvus và Elasticsearch bằng
+  read-only operations theo batch; kiểm tra toàn bộ vector/key/path, phát hiện
+  duplicate domain key, so complete key-set digest và đối chiếu 10 count thật
+  với READY manifest. Sample chỉ còn phục vụ diagnostics.
 
 ### 3.6 Submission logical serializers
 
@@ -163,7 +165,7 @@ python -m pytest -p no:cacheprovider --import-mode=importlib tests/online -q
 Kết quả:
 
 ```text
-492 passed, 2 warnings
+500 passed, 2 warnings
 ```
 
 Hai warning là Starlette deprecation cho tên constant HTTP 422; không phải test
@@ -297,7 +299,7 @@ Offline chạy khác nhau.
 
 ```text
 ONLINE_CODE_READY_FOR_OFFLINE_HANDOFF = YES
-SDK_FREE_ONLINE_TESTS                 = PASS (492)
+SDK_FREE_ONLINE_TESTS                 = PASS (500)
 REAL_DATA_VERIFIED                    = NO
 PRODUCTION_VLM_SELECTED               = NO
 BTC_LOGICAL_ANSWER_FORMAT_KNOWN       = YES

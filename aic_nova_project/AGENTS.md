@@ -666,6 +666,10 @@ Online suite:
 8. A strict READY manifest gate, Milvus+SQLite full visual corpus adapter,
    filesystem image resolver and Elasticsearch evidence hydrator are implemented
    for self-indexed TRAKE/VQA integration.
+9. The read-only contract validator performs bounded full-resource scans,
+   exact duplicate detection, complete key-set digest comparison and actual
+   count reconciliation against the READY manifest. Sample checks are diagnostic
+   only and cannot produce `audit_scope=FULL`.
 
 `NEED_RUNTIME_VERIFICATION` still applies to installed encoder/database SDKs,
 running services, actual schemas, stored vectors and Offline-produced records.

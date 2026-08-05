@@ -49,19 +49,25 @@ $env:AIC_ONLINE_SQLITE_VIDEOS_TABLE = "videos"
 $env:AIC_ONLINE_DATASET_MANIFEST_PATH = "data\dataset-manifest.json"
 $env:AIC_ONLINE_DATA_ROOT = "data"
 $env:AIC_ONLINE_DATASET_EXPECTED_FINGERPRINT = "sha256:<fingerprint-from-offline>"
+$env:AIC_ONLINE_DATASET_AUDIT_BATCH_SIZE = "500"
 python -m online.validate_contract
 python -m online.validate_contract --fail-on-partial
 ```
 
-The validator is read-only. It reports `FAIL` when the required visual/metadata
-contract or visual encoder smoke check is missing, `PARTIAL` when optional
-resources/checks are unavailable, and `PASS` only after every executed required
-check succeeds. Encoder smoke factories can be injected through the Python
+The validator is read-only. It performs bounded full scans of SQLite, Milvus
+and Elasticsearch, verifies every indexed vector/key/path, detects duplicate
+domain keys with a temporary disk-backed exact set, compares complete key-set
+digests, and reconciles all ten actual counts with the READY manifest. Sampled
+checks remain diagnostics only and cannot produce a full `PASS`. It reports
+`FAIL` when the required visual/metadata/manifest contract or visual encoder
+smoke check is missing, `PARTIAL` when optional resources/checks are
+unavailable, and `PASS` only when `audit_scope=FULL`. Encoder smoke factories
+can be injected through the Python
 `OfflineContractValidator(..., encoder_smoke_vectors={...})` API; they are not
 loaded implicitly by the CLI.
 
 Runtime status remains `NEED_RUNTIME_VERIFICATION` until Milvus,
-Elasticsearch, SQLite, encoder dimensions/norms, canonical JOIN samples, and a
+Elasticsearch, SQLite, encoder dimensions/norms, complete canonical JOINs, and a
 real visual-to-frame vertical slice have all been checked.
 
 Unit tests intentionally do not prove SDK/service/model compatibility. Runtime

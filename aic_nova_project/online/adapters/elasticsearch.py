@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import re
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Callable
 
 from online.config import ElasticsearchResourceConfig
@@ -398,6 +398,86 @@ class ElasticsearchSearchAdapter:
                 ),
             )
         return self._extract_sources(response, "sample")
+
+    def iter_documents(
+        self,
+        index: str,
+        source_fields: Sequence[str],
+        *,
+        batch_size: int,
+    ) -> Iterable[tuple[Mapping[str, Any], ...]]:
+        """Stream every document through Elasticsearch's bounded scroll API."""
+
+        self._validate_lookup(source_fields, batch_size)
+        if not isinstance(index, str) or not index.strip() or index != index.strip():
+            raise InvalidQueryError("index must be a canonical string")
+
+        def generate() -> Iterable[tuple[Mapping[str, Any], ...]]:
+            scroll_id: str | None = None
+            with self._read_guard.read():
+                try:
+                    response = call_backend(
+                        "iter_documents",
+                        index,
+                        lambda: self._get_client().search(
+                            index=index,
+                            body={
+                                "size": batch_size,
+                                "_source": list(source_fields),
+                                "query": {"match_all": {}},
+                                "sort": ["_doc"],
+                            },
+                            scroll="2m",
+                            request_timeout=self.config.timeout_sec,
+                        ),
+                    )
+                    while True:
+                        if not isinstance(response, Mapping):
+                            raise ContractMismatchError(
+                                "Elasticsearch scroll response is invalid"
+                            )
+                        candidate_scroll_id = response.get("_scroll_id")
+                        if candidate_scroll_id is not None:
+                            if not isinstance(candidate_scroll_id, str) or not candidate_scroll_id:
+                                raise ContractMismatchError(
+                                    "Elasticsearch scroll ID is invalid"
+                                )
+                            scroll_id = candidate_scroll_id
+                        batch = self._extract_sources(response, "scroll")
+                        if not batch:
+                            break
+                        yield batch
+                        if scroll_id is None:
+                            if len(batch) >= batch_size:
+                                raise ContractMismatchError(
+                                    "Elasticsearch full scan ended without a scroll ID"
+                                )
+                            break
+                        response = call_backend(
+                            "iter_documents",
+                            index,
+                            lambda scroll_id=scroll_id: self._get_client().scroll(
+                                scroll_id=scroll_id,
+                                scroll="2m",
+                                request_timeout=self.config.timeout_sec,
+                            ),
+                        )
+                finally:
+                    if scroll_id is not None:
+                        try:
+                            call_backend(
+                                "clear_scroll",
+                                index,
+                                lambda: self._get_client().clear_scroll(
+                                    scroll_id=scroll_id,
+                                    request_timeout=self.config.timeout_sec,
+                                ),
+                            )
+                        except Exception:
+                            # Cleanup failure must not hide the primary audit result.
+                            pass
+
+        return generate()
 
     def find_documents(
         self,

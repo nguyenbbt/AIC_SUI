@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from PIL import Image
 
 from online.adapters.contract_validator import (
     CheckStatus,
@@ -8,6 +12,7 @@ from online.adapters.contract_validator import (
     ValidationStatus,
 )
 from online.config import DatasetResourceConfig, OnlineDataConfig
+from online.domain.manifest import DatasetManifest
 from online.ports.records import FrameMetadata, VideoMetadata
 
 
@@ -37,6 +42,14 @@ class FakeMilvusInspector:
             {field: record[field] for field in output_fields}
             for record in self.records[name][:limit]
         )
+
+    def iter_records(self, name, output_fields, *, filter_expression, batch_size):
+        del filter_expression
+        for start in range(0, len(self.records[name]), batch_size):
+            yield tuple(
+                {field: record[field] for field in output_fields}
+                for record in self.records[name][start : start + batch_size]
+            )
 
 
 class FakeElasticsearchInspector:
@@ -72,6 +85,13 @@ class FakeElasticsearchInspector:
             {field: document[field] for field in source_fields}
             for document in self.documents[name][:limit]
         )
+
+    def iter_documents(self, name, source_fields, *, batch_size):
+        for start in range(0, len(self.documents[name]), batch_size):
+            yield tuple(
+                {field: document[field] for field in source_fields}
+                for document in self.documents[name][start : start + batch_size]
+            )
 
     def find_documents(self, name, filters, source_fields, limit=2):
         return tuple(
@@ -110,11 +130,27 @@ class FakeSQLiteInspector:
     def sample_records(self, table, fields, limit):
         return tuple({field: row[field] for field in fields} for row in self.rows.get(table, ())[:limit])
 
+    def iter_records(self, table, fields, *, batch_size):
+        records = self.rows.get(table, ())
+        for start in range(0, len(records), batch_size):
+            yield tuple(
+                {field: row[field] for field in fields}
+                for row in records[start : start + batch_size]
+            )
+
     def get_frames_by_ids(self, frame_ids):
         return {frame_id: self.metadata[frame_id] for frame_id in frame_ids if frame_id in self.metadata}
 
     def get_videos_by_ids(self, video_ids):
         return {video_id: self.videos[video_id] for video_id in video_ids if video_id in self.videos}
+
+
+class FakeManifestGate:
+    def __init__(self, manifest: DatasetManifest) -> None:
+        self.manifest = manifest
+
+    def health_check(self) -> None:
+        return None
 
 
 class ContractValidatorTests(unittest.TestCase):
@@ -123,19 +159,61 @@ class ContractValidatorTests(unittest.TestCase):
         self.es = FakeElasticsearchInspector()
         self.sqlite = FakeSQLiteInspector()
 
-    def validator(self):
+    def validator(
+        self,
+        *,
+        config: OnlineDataConfig | None = None,
+        manifest_gate=None,
+        sample_size: int = 5,
+    ):
         return OfflineContractValidator(
-            OnlineDataConfig(dataset=DatasetResourceConfig(manifest_required=False)),
+            config
+            or OnlineDataConfig(
+                dataset=DatasetResourceConfig(manifest_required=False)
+            ),
             milvus=self.milvus,
             elasticsearch=self.es,
             sqlite=self.sqlite,
+            manifest_gate=manifest_gate,
             encoder_smoke_vectors={
                 "visual_features": lambda: (1.0, 0.0),
                 "ocr_features": lambda: (1.0, 0.0),
                 "asr_features": lambda: (1.0, 0.0),
                 "summary_features": lambda: (1.0, 0.0),
             },
+            sample_size=sample_size,
         )
+
+    def add_second_frame(self) -> str:
+        frame_id = "V1_00001_050"
+        metadata = FrameMetadata(
+            frame_id=frame_id,
+            video_id="V1",
+            shot_id=1,
+            source_frame_idx=45,
+            timestamp_sec=1.5,
+            image_rel_path=f"keyframes/V1/{frame_id}.jpg",
+        )
+        self.sqlite.metadata[frame_id] = metadata
+        self.sqlite.rows["metadata"].append(
+            {
+                "frame_id": frame_id,
+                "video_id": "V1",
+                "shot_id": 1,
+                "source_frame_idx": 45,
+                "timestamp": 1.5,
+                "image_rel_path": metadata.image_rel_path,
+            }
+        )
+        self.milvus.records["visual_features"].append(
+            {
+                "frame_id": frame_id,
+                "video_id": "V1",
+                "shot_id": 1,
+                "embedding": [1.0, 0.0],
+            }
+        )
+        return frame_id
 
     def test_pass_for_consistent_complete_fixture(self) -> None:
         report = self.validator().validate()
@@ -143,6 +221,8 @@ class ContractValidatorTests(unittest.TestCase):
         self.assertEqual(report.dimensions["visual_features"], 2)
         self.assertIn("milvus:visual_features", report.resources_checked)
         self.assertEqual(report.sample_counts["milvus:visual"], 1)
+        self.assertEqual(report.actual_counts["visual_features"], 1)
+        self.assertEqual(report.audit_scope, "FULL")
         self.assertEqual(report.checks_skipped, ())
 
     def test_fail_for_core_frame_id_contract_mismatch(self) -> None:
@@ -205,6 +285,31 @@ class ContractValidatorTests(unittest.TestCase):
         self.assertEqual(smoke.status.value, "NOT_RUN")
         self.assertIn("encoder.visual_features", report.checks_skipped)
 
+    def test_required_manifest_missing_blocks_full_audit_scope(self) -> None:
+        validator = OfflineContractValidator(
+            OnlineDataConfig(),
+            milvus=self.milvus,
+            elasticsearch=self.es,
+            sqlite=self.sqlite,
+            encoder_smoke_vectors={
+                "visual_features": lambda: (1.0, 0.0),
+                "ocr_features": lambda: (1.0, 0.0),
+                "asr_features": lambda: (1.0, 0.0),
+                "summary_features": lambda: (1.0, 0.0),
+            },
+        )
+
+        report = validator.validate()
+
+        check = next(
+            check
+            for check in report.checks
+            if check.name == "full.manifest.record_counts"
+        )
+        self.assertEqual(check.status, CheckStatus.NOT_RUN)
+        self.assertEqual(report.status, ValidationStatus.FAIL)
+        self.assertEqual(report.audit_scope, "INCOMPLETE")
+
     def test_partial_when_optional_resource_is_missing(self) -> None:
         del self.milvus.records["ocr_features"]
         report = self.validator().validate()
@@ -242,6 +347,128 @@ class ContractValidatorTests(unittest.TestCase):
             checks["encoder.visual_features"].status,
             CheckStatus.NOT_RUN,
         )
+
+    def test_full_scan_finds_invalid_vector_after_clean_sample(self) -> None:
+        self.add_second_frame()
+        self.milvus.records["visual_features"][-1]["embedding"] = [0.0, 0.0]
+
+        report = self.validator(sample_size=1).validate()
+
+        checks = {check.name: check for check in report.checks}
+        self.assertEqual(
+            checks["milvus.visual_features.vector_norm"].status,
+            CheckStatus.PASS,
+        )
+        self.assertEqual(
+            checks["full.milvus.visual_features"].status,
+            CheckStatus.FAIL,
+        )
+        self.assertEqual(report.status, ValidationStatus.FAIL)
+        self.assertEqual(report.audit_scope, "INCOMPLETE")
+
+    def test_full_digest_detects_equal_count_different_ocr_key_sets(self) -> None:
+        second = self.add_second_frame()
+        self.es.documents["ocr_texts"] = [
+            {
+                "frame_id": second,
+                "video_id": "V1",
+                "shot_id": "1",
+                "ocr_text_concat": "different frame",
+            }
+        ]
+
+        report = self.validator(sample_size=1).validate()
+
+        check = next(
+            check
+            for check in report.checks
+            if check.name == "full.join.ocr_dense_to_lexical"
+        )
+        self.assertEqual(check.status, CheckStatus.WARNING)
+        self.assertEqual(report.status, ValidationStatus.PARTIAL)
+
+    def test_full_scan_rejects_duplicate_domain_key(self) -> None:
+        self.milvus.records["visual_features"].append(
+            dict(self.milvus.records["visual_features"][0])
+        )
+
+        report = self.validator(sample_size=1).validate()
+
+        check = next(
+            check
+            for check in report.checks
+            if check.name == "full.milvus.visual_features"
+        )
+        self.assertEqual(check.status, CheckStatus.FAIL)
+        self.assertIn("check could not complete", check.message)
+
+    def test_missing_full_scan_capability_cannot_report_pass(self) -> None:
+        self.milvus.iter_records = None
+
+        report = self.validator().validate()
+
+        self.assertEqual(report.status, ValidationStatus.FAIL)
+        self.assertEqual(report.audit_scope, "INCOMPLETE")
+
+    def test_manifest_counts_are_compared_with_actual_full_scan_counts(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "videos").mkdir()
+            (root / "videos" / "V1.mp4").write_bytes(b"video")
+            image_path = root / "keyframes" / "V1" / "V1_00000_050.jpg"
+            image_path.parent.mkdir(parents=True)
+            Image.new("RGB", (2, 2), color="white").save(image_path)
+            counts = {
+                "videos": 1,
+                "metadata": 1,
+                "objects": 2,
+                "visual_features": 1,
+                "ocr_features": 1,
+                "asr_features": 1,
+                "summary_features": 1,
+                "ocr_texts": 1,
+                "asr_transcripts": 1,
+                "video_summaries": 1,
+            }
+            manifest = DatasetManifest.model_validate(
+                {
+                    "contract_version": "self-indexed-v2",
+                    "dataset_id": "fixture-run",
+                    "dataset_fingerprint": "sha256:" + "a" * 64,
+                    "status": "READY",
+                    "frame_index_base": 0,
+                    "bbox_space": "absolute_pixel_xyxy",
+                    "visual_model_id": "ViT-B-32::openai",
+                    "visual_dimension": 512,
+                    "visual_normalized": True,
+                    "text_model_name": "dangvantuan/vietnamese-embedding",
+                    "text_model_revision": "4ab46e46ba5902328ba0742e489e75f787932f2b",
+                    "text_dimension": 768,
+                    "text_max_length": 256,
+                    "record_counts": counts,
+                    "created_at_utc": "2026-08-05T00:00:00Z",
+                }
+            )
+            config = OnlineDataConfig(
+                dataset=DatasetResourceConfig(
+                    data_root=root,
+                    manifest_required=True,
+                )
+            )
+
+            report = self.validator(
+                config=config,
+                manifest_gate=FakeManifestGate(manifest),
+            ).validate()
+
+        check = next(
+            check
+            for check in report.checks
+            if check.name == "full.manifest.record_counts"
+        )
+        self.assertEqual(check.status, CheckStatus.FAIL)
+        self.assertEqual(report.actual_counts["objects"], 1)
+        self.assertEqual(report.status, ValidationStatus.FAIL)
 
 
 if __name__ == "__main__":

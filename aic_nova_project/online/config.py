@@ -62,6 +62,7 @@ class DatasetResourceConfig(StrictFrozenModel):
     expected_contract_version: NonEmptyStr = "self-indexed-v2"
     expected_fingerprint: str | None = None
     manifest_required: bool = True
+    audit_batch_size: StrictIntValue = Field(default=500, ge=1, le=10_000)
 
     @field_validator("expected_fingerprint")
     @classmethod
@@ -136,5 +137,6 @@ class OnlineDataConfig(StrictFrozenModel):
                     str(env("DATASET_EXPECTED_FINGERPRINT", "")).strip() or None
                 ),
                 manifest_required=as_bool(env("DATASET_MANIFEST_REQUIRED", True)),
+                audit_batch_size=int(env("DATASET_AUDIT_BATCH_SIZE", 500)),
             ),
         )
