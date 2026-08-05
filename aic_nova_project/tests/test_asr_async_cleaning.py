@@ -43,6 +43,7 @@ def test_process_video_can_clean_inside_running_event_loop(
 
     llm = MagicMock()
     llm.clean.return_value = "cleaned"
+    llm.summarize.return_value = "updated summary"
     mock_llm_class.return_value = llm
     pipeline = ASRTranscriptPipeline(
         video_dir=str(video_dir),

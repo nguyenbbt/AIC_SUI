@@ -87,5 +87,44 @@ def test_segment_grouper_none_end():
         {"timestamp": (0.0, 2.0), "text": "A"},
         {"timestamp": (2.0, None), "text": "B"},
     ]
-    intervals = SegmentGrouper.group_segments(segments, group_size=2)
-    assert intervals[0]["end_time_sec"] == 4.0 # fallback is start_time + 2.0
+
+    with pytest.raises(ValueError, match="timestamp"):
+        SegmentGrouper.group_segments(segments, group_size=2)
+
+
+def test_segment_grouper_rejects_missing_start_timestamp():
+    segments = [
+        {"timestamp": (None, 2.0), "text": "A"},
+    ]
+
+    with pytest.raises(ValueError, match="timestamp"):
+        SegmentGrouper.group_segments(segments)
+
+
+def test_segment_grouper_builds_time_bounded_intervals():
+    segments = [
+        {"timestamp": (0.0, 12.0), "text": "A"},
+        {"timestamp": (12.0, 25.0), "text": "B"},
+        {"timestamp": (25.0, 43.0), "text": "C"},
+        {"timestamp": (43.0, 59.0), "text": "D"},
+        {"timestamp": (59.0, 78.0), "text": "E"},
+        {"timestamp": (78.0, 95.0), "text": "F"},
+    ]
+
+    intervals = SegmentGrouper.group_segments(
+        segments,
+        min_duration_sec=20.0,
+        target_duration_sec=40.0,
+        max_duration_sec=60.0,
+    )
+
+    assert [(item["start_time_sec"], item["end_time_sec"]) for item in intervals] == [
+        (0.0, 43.0),
+        (43.0, 95.0),
+    ]
+    assert intervals[0]["segment_ids"] == [0, 1, 2]
+    assert intervals[1]["segment_ids"] == [3, 4, 5]
+    assert all(
+        20.0 <= item["end_time_sec"] - item["start_time_sec"] <= 60.0
+        for item in intervals
+    )

@@ -30,8 +30,12 @@ def _write_cached_transcripts(output_dir: Path) -> None:
                 "intervals": [
                     {
                         "interval_id": "0",
+                        "start_time_sec": 0.0,
+                        "end_time_sec": 1.0,
                         "raw_text": "raw",
                         "cleaned_text": "cleaned",
+                        "cleaning_failed": False,
+                        "segment_ids": [0],
                     }
                 ],
             }

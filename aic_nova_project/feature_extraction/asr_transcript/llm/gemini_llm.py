@@ -5,6 +5,7 @@ from google import genai
 from google.genai import types
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 from .base import TranscriptLLM
+from .cleaning_prompt import build_cleaning_prompt
 from .summary_prompt import (
     build_summary_prompt,
     validate_summary_contract,
@@ -53,15 +54,7 @@ class GeminiTranscriptLLM(TranscriptLLM):
         if not raw_text.strip():
             return ""
             
-        prompt = (
-            "You are an expert Vietnamese transcriber and editor. Your task is to clean up a noisy "
-            "ASR (Automatic Speech Recognition) transcript. Fix typos, add missing punctuation, "
-            "and correct grammatical errors while preserving the original meaning and conversational tone.\n\n"
-        )
-        if context:
-            prompt += f"Context from previous sentences: {context}\n\n"
-            
-        prompt += f"Raw ASR Text to clean:\n{raw_text}"
+        prompt = build_cleaning_prompt(raw_text, context)
         
         try:
             response = self.client.models.generate_content(

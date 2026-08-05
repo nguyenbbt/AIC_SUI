@@ -80,7 +80,8 @@ python -m feature_extraction.asr_transcript.cli `
 ## Options
 - `--llm-provider`: Choose `gemini` (default), `azure`, or `local` (offline).
 - `--whisper-size`: `tiny`, `small`, `medium` (default), `large`.
-- `--group-size`: Number of ASR segments to group into a single cleaning interval (default: 5).
+- `--min-interval-sec`, `--target-interval-sec`, `--max-interval-sec`: Time-based cleaning interval boundaries (defaults: 20/40/60 seconds). Boundaries always come from real ASR/caption timestamps.
+- `--group-size`: Optional legacy fixed segment count. Omit it to use the recommended time-based grouping.
 - `--concurrency`: Number of parallel LLM calls (default: 10).
 - `--summary-chunk-chars`: Maximum transcript characters sent in one
   hierarchical summary request (default: 12000).

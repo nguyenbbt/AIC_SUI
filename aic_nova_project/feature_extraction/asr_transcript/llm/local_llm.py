@@ -3,6 +3,7 @@ import torch
 import re
 from transformers import pipeline
 from .base import TranscriptLLM
+from .cleaning_prompt import build_cleaning_prompt
 from .summary_prompt import (
     SummaryContractError,
     SUMMARY_SYSTEM_PROMPT,
@@ -77,30 +78,25 @@ class LocalTranscriptLLM(TranscriptLLM):
             val = match.group(1).replace('\\"', '"').replace('\\n', '\n')
             return val
             
-        # If all parsing fails, return the raw text generated (hoping it's just the answer)
-        return text.strip()
+        raise ValueError(f"Model output does not contain JSON field {field_name!r}")
 
     def clean(self, raw_text: str, context: str = "") -> str:
         if not raw_text.strip():
             return ""
             
-        system_prompt = (
-            "You are an expert Vietnamese transcriber. Clean the noisy ASR text. "
-            "Fix typos, add punctuation. Output ONLY valid JSON with a single key 'cleaned_text'."
-        )
-        
-        user_prompt = f"Raw text: {raw_text}\n"
-        if context:
-            user_prompt = f"Context: {context}\n" + user_prompt
-            
         messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
+            {
+                "role": "system",
+                "content": "Tuân thủ chính xác hợp đồng hiệu đính transcript.",
+            },
+            {"role": "user", "content": build_cleaning_prompt(raw_text, context)},
         ]
         
         try:
-            # We use max_new_tokens proportional to input length + buffer
-            max_tokens = max(128, int(len(raw_text) * 1.5))
+            max_tokens = max(
+                128,
+                min(1024, int(len(raw_text.split()) * 2.5) + 64),
+            )
             outputs = self.generator(
                 messages,
                 max_new_tokens=max_tokens,

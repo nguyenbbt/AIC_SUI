@@ -40,6 +40,24 @@ def write_cleaned_transcript(
     )
 
 
+def write_raw_transcript(
+    path: Path,
+    *,
+    video_id: str,
+    source: str,
+    segments: Sequence[Dict[str, Any]],
+) -> None:
+    """Write the canonical Module 3 raw-transcript envelope atomically."""
+    _write_json_atomic(
+        path,
+        {
+            "video_id": video_id,
+            "source": source,
+            "segments": list(segments),
+        },
+    )
+
+
 def write_video_summary(
     path: Path,
     *,

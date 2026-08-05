@@ -21,11 +21,25 @@ def main() -> int:
     parser.add_argument("--caption-dir", type=str, required=True, help="Directory containing existing .srt or .vtt captions.")
     parser.add_argument("--output-dir", type=str, required=True, help="Directory to save output audio, transcripts, and summaries.")
     
-    parser.add_argument("--whisper-size", type=str, default="medium", choices=["tiny", "base", "small", "medium", "large", "large-v2", "large-v3"], help="PhoWhisper model size.")
+    parser.add_argument(
+        "--whisper-size",
+        type=str,
+        default="medium",
+        choices=["tiny", "base", "small", "medium", "large"],
+        help="Published PhoWhisper model size.",
+    )
     parser.add_argument("--llm-provider", type=str, default="gemini", choices=["gemini", "local", "azure"], help="LLM provider for cleaning/summarization.")
     parser.add_argument("--llm-model", type=str, default="gemini-2.5-flash", help="Model name for the LLM.")
     
-    parser.add_argument("--group-size", type=int, default=5, help="Number of ASR segments to group into one cleaning interval.")
+    parser.add_argument(
+        "--group-size",
+        type=int,
+        default=None,
+        help="Legacy fixed segment count. Omit to group by real timestamps.",
+    )
+    parser.add_argument("--min-interval-sec", type=float, default=20.0)
+    parser.add_argument("--target-interval-sec", type=float, default=40.0)
+    parser.add_argument("--max-interval-sec", type=float, default=60.0)
     parser.add_argument("--concurrency", type=int, default=10, help="Number of concurrent LLM API calls for cleaning.")
     parser.add_argument(
         "--summary-chunk-chars",
@@ -47,6 +61,9 @@ def main() -> int:
         llm_provider=args.llm_provider,
         llm_model=args.llm_model,
         group_size=args.group_size,
+        min_interval_sec=args.min_interval_sec,
+        target_interval_sec=args.target_interval_sec,
+        max_interval_sec=args.max_interval_sec,
         device=args.device,
         concurrency=args.concurrency,
         summary_chunk_chars=args.summary_chunk_chars,

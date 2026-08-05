@@ -3,6 +3,8 @@ import glob
 import json
 import logging
 import asyncio
+import math
+from numbers import Real
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Coroutine, Dict, List, Optional, TypeVar
@@ -12,7 +14,12 @@ from .caption_parser import CaptionParser
 from .asr_engine import ASREngine
 from .segment_grouper import SegmentGrouper
 from .summarizer import VideoSummarizer
-from .artifact_writer import write_cleaned_transcript, write_video_summary
+from .artifact_writer import (
+    write_cleaned_transcript,
+    write_raw_transcript,
+    write_video_summary,
+)
+from .llm.cleaning_prompt import validate_cleaned_text
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -47,6 +54,85 @@ def _is_valid_summary_artifact(path: str, video_id: str) -> bool:
     )
 
 
+def _load_valid_raw_artifact(
+    path: str,
+    video_id: str,
+) -> Optional[tuple[List[Dict[str, Any]], str]]:
+    """Load a complete raw cache or return ``None`` for regeneration."""
+    try:
+        with open(path, "r", encoding="utf-8") as raw_file:
+            data = json.load(raw_file)
+        if not isinstance(data, dict) or data.get("video_id") != video_id:
+            return None
+        source = data.get("source")
+        segments = data.get("segments")
+        if not isinstance(source, str) or not source.strip():
+            return None
+        if not isinstance(segments, list) or not segments:
+            return None
+        return SegmentGrouper.validate_segments(segments), source
+    except (OSError, json.JSONDecodeError, TypeError, ValueError, KeyError):
+        return None
+
+
+def _load_valid_cleaned_artifact(
+    path: str,
+    video_id: str,
+) -> Optional[List[Dict[str, Any]]]:
+    """Load a safe cleaned cache or return ``None`` for regeneration."""
+    try:
+        with open(path, "r", encoding="utf-8") as cleaned_file:
+            data = json.load(cleaned_file)
+        if not isinstance(data, dict) or data.get("video_id") != video_id:
+            return None
+        intervals = data.get("intervals")
+        if not isinstance(intervals, list) or not intervals:
+            return None
+
+        for interval in intervals:
+            if not _is_valid_cached_interval(interval):
+                return None
+        return intervals
+    except (OSError, json.JSONDecodeError, TypeError, ValueError, KeyError):
+        return None
+
+
+def _is_valid_cached_interval(interval: Any) -> bool:
+    if not isinstance(interval, dict):
+        return False
+    start = interval.get("start_time_sec")
+    end = interval.get("end_time_sec")
+    if not _is_finite_number(start) or not _is_finite_number(end):
+        return False
+    if float(start) < 0.0 or float(end) <= float(start):
+        return False
+    if not isinstance(interval.get("interval_id"), str):
+        return False
+    if not isinstance(interval.get("segment_ids"), list):
+        return False
+
+    raw_text = interval.get("raw_text")
+    cleaned_text = interval.get("cleaned_text")
+    cleaning_failed = interval.get("cleaning_failed")
+    if not isinstance(raw_text, str) or not raw_text.strip():
+        return False
+    if not isinstance(cleaning_failed, bool):
+        return False
+    if cleaning_failed:
+        return cleaned_text == raw_text
+
+    validate_cleaned_text(cleaned_text, raw_text)
+    return True
+
+
+def _is_finite_number(value: Any) -> bool:
+    return (
+        isinstance(value, Real)
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
+
+
 class ASRTranscriptPipeline:
     def __init__(self, 
                  video_dir: str, 
@@ -56,7 +142,10 @@ class ASRTranscriptPipeline:
                  whisper_size: str = "medium",
                  llm_provider: str = "gemini",
                  llm_model: str = "gemini-2.5-flash",
-                 group_size: int = 5,
+                 group_size: Optional[int] = None,
+                 min_interval_sec: float = 20.0,
+                 target_interval_sec: float = 40.0,
+                 max_interval_sec: float = 60.0,
                  device: str = "auto",
                  concurrency: int = 10,
                  summary_chunk_chars: int = 12_000,
@@ -66,6 +155,9 @@ class ASRTranscriptPipeline:
         self.caption_dir = caption_dir
         self.output_dir = output_dir
         self.group_size = group_size
+        self.min_interval_sec = min_interval_sec
+        self.target_interval_sec = target_interval_sec
+        self.max_interval_sec = max_interval_sec
         self.force = force
         self.concurrency = concurrency
 
@@ -123,7 +215,10 @@ class ASRTranscriptPipeline:
             try:
                 loop = asyncio.get_event_loop()
                 cleaned_text = await loop.run_in_executor(None, self.llm.clean, interval["raw_text"], context)
-                interval["cleaned_text"] = cleaned_text
+                interval["cleaned_text"] = validate_cleaned_text(
+                    cleaned_text,
+                    interval["raw_text"],
+                )
                 interval["cleaning_failed"] = False
             except Exception as e:
                 logger.error(f"Cleaning failed for interval {interval.get('interval_id')}: {e}")
@@ -157,14 +252,21 @@ class ASRTranscriptPipeline:
         # 1. Get Raw Segments (Captions or ASR)
         segments = []
         source = ""
+        raw_was_regenerated = False
         
+        cached_raw = None
         if os.path.exists(raw_transcript_path) and not self.force:
+            cached_raw = _load_valid_raw_artifact(raw_transcript_path, video_id)
+
+        if cached_raw is not None:
             logger.info(f"Raw transcript exists for {video_id}, loading from file.")
-            with open(raw_transcript_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                segments = data.get("segments", [])
-                source = data.get("source", "unknown")
+            segments, source = cached_raw
         else:
+            if os.path.exists(raw_transcript_path) and not self.force:
+                logger.warning(
+                    "Cached raw transcript for %s is invalid; regenerating it.",
+                    video_id,
+                )
             # Check for captions
             segments = CaptionParser.get_captions(video_id, self.caption_dir)
             if segments:
@@ -193,9 +295,13 @@ class ASRTranscriptPipeline:
                     f"No transcript segments generated for {video_id}."
                 )
 
-            # Save raw segments
-            with open(raw_transcript_path, 'w', encoding='utf-8') as f:
-                json.dump({"video_id": video_id, "source": source, "segments": segments}, f, ensure_ascii=False, indent=2)
+            write_raw_transcript(
+                Path(raw_transcript_path),
+                video_id=video_id,
+                source=source,
+                segments=segments,
+            )
+            raw_was_regenerated = True
 
         if not segments:
             raise RuntimeError(
@@ -204,13 +310,34 @@ class ASRTranscriptPipeline:
 
         # 2. Group and Clean
         cleaned_intervals = []
-        if os.path.exists(cleaned_transcript_path) and not self.force:
+        cleaned_was_regenerated = False
+        cached_cleaned = None
+        if (
+            os.path.exists(cleaned_transcript_path)
+            and not self.force
+            and not raw_was_regenerated
+        ):
+            cached_cleaned = _load_valid_cleaned_artifact(
+                cleaned_transcript_path,
+                video_id,
+            )
+
+        if cached_cleaned is not None:
             logger.info(f"Cleaned transcript exists for {video_id}, loading from file.")
-            with open(cleaned_transcript_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                cleaned_intervals = data.get("intervals", [])
+            cleaned_intervals = cached_cleaned
         else:
-            intervals = SegmentGrouper.group_segments(segments, self.group_size)
+            if os.path.exists(cleaned_transcript_path) and not self.force:
+                logger.warning(
+                    "Cached cleaned transcript for %s is invalid; regenerating it.",
+                    video_id,
+                )
+            intervals = SegmentGrouper.group_segments(
+                segments,
+                self.group_size,
+                min_duration_sec=self.min_interval_sec,
+                target_duration_sec=self.target_interval_sec,
+                max_duration_sec=self.max_interval_sec,
+            )
             logger.info(f"Grouped into {len(intervals)} intervals. Starting LLM cleaning...")
             
             cleaned_intervals = _run_coroutine_sync(
@@ -226,20 +353,28 @@ class ASRTranscriptPipeline:
                 llm_provider=self.llm.__class__.__name__,
                 intervals=cleaned_intervals,
             )
+            cleaned_was_regenerated = True
 
         # 3. Summarize
         if (
-            os.path.exists(summary_path)
+            not cleaned_was_regenerated
+            and os.path.exists(summary_path)
             and not self.force
             and _is_valid_summary_artifact(summary_path, video_id)
         ):
             logger.info(f"Summary exists for {video_id}, skipping.")
         else:
             if os.path.exists(summary_path) and not self.force:
-                logger.warning(
-                    "Cached summary for %s is invalid; regenerating it.",
-                    video_id,
-                )
+                if cleaned_was_regenerated:
+                    logger.info(
+                        "Transcript changed for %s; regenerating its summary.",
+                        video_id,
+                    )
+                else:
+                    logger.warning(
+                        "Cached summary for %s is invalid; regenerating it.",
+                        video_id,
+                    )
             logger.info(f"Generating summary for {video_id}...")
             summary_text = self.summarizer.summarize_video(cleaned_intervals)
             write_video_summary(
