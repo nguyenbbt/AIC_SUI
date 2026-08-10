@@ -112,3 +112,22 @@ def test_indexing_worker_is_rebuilt_before_it_runs():
     assert build in script
     assert run in script
     assert script.index(build) < script.index(run)
+
+
+def test_modal_cli_runs_with_utf8_process_encoding():
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert 'SetEnvironmentVariable("PYTHONUTF8", "1", "Process")' in script
+    assert (
+        'SetEnvironmentVariable("PYTHONIOENCODING", "utf-8", "Process")'
+        in script
+    )
+    assert (
+        'SetEnvironmentVariable("PYTHONUTF8", $previousPythonUtf8, "Process")'
+        in script
+    )
+    assert (
+        'SetEnvironmentVariable('
+        '"PYTHONIOENCODING", $previousPythonIoEncoding, "Process")'
+        in script
+    )

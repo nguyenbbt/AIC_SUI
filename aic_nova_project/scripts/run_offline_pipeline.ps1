@@ -17,6 +17,14 @@ $localData = Join-Path $projectRoot "data"
 $localRawVideos = Join-Path $projectRoot "data\raw_videos"
 $localCaptions = Join-Path $projectRoot "data\captions"
 $localProcessed = Join-Path $localData "processed"
+$previousPythonUtf8 = [Environment]::GetEnvironmentVariable(
+    "PYTHONUTF8", "Process"
+)
+$previousPythonIoEncoding = [Environment]::GetEnvironmentVariable(
+    "PYTHONIOENCODING", "Process"
+)
+[Environment]::SetEnvironmentVariable("PYTHONUTF8", "1", "Process")
+[Environment]::SetEnvironmentVariable("PYTHONIOENCODING", "utf-8", "Process")
 
 function Write-Stage {
     param([Parameter(Mandatory)][string]$Name)
@@ -225,5 +233,7 @@ try {
     }
 }
 finally {
+    [Environment]::SetEnvironmentVariable("PYTHONUTF8", $previousPythonUtf8, "Process")
+    [Environment]::SetEnvironmentVariable("PYTHONIOENCODING", $previousPythonIoEncoding, "Process")
     Pop-Location
 }
