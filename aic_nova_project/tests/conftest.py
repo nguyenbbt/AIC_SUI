@@ -65,27 +65,40 @@ def offline_artifact_bundle(tmp_path: Path, monkeypatch) -> Path:
     from feature_extraction.visual_embedding.embedding_writer import (
         write_embeddings_to_parquet as write_visual_embeddings,
     )
+    from feature_extraction.visual_embedding.config import (
+        DEFAULT_VISUAL_MODEL_ID,
+        EXPECTED_VISUAL_EMBEDDING_DIMENSION,
+    )
     from object_detection.pipeline import ObjectDetectionPipeline
     from object_detection.resume_validation import build_object_provenance
     from ocr_module.pipeline import OCRPipeline
     from text_embedding.encoders.base import BaseTextEncoder
+    from text_embedding.config import (
+        TEXT_EMBEDDING_DIMENSION,
+        TEXT_MAX_LENGTH,
+        TEXT_MODEL_NAME,
+        TEXT_MODEL_REVISION,
+    )
     from text_embedding.pipeline import TextEmbeddingPipeline
 
     class FixtureTextEncoder(BaseTextEncoder):
-        model_name = "fixture-text-encoder"
-        model_revision = "offline-contract-v1"
-        max_length = 32
-        embedding_dim = 2
+        model_name = TEXT_MODEL_NAME
+        model_revision = TEXT_MODEL_REVISION
+        max_length = TEXT_MAX_LENGTH
+        embedding_dim = TEXT_EMBEDDING_DIMENSION
+
+        @staticmethod
+        def _embedding() -> np.ndarray:
+            embedding = np.zeros(TEXT_EMBEDDING_DIMENSION, dtype=np.float32)
+            embedding[0] = 1.0
+            return embedding
 
         def encode_batch(self, texts: list[str]) -> np.ndarray:
-            return np.asarray(
-                [[0.6, 0.8] for _ in texts],
-                dtype=np.float32,
-            )
+            return np.stack([self._embedding() for _ in texts])
 
         def encode_long_text(self, text: str) -> np.ndarray:
             assert text
-            return np.asarray([0.6, 0.8], dtype=np.float32)
+            return self._embedding()
 
     data_dir = tmp_path / "offline_bundle"
     metadata_dir = data_dir / "metadata"
@@ -117,8 +130,12 @@ def offline_artifact_bundle(tmp_path: Path, monkeypatch) -> Path:
     metadata = VideoMetadata(
         video_id="V001",
         source_path="videos/V001.mp4",
+        source_video_rel_path="videos/V001.mp4",
         fps=30.0,
         duration_sec=1.0,
+        frame_count=30,
+        width=32,
+        height=24,
         num_shots=1,
         shots=[
             {
@@ -154,9 +171,12 @@ def offline_artifact_bundle(tmp_path: Path, monkeypatch) -> Path:
                 "video_id": "V001",
                 "shot_id": 0,
                 "position": 0.15,
-                "model_name": "fixture-visual-encoder",
-                "embedding_dim": 2,
-                "embedding": [0.6, 0.8],
+                "model_name": DEFAULT_VISUAL_MODEL_ID,
+                "model_id": DEFAULT_VISUAL_MODEL_ID,
+                "precision": "fp16",
+                "embedding_dim": EXPECTED_VISUAL_EMBEDDING_DIMENSION,
+                "embedding": [1.0]
+                + [0.0] * (EXPECTED_VISUAL_EMBEDDING_DIMENSION - 1),
             }
         ],
         str(visual_dir),

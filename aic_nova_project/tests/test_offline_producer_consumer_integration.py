@@ -74,8 +74,13 @@ class _MemoryElasticsearch:
 
 class _MemoryTabular:
     def __init__(self) -> None:
+        self.videos = {}
         self.metadata = []
         self.objects = []
+
+    def snapshot_video_by_id(self, video_id: str) -> dict | None:
+        record = self.videos.get(video_id)
+        return deepcopy(record) if record is not None else None
 
     def snapshot_by_video_id(self, video_id: str) -> tuple[list, list]:
         metadata = [
@@ -94,6 +99,7 @@ class _MemoryTabular:
     def delete_by_video_id(self, video_id: str) -> None:
         metadata, _ = self.snapshot_by_video_id(video_id)
         frame_ids = {record["frame_id"] for record in metadata}
+        self.videos.pop(video_id, None)
         self.metadata = [
             record
             for record in self.metadata
@@ -105,6 +111,10 @@ class _MemoryTabular:
             if record["frame_id"] not in frame_ids
         ]
 
+    def insert_video_batch(self, records: list) -> None:
+        for record in records:
+            self.videos[record["video_id"]] = deepcopy(record)
+
     def insert_metadata_batch(self, records: list) -> None:
         self.metadata.extend(deepcopy(records))
 
@@ -114,6 +124,10 @@ class _MemoryTabular:
     def restore_snapshot(self, metadata: list, objects: list) -> None:
         self.metadata.extend(deepcopy(metadata))
         self.objects.extend(deepcopy(objects))
+
+    def restore_video_snapshot(self, record: dict | None) -> None:
+        if record is not None:
+            self.insert_video_batch([record])
 
 
 def test_one_producer_bundle_is_joinable_through_module_7(
