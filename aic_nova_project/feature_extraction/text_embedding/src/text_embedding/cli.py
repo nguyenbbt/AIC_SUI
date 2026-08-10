@@ -4,6 +4,11 @@ from pathlib import Path
 import torch
 
 from src.text_embedding.encoders import SentenceTransformerEncoder
+from src.text_embedding.config import (
+    TEXT_MAX_LENGTH,
+    TEXT_MODEL_NAME,
+    TEXT_MODEL_REVISION,
+)
 from src.text_embedding.pipeline import TextEmbeddingPipeline
 
 logging.basicConfig(
@@ -19,16 +24,29 @@ def main():
     parser.add_argument("--ocr-dir", type=Path, help="Directory containing OCR JSON files")
     parser.add_argument("--output-dir", type=Path, required=True, help="Base directory for Parquet outputs")
     
-    parser.add_argument("--model-name", type=str, default="dangvantuan/vietnamese-embedding", help="HuggingFace model name")
+    parser.add_argument(
+        "--model-name",
+        type=str,
+        default=TEXT_MODEL_NAME,
+        choices=[TEXT_MODEL_NAME],
+        help="Locked Hugging Face model name",
+    )
     parser.add_argument(
         "--model-revision",
         type=str,
-        default=None,
-        help="Optional immutable Hugging Face commit/tag for reproducibility",
+        default=TEXT_MODEL_REVISION,
+        choices=[TEXT_MODEL_REVISION],
+        help="Locked immutable Hugging Face commit",
     )
     parser.add_argument("--device", type=str, default=None, help="Device (cuda/cpu). Auto-detects if None.")
     parser.add_argument("--batch-size", type=int, default=128, help="Batch size for inference")
-    parser.add_argument("--max-length", type=int, default=256, help="Max sequence length for truncation/chunking")
+    parser.add_argument(
+        "--max-length",
+        type=int,
+        default=TEXT_MAX_LENGTH,
+        choices=[TEXT_MAX_LENGTH],
+        help="Locked sequence length for truncation/chunking",
+    )
     parser.add_argument("--force", action="store_true", help="Force re-processing if output exists")
     
     args = parser.parse_args()

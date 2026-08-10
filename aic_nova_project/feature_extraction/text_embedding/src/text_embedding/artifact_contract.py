@@ -32,6 +32,15 @@ def build_encoder_provenance(
         if artifact_kind == "summary"
         else "direct_l2"
     )
+    model_revision = getattr(encoder, "model_revision", None)
+    if (
+        not isinstance(model_revision, str)
+        or not model_revision.strip()
+        or model_revision == "default"
+    ):
+        raise ValueError(
+            "Encoder model_revision must be an explicit immutable revision"
+        )
     return {
         "model_name": str(
             getattr(
@@ -40,9 +49,7 @@ def build_encoder_provenance(
                 f"{encoder.__class__.__module__}.{encoder.__class__.__name__}",
             )
         ),
-        "model_revision": str(
-            getattr(encoder, "model_revision", None) or "default"
-        ),
+        "model_revision": model_revision.strip(),
         "pooling_strategy": pooling_strategy,
         "max_length": int(getattr(encoder, "max_length", 0)),
         "embedding_dimension": int(
