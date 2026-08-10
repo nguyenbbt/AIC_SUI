@@ -158,7 +158,9 @@ try {
         "--summary-dir /data/processed/summaries " +
         "--ocr-dir /data/processed/ocr " +
         "--output-dir /data/processed/embeddings " +
-        "--device cuda --batch-size 128$forceArgument"
+        "--model-name dangvantuan/vietnamese-embedding " +
+        "--model-revision 4ab46e46ba5902328ba0742e489e75f787932f2b " +
+        "--max-length 256 --device cuda --batch-size 128$forceArgument"
     )
 
     Write-Stage "pull-artifacts"

@@ -16,7 +16,7 @@ COPY scripts/download_text_models.py /app/scripts/
 
 # Download the model weights to cache for offline use
 ENV HF_HOME=/app/models
-RUN python scripts/download_text_models.py --model-name dangvantuan/vietnamese-embedding --cache-dir /app/models
+RUN python scripts/download_text_models.py --model-name dangvantuan/vietnamese-embedding --model-revision 4ab46e46ba5902328ba0742e489e75f787932f2b --cache-dir /app/models
 
 # Copy source code
 COPY feature_extraction/text_embedding/ /app/
