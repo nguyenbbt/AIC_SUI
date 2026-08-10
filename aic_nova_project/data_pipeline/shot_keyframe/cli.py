@@ -47,12 +47,13 @@ def resolve_worker_count(
 
 
 def process_single_video(args_tuple):
-    video_path, output_dir, device, webp_quality, threshold = args_tuple
+    video_path, output_dir, device, webp_quality, threshold, data_root = args_tuple
     processor = VideoProcessor(
         output_dir=output_dir,
         device=device,
         webp_quality=webp_quality,
-        threshold=threshold
+        threshold=threshold,
+        data_root=data_root,
     )
     return processor.process_video(video_path)
 
@@ -78,9 +79,12 @@ def build_parquet_index(metadata_dir: str, output_parquet: str):
                             "video_id": video_id,
                             "shot_id": shot_id,
                             "position": kf["position"],
+                            "position_code": kf["position_code"],
                             "frame_index": kf["frame_index"],
+                            "source_frame_idx": kf["source_frame_idx"],
                             "timestamp_sec": kf["time_sec"],
-                            "file_path": kf["file_path"]
+                            "file_path": kf["file_path"],
+                            "image_rel_path": kf["image_rel_path"],
                         })
         except Exception as e:
             logger.error(f"Failed to parse {jf} for parquet: {e}")
@@ -137,7 +141,18 @@ def main():
     logger.info(f"Found {len(video_paths)} videos in {args.input}")
     
     # Prepare arguments for multiprocessing
-    tasks = [(vp, args.output, args.device, args.quality, args.threshold) for vp in video_paths]
+    data_root = os.path.dirname(os.path.abspath(args.input))
+    tasks = [
+        (
+            vp,
+            args.output,
+            args.device,
+            args.quality,
+            args.threshold,
+            data_root,
+        )
+        for vp in video_paths
+    ]
     
     success_count = 0
     if worker_count <= 1:

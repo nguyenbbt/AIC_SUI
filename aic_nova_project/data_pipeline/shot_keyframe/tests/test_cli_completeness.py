@@ -9,16 +9,31 @@ from data_pipeline.shot_keyframe import cli
 
 def _valid_metadata(video_id: str) -> dict:
     return {
+        "contract_version": "self-indexed-v2",
         "video_id": video_id,
+        "source_path": f"raw_videos/{video_id}.mp4",
+        "source_video_rel_path": f"raw_videos/{video_id}.mp4",
+        "fps": 30.0,
+        "duration_sec": 1.0,
+        "frame_count": 30,
+        "width": 320,
+        "height": 240,
+        "num_shots": 1,
         "shots": [
             {
                 "shot_id": 0,
                 "keyframes": [
                     {
                         "position": 0.15,
+                        "position_code": 15,
                         "frame_index": 4,
+                        "source_frame_idx": 4,
                         "time_sec": 0.133,
                         "file_path": (
+                            f"keyframes/{video_id}/"
+                            "shot_00000_pos_015.webp"
+                        ),
+                        "image_rel_path": (
                             f"keyframes/{video_id}/"
                             "shot_00000_pos_015.webp"
                         ),

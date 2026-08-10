@@ -26,9 +26,7 @@ def mock_video_path(fixture_dir):
     - frames 60-89: Blue
     """
     path = os.path.join(fixture_dir, "test_video.mp4")
-    if os.path.exists(path):
-        return path
-        
+
     fps = 30.0
     width, height = 320, 240
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')

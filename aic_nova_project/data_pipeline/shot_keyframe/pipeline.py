@@ -1,7 +1,9 @@
 import os
 import json
 import logging
-from typing import List
+from pathlib import Path, PurePosixPath
+
+import cv2
 
 from .transnet_wrapper import TransNetPredictor
 from .keyframe_extractor import KeyframeExtractor
@@ -11,12 +13,20 @@ from .resume_validation import keyframe_artifacts_are_valid
 logger = logging.getLogger(__name__)
 
 class VideoProcessor:
-    def __init__(self, output_dir: str, device: str = None, webp_quality: int = 90, threshold: float = 0.5):
+    def __init__(
+        self,
+        output_dir: str,
+        device: str = None,
+        webp_quality: int = 90,
+        threshold: float = 0.5,
+        data_root: str | None = None,
+    ):
         """
         Orchestrator for processing a single video.
         """
         self.output_dir = output_dir
         self.threshold = threshold
+        self.data_root = Path(data_root).resolve() if data_root else None
         
         # Initialize sub-modules
         self.transnet = TransNetPredictor(device=device)
@@ -67,26 +77,34 @@ class VideoProcessor:
                 shots=shots,
                 output_dir=self.keyframes_dir
             )
-            
-            # Calculate duration
-            # Duration can be estimated from the last shot's end_time_sec or open video again
-            duration_sec = 0.0
-            if shots_metadata:
-                duration_sec = shots_metadata[-1]["end_time_sec"]
+
+            frame_count, width, height = self._probe_video(video_path)
+            duration_sec = frame_count / fps
+            source_video_rel_path = self._relative_source_path(video_path)
                 
             # Step 3: Build and Validate Metadata
             video_meta = VideoMetadata(
                 video_id=video_id,
-                source_path=video_path,
+                source_path=source_video_rel_path,
+                source_video_rel_path=source_video_rel_path,
                 fps=fps,
                 duration_sec=duration_sec,
+                frame_count=frame_count,
+                width=width,
+                height=height,
                 num_shots=len(shots_metadata),
                 shots=shots_metadata
             )
             
             # Step 4: Save Metadata
-            with open(metadata_path, 'w', encoding='utf-8') as f:
-                f.write(video_meta.model_dump_json(indent=2))
+            temporary_path = f"{metadata_path}.tmp"
+            try:
+                with open(temporary_path, 'w', encoding='utf-8') as f:
+                    f.write(video_meta.model_dump_json(indent=2))
+                os.replace(temporary_path, metadata_path)
+            finally:
+                if os.path.exists(temporary_path):
+                    os.remove(temporary_path)
                 
             logger.info(f"Successfully processed video: {video_id}")
             return True
@@ -94,3 +112,33 @@ class VideoProcessor:
         except Exception as e:
             logger.error(f"Failed to process video {video_path}. Error: {e}", exc_info=True)
             return False
+
+    def _relative_source_path(self, video_path: str) -> str:
+        """Return the source path relative to the configured dataset root."""
+        source = Path(video_path).resolve()
+        if self.data_root is None:
+            relative = Path(source.name)
+        else:
+            try:
+                relative = source.relative_to(self.data_root)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Video path is outside data root: {video_path}"
+                ) from exc
+        return PurePosixPath(*relative.parts).as_posix()
+
+    @staticmethod
+    def _probe_video(video_path: str) -> tuple[int, int, int]:
+        """Read stable source dimensions needed by the database contract."""
+        capture = cv2.VideoCapture(video_path)
+        if not capture.isOpened():
+            raise ValueError(f"Cannot probe video {video_path}")
+        try:
+            frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+            width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        finally:
+            capture.release()
+        if frame_count <= 0 or width <= 0 or height <= 0:
+            raise ValueError(f"Invalid video properties for {video_path}")
+        return frame_count, width, height
