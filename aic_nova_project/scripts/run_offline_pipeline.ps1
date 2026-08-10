@@ -17,6 +17,7 @@ $localData = Join-Path $projectRoot "data"
 $localRawVideos = Join-Path $projectRoot "data\raw_videos"
 $localCaptions = Join-Path $projectRoot "data\captions"
 $localProcessed = Join-Path $localData "processed"
+$onlineSmokePath = Join-Path $localProcessed "online-encoder-smoke.json"
 $previousPythonUtf8 = [Environment]::GetEnvironmentVariable(
     "PYTHONUTF8", "Process"
 )
@@ -223,6 +224,58 @@ try {
             "--building-manifest-path",
             "/workspace/data/processed/dataset-manifest.building.json"
         )
+
+        Write-Stage "online-contract-validation"
+        $readyFingerprint = "sha256:" + ("0" * 64)
+        if (-not $DryRun) {
+            $readyManifestPath = Join-Path $localProcessed "dataset-manifest.json"
+            $readyManifest = Get-Content -LiteralPath $readyManifestPath -Raw |
+                ConvertFrom-Json
+            $readyFingerprint = [string]$readyManifest.dataset_fingerprint
+            if (
+                $readyManifest.status -ne "READY" -or
+                $readyFingerprint -notmatch '^sha256:[0-9a-f]{64}$'
+            ) {
+                throw "Offline publisher did not produce a valid READY manifest."
+            }
+
+            $onlineSmoke = @{
+                visual_features = @(1.0) + (@(0.0) * 511)
+                ocr_features = @(1.0) + (@(0.0) * 767)
+                asr_features = @(1.0) + (@(0.0) * 767)
+                summary_features = @(1.0) + (@(0.0) * 767)
+            }
+            $onlineSmokeJson = $onlineSmoke | ConvertTo-Json -Depth 3 -Compress
+            $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText(
+                $onlineSmokePath,
+                $onlineSmokeJson,
+                $utf8WithoutBom
+            )
+        }
+        try {
+            Invoke-CheckedCommand "docker" @(
+                "compose", "run", "--rm",
+                "-e", "AIC_ONLINE_MILVUS_URI=http://milvus-standalone:19530",
+                "-e", "AIC_ONLINE_ES_URI=http://elasticsearch:9200",
+                "-e", "AIC_ONLINE_SQLITE_PATH=/workspace/data/metadata.db",
+                "-e", (
+                    "AIC_ONLINE_DATASET_MANIFEST_PATH=" +
+                    "/workspace/data/processed/dataset-manifest.json"
+                ),
+                "-e", "AIC_ONLINE_DATA_ROOT=/workspace/data/processed",
+                "-e", "AIC_ONLINE_DATASET_EXPECTED_FINGERPRINT=$readyFingerprint",
+                "-e", "AIC_ONLINE_DATASET_MANIFEST_REQUIRED=true",
+                "indexing", "python", "-m", "online.validate_contract",
+                "--fail-on-partial", "--encoder-smoke-json",
+                "/workspace/data/processed/online-encoder-smoke.json"
+            )
+        }
+        finally {
+            if (-not $DryRun -and (Test-Path -LiteralPath $onlineSmokePath)) {
+                [System.IO.File]::Delete($onlineSmokePath)
+            }
+        }
         Invoke-CheckedCommand "docker" @("compose", "ps")
     }
 

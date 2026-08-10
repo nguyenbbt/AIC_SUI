@@ -57,8 +57,8 @@ class SQLiteResourceConfig(StrictFrozenModel):
 class DatasetResourceConfig(StrictFrozenModel):
     """Immutable identity and filesystem boundary for one published dataset."""
 
-    manifest_path: Path = Path("data/dataset-manifest.json")
-    data_root: Path = Path("data")
+    manifest_path: Path = Path("data/processed/dataset-manifest.json")
+    data_root: Path = Path("data/processed")
     expected_contract_version: NonEmptyStr = "self-indexed-v2"
     expected_fingerprint: str | None = None
     manifest_required: bool = True
@@ -130,8 +130,13 @@ class OnlineDataConfig(StrictFrozenModel):
                 timeout_sec=float(env("SQLITE_TIMEOUT_SEC", 5.0)),
             ),
             dataset=DatasetResourceConfig(
-                manifest_path=Path(env("DATASET_MANIFEST_PATH", "data/dataset-manifest.json")),
-                data_root=Path(env("DATA_ROOT", "data")),
+                manifest_path=Path(
+                    env(
+                        "DATASET_MANIFEST_PATH",
+                        "data/processed/dataset-manifest.json",
+                    )
+                ),
+                data_root=Path(env("DATA_ROOT", "data/processed")),
                 expected_contract_version=env("DATASET_CONTRACT_VERSION", "self-indexed-v2"),
                 expected_fingerprint=(
                     str(env("DATASET_EXPECTED_FINGERPRINT", "")).strip() or None

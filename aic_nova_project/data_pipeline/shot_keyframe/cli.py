@@ -4,10 +4,14 @@ import json
 import logging
 import argparse
 import multiprocessing as mp
+import shutil
 from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
+from uuid import uuid4
 import pandas as pd
 from tqdm import tqdm
 
+from .fingerprints import sha256_file
 from .pipeline import VideoProcessor
 
 logging.basicConfig(
@@ -109,6 +113,59 @@ def build_parquet_index(metadata_dir: str, output_parquet: str):
         logger.warning("No keyframes found to build parquet index.")
     return len(all_keyframes)
 
+
+def publish_source_videos(
+    video_paths: list[str],
+    *,
+    input_dir: str,
+    output_dir: str,
+) -> int:
+    """Atomically publish the current input video snapshot under ``videos/``."""
+    input_root = Path(input_dir).resolve()
+    output_root = Path(output_dir).resolve()
+    output_root.mkdir(parents=True, exist_ok=True)
+    staging_dir = output_root / f".videos.staging-{uuid4().hex}"
+    backup_dir = output_root / f".videos.backup-{uuid4().hex}"
+    final_dir = output_root / "videos"
+    staging_dir.mkdir()
+    previous_moved = False
+    staged_published = False
+    try:
+        for raw_path in sorted(video_paths):
+            source = Path(raw_path).resolve()
+            try:
+                relative_path = source.relative_to(input_root)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Source video is outside input directory: {source}"
+                ) from exc
+            destination = staging_dir / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+            if sha256_file(source) != sha256_file(destination):
+                raise RuntimeError(f"Published video checksum mismatch: {source}")
+
+        if final_dir.exists() and not final_dir.is_dir():
+            raise ValueError(f"Expected video directory, found file: {final_dir}")
+        if final_dir.exists():
+            final_dir.replace(backup_dir)
+            previous_moved = True
+        staging_dir.replace(final_dir)
+        staged_published = True
+    except Exception:
+        if staged_published and final_dir.exists():
+            shutil.rmtree(final_dir)
+        if previous_moved and backup_dir.exists():
+            backup_dir.replace(final_dir)
+        raise
+    else:
+        if backup_dir.exists():
+            shutil.rmtree(backup_dir)
+    finally:
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir)
+    return len(video_paths)
+
 def main():
     parser = argparse.ArgumentParser(description="Shot Detection and Keyframe Extraction Pipeline")
     parser.add_argument("--input", type=str, required=True, help="Input directory containing videos")
@@ -141,7 +198,7 @@ def main():
     logger.info(f"Found {len(video_paths)} videos in {args.input}")
     
     # Prepare arguments for multiprocessing
-    data_root = os.path.dirname(os.path.abspath(args.input))
+    data_root = os.path.abspath(args.input)
     tasks = [
         (
             vp,
@@ -173,6 +230,17 @@ def main():
             len(video_paths),
         )
         return 1
+
+    try:
+        published_count = publish_source_videos(
+            video_paths,
+            input_dir=args.input,
+            output_dir=args.output,
+        )
+    except Exception as exc:
+        logger.error("Failed to publish source videos: %s", exc)
+        return 1
+    logger.info("Published %s source videos.", published_count)
     
     # Build parquet
     metadata_dir = os.path.join(args.output, "metadata")

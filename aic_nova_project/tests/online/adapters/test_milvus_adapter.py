@@ -3,8 +3,9 @@ from __future__ import annotations
 import math
 import threading
 import unittest
+from types import SimpleNamespace
 
-from online.adapters.milvus import MilvusSearchAdapter
+from online.adapters.milvus import MilvusSearchAdapter, _PymilvusBackend
 from online.config import MilvusResourceConfig
 from online.domain.errors import (
     ContractMismatchError,
@@ -162,6 +163,48 @@ class MilvusAdapterTests(unittest.TestCase):
         release.set()
         thread.join(timeout=2)
         self.adapter.close()
+
+    def test_pymilvus_dtype_uses_enum_name_when_string_value_is_numeric(self) -> None:
+        class NumericStringDtype:
+            def __init__(self, name: str, value: int) -> None:
+                self.name = name
+                self.value = value
+
+            def __str__(self) -> str:
+                return str(self.value)
+
+        collection = SimpleNamespace(
+            schema=SimpleNamespace(
+                fields=(
+                    SimpleNamespace(
+                        name="frame_id",
+                        dtype=NumericStringDtype("VARCHAR", 21),
+                        params={},
+                    ),
+                    SimpleNamespace(
+                        name="embedding",
+                        dtype=NumericStringDtype("FLOAT_VECTOR", 101),
+                        params={"dim": 512},
+                    ),
+                )
+            ),
+            indexes=(
+                SimpleNamespace(
+                    field_name="embedding",
+                    params={"metric_type": "IP", "index_type": "HNSW"},
+                ),
+            ),
+        )
+        backend = _PymilvusBackend(MilvusResourceConfig())
+        backend._collection = lambda name: collection  # type: ignore[method-assign]
+
+        description = backend.describe_collection("visual_features")
+
+        self.assertEqual(
+            description["fields"],
+            {"frame_id": "VARCHAR", "embedding": "FLOAT_VECTOR"},
+        )
+        self.assertEqual(description["dimension"], 512)
 
 
 if __name__ == "__main__":

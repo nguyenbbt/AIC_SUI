@@ -118,4 +118,28 @@ def test_indexing_verifier_dependencies_are_runtime_pinned() -> None:
     assert {
         "Pillow==12.3.0",
         "pydantic==2.13.4",
+        "pymilvus>=2.4.0,<3.0.0",
     } <= set(indexing_requirements)
+
+
+def test_online_encoder_runtime_matches_offline_model_stack() -> None:
+    online_requirements = (
+        PROJECT_ROOT / "online" / "requirements-encoders.txt"
+    ).read_text(encoding="utf-8").splitlines()
+
+    assert {
+        "torch==2.13.0",
+        "torchvision==0.28.0",
+        "open_clip_torch==3.3.0",
+        "sentence-transformers==5.6.0",
+        "transformers==5.13.1",
+        "tokenizers==0.22.2",
+    } <= set(online_requirements)
+
+
+def test_indexing_image_contains_online_contract_validator() -> None:
+    dockerfile = (PROJECT_ROOT / "indexing" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+
+    assert "COPY online/ /app/online/" in dockerfile

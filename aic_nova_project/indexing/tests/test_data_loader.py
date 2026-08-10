@@ -403,6 +403,7 @@ class TestLoadAsrTranscripts:
 def test_asr_mapping_uses_canonical_timestamp_names():
     properties = ASR_MAPPING["properties"]
 
+    assert properties["_doc_id"] == {"type": "keyword"}
     assert properties["start_time_sec"] == {"type": "float"}
     assert properties["end_time_sec"] == {"type": "float"}
     assert "start_time" not in properties

@@ -586,8 +586,8 @@ class OfflineContractValidator:
         )
         text_fields = [
             name
-            for name, value in properties.items()
-            if isinstance(value, Mapping) and value.get("type") == "text"
+            for name, expected_type in fields.items()
+            if expected_type == "text"
         ]
         analyzer_ok = bool(text_fields) and all(
             properties[field].get("analyzer") == "vietnamese_analyzer"

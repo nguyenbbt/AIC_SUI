@@ -51,6 +51,7 @@ OCR_MAPPING = {
 
 ASR_MAPPING = {
     "properties": {
+        "_doc_id": {"type": "keyword"},
         "interval_id": {"type": "keyword"},
         "video_id": {"type": "keyword"},
         "start_time_sec": {"type": "float"},

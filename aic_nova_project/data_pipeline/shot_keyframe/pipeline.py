@@ -211,7 +211,7 @@ class VideoProcessor:
                 raise ValueError(
                     f"Video path is outside data root: {video_path}"
                 ) from exc
-        return PurePosixPath(*relative.parts).as_posix()
+        return (PurePosixPath("videos") / PurePosixPath(*relative.parts)).as_posix()
 
     @staticmethod
     def _probe_video(video_path: str) -> tuple[int, int, int]:

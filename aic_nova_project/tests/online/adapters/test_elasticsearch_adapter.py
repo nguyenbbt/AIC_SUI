@@ -15,6 +15,13 @@ class FakeIndices:
         return {index: {"mappings": {"properties": {"summary": {"type": "text", "analyzer": "vietnamese_analyzer"}}}}}
 
 
+class WrappedResponse:
+    """Minimal elastic-transport ObjectApiResponse-compatible test double."""
+
+    def __init__(self, body):
+        self.body = body
+
+
 class FakeClient:
     def __init__(self) -> None:
         self.indices = FakeIndices()
@@ -189,6 +196,40 @@ class ElasticsearchAdapterTests(unittest.TestCase):
             ["V1", "V2"],
         )
         self.assertEqual(self.client.cleared_scroll_id, "scroll-1")
+
+    def test_sdk_response_wrappers_are_unwrapped_at_the_adapter_boundary(self) -> None:
+        self.client.response = WrappedResponse(
+            {
+                "hits": {
+                    "hits": [
+                        {
+                            "_score": 2.0,
+                            "_source": {"video_id": "V1", "summary": "sum"},
+                        }
+                    ]
+                }
+            }
+        )
+        self.client.indices.get_mapping = lambda *, index: WrappedResponse(
+            {
+                index: {
+                    "mappings": {
+                        "properties": {
+                            "summary": {
+                                "type": "text",
+                                "analyzer": "vietnamese_analyzer",
+                            }
+                        }
+                    }
+                }
+            }
+        )
+
+        self.assertEqual(self.adapter.search_summary("hello", 1)[0].video_id, "V1")
+        self.assertEqual(
+            self.adapter.get_mapping("video_summaries")["properties"]["summary"]["type"],
+            "text",
+        )
 
 
 if __name__ == "__main__":

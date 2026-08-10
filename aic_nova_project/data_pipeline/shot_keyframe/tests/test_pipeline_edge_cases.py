@@ -34,7 +34,7 @@ def test_pipeline_e2e(mock_video_path):
             
         assert data["video_id"] == video_id
         assert data["contract_version"] == "self-indexed-v2"
-        assert data["source_video_rel_path"] == "test_video.mp4"
+        assert data["source_video_rel_path"] == "videos/test_video.mp4"
         assert data["frame_count"] == 90
         assert data["width"] == 320
         assert data["height"] == 240

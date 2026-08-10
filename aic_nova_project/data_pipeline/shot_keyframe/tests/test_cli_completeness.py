@@ -102,3 +102,27 @@ def test_cli_returns_failure_when_any_video_fails(
     )
 
     assert cli.main() == 1
+
+
+def test_publish_source_videos_replaces_stale_snapshot(tmp_path):
+    input_dir = tmp_path / "raw_videos"
+    nested_dir = input_dir / "batch"
+    nested_dir.mkdir(parents=True)
+    source = nested_dir / "V001.mp4"
+    source.write_bytes(b"current-video")
+
+    output_dir = tmp_path / "processed"
+    stale_dir = output_dir / "videos"
+    stale_dir.mkdir(parents=True)
+    (stale_dir / "stale.mp4").write_bytes(b"stale-video")
+
+    count = cli.publish_source_videos(
+        [str(source)],
+        input_dir=str(input_dir),
+        output_dir=str(output_dir),
+    )
+
+    assert count == 1
+    assert (output_dir / "videos" / "batch" / "V001.mp4").read_bytes() == b"current-video"
+    assert not (output_dir / "videos" / "stale.mp4").exists()
+    assert not list(output_dir.glob(".videos.*"))

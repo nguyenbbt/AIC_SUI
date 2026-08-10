@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -29,6 +30,15 @@ class Resource:
 
 
 class ConfigLifecycleTests(unittest.TestCase):
+    def test_default_manifest_path_matches_offline_publisher(self) -> None:
+        config = OnlineDataConfig()
+
+        self.assertEqual(
+            config.dataset.manifest_path,
+            Path("data/processed/dataset-manifest.json"),
+        )
+        self.assertEqual(config.dataset.data_root, Path("data/processed"))
+
     def test_config_loads_environment_and_rejects_sql_identifier_injection(self) -> None:
         with patch.dict(
             os.environ,

@@ -225,6 +225,27 @@ class ContractValidatorTests(unittest.TestCase):
         self.assertEqual(report.audit_scope, "FULL")
         self.assertEqual(report.checks_skipped, ())
 
+    def test_analyzer_audit_ignores_non_contract_text_fields(self) -> None:
+        original_get_mapping = self.es.get_mapping
+
+        def mapping_with_internal_field(name):
+            mapping = original_get_mapping(name)
+            if name == "asr_transcripts":
+                mapping["properties"]["_doc_id"] = {"type": "text"}
+            return mapping
+
+        self.es.get_mapping = mapping_with_internal_field
+
+        report = self.validator().validate()
+        analyzer_check = next(
+            check
+            for check in report.checks
+            if check.name == "elasticsearch.asr_transcripts.analyzer"
+        )
+
+        self.assertEqual(analyzer_check.status, CheckStatus.PASS)
+        self.assertEqual(report.status, ValidationStatus.PASS)
+
     def test_fail_for_core_frame_id_contract_mismatch(self) -> None:
         self.milvus.records["visual_features"][0]["frame_id"] = "shot_00000_pos_050"
         report = self.validator().validate()

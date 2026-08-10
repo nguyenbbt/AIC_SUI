@@ -93,7 +93,8 @@ class ElasticsearchSearchAdapter:
                 "elasticsearch",
                 lambda: self._get_client().nodes.info(metric="plugins"),
             )
-        nodes = response.get("nodes", {}) if isinstance(response, Mapping) else {}
+        response_body = self._response_body(response, "plugins")
+        nodes = response_body.get("nodes", {})
         for node in nodes.values():
             if not isinstance(node, Mapping):
                 continue
@@ -153,8 +154,7 @@ class ElasticsearchSearchAdapter:
                     request_timeout=self.config.timeout_sec,
                 ),
             )
-        if not isinstance(response, Mapping):
-            raise ContractMismatchError("Elasticsearch response is not a mapping")
+        response = self._response_body(response, "search")
         try:
             hits = response["hits"]["hits"]
         except (KeyError, TypeError) as exc:
@@ -368,8 +368,7 @@ class ElasticsearchSearchAdapter:
                 index,
                 lambda: self._get_client().indices.get_mapping(index=index),
             )
-        if not isinstance(response, Mapping):
-            raise ContractMismatchError("Elasticsearch mapping response is invalid")
+        response = self._response_body(response, "mapping")
         root = response.get(index)
         if root is None and len(response) == 1:
             root = next(iter(response.values()))
@@ -432,10 +431,7 @@ class ElasticsearchSearchAdapter:
                         ),
                     )
                     while True:
-                        if not isinstance(response, Mapping):
-                            raise ContractMismatchError(
-                                "Elasticsearch scroll response is invalid"
-                            )
+                        response = self._response_body(response, "scroll")
                         candidate_scroll_id = response.get("_scroll_id")
                         if candidate_scroll_id is not None:
                             if not isinstance(candidate_scroll_id, str) or not candidate_scroll_id:
@@ -584,6 +580,18 @@ class ElasticsearchSearchAdapter:
         return self._extract_sources(response, "interval lookup")
 
     @staticmethod
+    def _response_body(response: Any, operation: str) -> Mapping[str, Any]:
+        """Return the mapping payload exposed by all supported ES SDK versions."""
+        if isinstance(response, Mapping):
+            return response
+        body = getattr(response, "body", None)
+        if isinstance(body, Mapping):
+            return body
+        raise ContractMismatchError(
+            f"Elasticsearch {operation} response is invalid"
+        )
+
+    @staticmethod
     def _validate_lookup(source_fields: Sequence[str], limit: int) -> None:
         if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
             raise InvalidQueryError("limit must be >= 1")
@@ -601,10 +609,7 @@ class ElasticsearchSearchAdapter:
     def _extract_sources(
         response: Any, operation: str
     ) -> tuple[Mapping[str, Any], ...]:
-        if not isinstance(response, Mapping):
-            raise ContractMismatchError(
-                f"Elasticsearch {operation} response is invalid"
-            )
+        response = ElasticsearchSearchAdapter._response_body(response, operation)
         try:
             hits = response["hits"]["hits"]
         except (KeyError, TypeError) as exc:

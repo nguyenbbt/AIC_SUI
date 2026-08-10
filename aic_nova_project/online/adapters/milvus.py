@@ -86,7 +86,12 @@ class _PymilvusBackend:
         fields: dict[str, str] = {}
         dimension: int | None = None
         for field in collection.schema.fields:
-            dtype = str(field.dtype).split(".")[-1].upper()
+            dtype_name = getattr(field.dtype, "name", None)
+            dtype = (
+                dtype_name.upper()
+                if isinstance(dtype_name, str) and dtype_name
+                else str(field.dtype).split(".")[-1].upper()
+            )
             fields[field.name] = dtype
             if field.name == "embedding":
                 params = getattr(field, "params", {}) or {}

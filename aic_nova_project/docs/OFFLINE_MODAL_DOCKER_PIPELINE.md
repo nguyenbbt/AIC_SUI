@@ -8,7 +8,7 @@ trên Modal A10G, tải artifact về local và chạy Module 7 bằng Docker.
 
 | Stage | Nơi chạy | Output chính |
 |---|---|---|
-| Module 1 | Modal GPU A10G | `metadata`, `keyframes` |
+| Module 1 | Modal GPU A10G | `metadata`, `keyframes`, `videos` |
 | Module 2 | Modal GPU A10G | CLIP `ViT-B-32::openai` Parquet |
 | Module 3 | Modal GPU A10G | audio, transcript và summary |
 | Module 4 | Modal GPU A10G | OCR JSON |
@@ -16,6 +16,7 @@ trên Modal A10G, tải artifact về local và chạy Module 7 bằng Docker.
 | Module 6 | Modal GPU A10G | text embedding Parquet |
 | Artifact sync | Modal Volume → local | `data/processed` |
 | Module 7 | Docker local | Milvus, Elasticsearch và SQLite |
+| Contract gate | Docker local | READY manifest + Online full-audit |
 
 GPU jobs là batch compute nên chạy trên Modal. Database có state và cần truy
 cập lâu dài nên chạy bằng Docker local. `docker-compose.yml` không được dùng để
@@ -98,6 +99,9 @@ Ví dụ ép tạo lại artifact nhưng chưa index:
 7. Tạo `.env` từ `.env.example` nếu chưa có.
 8. Build/start etcd, MinIO, Milvus và Elasticsearch.
 9. Chạy indexing bằng image đã khóa Elasticsearch Python client ở major 8.
+10. Full-scan dữ liệu và atomically publish READY dataset manifest.
+11. Chạy Online contract validator với fingerprint vừa publish; dừng nếu kết
+    quả là `PARTIAL` hoặc `FAIL`.
 
 Các module có resume sẽ bỏ qua artifact hợp lệ khi không truyền `-Force`.
 Vì mỗi module commit độc lập, có thể chạy lại cùng một lệnh sau lỗi mà không
@@ -105,8 +109,16 @@ mất output của các stage đã hoàn tất.
 
 ## Artifact sau khi hoàn tất
 
+Module 1 publish video nguồn vào `data/processed/videos/`. Metadata chỉ lưu
+`source_video_rel_path=videos/...`; keyframe chỉ lưu `image_rel_path=keyframes/...`.
+Vì vậy Online phải dùng `AIC_ONLINE_DATA_ROOT=data/processed`. Runner cũng
+publish `data/processed/dataset-manifest.json` với trạng thái `READY`, sau đó
+chạy `online.validate_contract --fail-on-partial`; bất kỳ warning nào cũng làm
+one-click command thất bại.
+
 ```text
 data/processed/
+├── videos/
 ├── metadata/
 ├── keyframes/
 ├── audio/
@@ -192,16 +204,17 @@ Runner chỉ pull sau khi Module 6 thành công. Có thể tải thủ công:
 modal volume get --force `
   aic-nova-offline-data `
   /processed `
-  .\data\processed
+  .\data
 ```
 
 ### Elasticsearch báo `compatible-with=9`
 
-Rebuild image indexing để nhận dependency `<9`:
+Đảm bảo cả image indexing và virtualenv Online dùng SDK major 8:
 
 ```powershell
 docker compose build --no-cache indexing
 docker compose run --rm indexing python -m src.indexing.cli --force
+.\venv\Scripts\python.exe -m pip install -r online\requirements-runtime.txt
 ```
 
 ### Muốn xem lệnh chính xác trước khi trả phí
