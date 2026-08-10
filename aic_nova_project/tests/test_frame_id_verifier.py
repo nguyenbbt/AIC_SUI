@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import sys
 
+import numpy as np
 from PIL import Image
 
 from verify_frame_id_consistency import (
@@ -182,6 +183,32 @@ def test_full_verifier_accepts_valid_contract(tmp_path):
         snapshot,
         data_root=tmp_path,
         manifest=_manifest(snapshot),
+    ) == []
+
+
+def test_full_verifier_accepts_float32_asr_timestamp_roundtrip(tmp_path):
+    snapshot = _full_snapshot(tmp_path)
+    milvus = dict(snapshot.milvus)
+    vector_record = dict(milvus["asr_features"][0])
+    vector_record["end_time_sec"] = float(np.float32(599.97))
+    milvus["asr_features"] = (vector_record,)
+    elasticsearch = dict(snapshot.elasticsearch)
+    transcript = dict(elasticsearch["asr_transcripts"][0])
+    transcript["end_time_sec"] = 599.97
+    elasticsearch["asr_transcripts"] = (transcript,)
+    video = dict(snapshot.videos[0])
+    video["duration_sec"] = 600.0
+    roundtripped = replace(
+        snapshot,
+        videos=(video,),
+        milvus=milvus,
+        elasticsearch=elasticsearch,
+    )
+
+    assert build_full_contract_report(
+        roundtripped,
+        data_root=tmp_path,
+        manifest=_manifest(roundtripped),
     ) == []
 
 

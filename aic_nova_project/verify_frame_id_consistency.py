@@ -22,6 +22,18 @@ DATASET_FINGERPRINT = re.compile(r"^sha256:[0-9a-f]{64}$")
 TEXT_MODEL_REVISION = "4ab46e46ba5902328ba0742e489e75f787932f2b"
 
 
+def _same_float32_value(left: float, right: float) -> bool:
+    """Compare values at the precision physically stored by Milvus FLOAT."""
+    with np.errstate(over="ignore", invalid="ignore"):
+        left_float32 = np.float32(left)
+        right_float32 = np.float32(right)
+    return bool(
+        np.isfinite(left_float32)
+        and np.isfinite(right_float32)
+        and left_float32 == right_float32
+    )
+
+
 @dataclass(frozen=True)
 class VerificationSnapshot:
     """Join keys read from every online storage branch."""
@@ -491,10 +503,9 @@ def build_full_contract_report(
                 or isinstance(vector_value, bool)
                 or not isinstance(vector_value, (int, float))
                 or not math.isfinite(float(vector_value))
-                or not math.isclose(
+                or not _same_float32_value(
                     float(lexical_value),
                     float(vector_value),
-                    abs_tol=1e-6,
                 )
             ):
                 errors.append(
