@@ -108,3 +108,14 @@ def test_embedding_model_runtimes_are_exactly_pinned() -> None:
         "pandas==3.0.3",
         "pyarrow==25.0.0",
     } <= set(text_requirements)
+
+
+def test_indexing_verifier_dependencies_are_runtime_pinned() -> None:
+    indexing_requirements = (
+        PROJECT_ROOT / "indexing" / "requirements.txt"
+    ).read_text(encoding="utf-8").splitlines()
+
+    assert {
+        "Pillow==12.3.0",
+        "pydantic==2.13.4",
+    } <= set(indexing_requirements)
