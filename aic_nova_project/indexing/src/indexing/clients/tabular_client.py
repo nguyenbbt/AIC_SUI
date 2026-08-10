@@ -44,6 +44,16 @@ CREATE_METADATA_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_metadata_video_id ON metadata(video_id);
 """
 
+CREATE_METADATA_TIMELINE_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_metadata_video_timeline
+ON metadata(video_id, timestamp, frame_id);
+"""
+
+CREATE_METADATA_SOURCE_FRAME_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_metadata_video_source_frame
+ON metadata(video_id, source_frame_idx);
+"""
+
 CREATE_OBJECTS_TABLE = """
 CREATE TABLE IF NOT EXISTS objects (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,12 +111,20 @@ class TabularClient:
     def create_tables(self):
         """Create self-indexed-v2 videos, metadata, and objects tables."""
         cursor = self.conn.cursor()
-        cursor.execute(CREATE_VIDEOS_TABLE)
-        cursor.execute(CREATE_METADATA_TABLE)
-        cursor.execute(CREATE_METADATA_INDEX)
-        cursor.execute(CREATE_OBJECTS_TABLE)
-        cursor.execute(CREATE_OBJECTS_INDEX_FRAME)
-        cursor.execute(CREATE_OBJECTS_INDEX_LABEL)
+        try:
+            cursor.execute(CREATE_VIDEOS_TABLE)
+            cursor.execute(CREATE_METADATA_TABLE)
+            cursor.execute(CREATE_METADATA_INDEX)
+            cursor.execute(CREATE_METADATA_TIMELINE_INDEX)
+            cursor.execute(CREATE_METADATA_SOURCE_FRAME_INDEX)
+            cursor.execute(CREATE_OBJECTS_TABLE)
+            cursor.execute(CREATE_OBJECTS_INDEX_FRAME)
+            cursor.execute(CREATE_OBJECTS_INDEX_LABEL)
+        except sqlite3.OperationalError as exc:
+            self.conn.rollback()
+            raise ValueError(
+                "SQLite schema contract mismatch while creating indexes."
+            ) from exc
         self.conn.commit()
         self.audit_schema()
         logger.info("SQLite tables created.")
@@ -158,7 +176,11 @@ class TabularClient:
                 )
 
         required_indexes = {
-            "metadata": {"idx_metadata_video_id"},
+            "metadata": {
+                "idx_metadata_video_id",
+                "idx_metadata_video_timeline",
+                "idx_metadata_video_source_frame",
+            },
             "objects": {
                 "idx_objects_frame_id",
                 "idx_objects_label",

@@ -122,8 +122,16 @@ def test_sqlite_self_indexed_v2_schema_and_video_join():
     metadata_columns = {
         row[1] for row in client.conn.execute("PRAGMA table_info(metadata)")
     }
+    metadata_indexes = {
+        row[1] for row in client.conn.execute("PRAGMA index_list(metadata)")
+    }
     assert "videos" in tables
     assert {"source_frame_idx", "image_rel_path"} <= metadata_columns
+    assert {
+        "idx_metadata_video_id",
+        "idx_metadata_video_timeline",
+        "idx_metadata_video_source_frame",
+    } <= metadata_indexes
     assert client.conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
     client.disconnect()
