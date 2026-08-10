@@ -1,12 +1,16 @@
 import json
+import os
 
 import pytest
 from pydantic import ValidationError
 
+import src.indexing.dataset_manifest as manifest_module
 from src.indexing.dataset_manifest import (
     RECORD_COUNT_KEYS,
     DatasetManifestDraft,
     build_manifest_draft,
+    publish_ready_manifest,
+    write_manifest_draft,
 )
 
 
@@ -120,3 +124,57 @@ def test_manifest_draft_cannot_claim_ready():
                 "created_at_utc": "2026-08-10T00:00:00Z",
             }
         )
+
+
+def test_ready_publish_requires_clean_verification_and_is_atomic(
+    tmp_path,
+    monkeypatch,
+):
+    _write_metadata(tmp_path)
+    draft = build_manifest_draft(
+        data_dir=tmp_path,
+        dataset_id="run",
+        record_counts=_record_counts(),
+        created_at_utc="2026-08-10T00:00:00Z",
+    )
+    draft_path = tmp_path / "dataset-manifest.building.json"
+    active_path = tmp_path / "dataset-manifest.json"
+    active_path.write_bytes(b"last-known-good")
+
+    write_manifest_draft(draft, draft_path)
+    with pytest.raises(ValueError, match="verification failed"):
+        publish_ready_manifest(
+            draft,
+            active_path,
+            verification_errors=["bad vector"],
+        )
+    assert active_path.read_bytes() == b"last-known-good"
+
+    real_replace = os.replace
+
+    def fail_active_replace(source, destination):
+        if destination == active_path:
+            raise OSError("simulated publish failure")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(
+        manifest_module.os,
+        "replace",
+        fail_active_replace,
+    )
+    with pytest.raises(OSError, match="simulated publish failure"):
+        publish_ready_manifest(draft, active_path, verification_errors=[])
+    assert active_path.read_bytes() == b"last-known-good"
+    assert not list(tmp_path.glob(".dataset-manifest.json.tmp-*"))
+
+    monkeypatch.setattr(manifest_module.os, "replace", real_replace)
+    ready = publish_ready_manifest(
+        draft,
+        active_path,
+        verification_errors=[],
+    )
+
+    payload = json.loads(active_path.read_text(encoding="utf-8"))
+    assert ready.status == "READY"
+    assert payload["status"] == "READY"
+    assert payload["dataset_fingerprint"] == draft.dataset_fingerprint

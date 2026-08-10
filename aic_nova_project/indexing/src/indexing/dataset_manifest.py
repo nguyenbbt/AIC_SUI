@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Literal, Mapping
+from typing import Any, Dict, Literal, Mapping, Sequence
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -118,6 +120,12 @@ class DatasetManifestDraft(BaseModel):
         if counts["metadata"] and not counts["videos"]:
             raise ValueError("metadata cannot exist without videos")
         return self
+
+
+class ReadyDatasetManifest(DatasetManifestDraft):
+    """The exact manifest shape accepted by the Online startup gate."""
+
+    status: Literal["READY"] = "READY"
 
 
 def _created_at_now() -> str:
@@ -242,12 +250,62 @@ def build_manifest_draft(
     )
 
 
+def _atomic_write_manifest(
+    manifest: DatasetManifestDraft | ReadyDatasetManifest,
+    output_path: str | Path,
+) -> None:
+    destination = Path(output_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = destination.with_name(
+        f".{destination.name}.tmp-{uuid4().hex}"
+    )
+    try:
+        temporary_path.write_text(
+            manifest.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+        os.replace(temporary_path, destination)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def write_manifest_draft(
+    draft: DatasetManifestDraft,
+    output_path: str | Path,
+) -> None:
+    """Atomically write a BUILDING manifest that Online must reject."""
+    _atomic_write_manifest(draft, output_path)
+
+
+def publish_ready_manifest(
+    draft: DatasetManifestDraft,
+    output_path: str | Path,
+    *,
+    verification_errors: Sequence[str],
+) -> ReadyDatasetManifest:
+    """Publish READY only after the caller supplies a clean verifier result."""
+    errors = list(verification_errors)
+    if errors:
+        raise ValueError(
+            "Dataset verification failed; READY was not published: "
+            + "; ".join(errors[:5])
+        )
+    payload = draft.model_dump()
+    payload["status"] = "READY"
+    ready = ReadyDatasetManifest.model_validate(payload)
+    _atomic_write_manifest(ready, output_path)
+    return ready
+
+
 __all__ = [
     "CONTRACT_VERSION",
     "DatasetManifestDraft",
+    "ReadyDatasetManifest",
     "RECORD_COUNT_KEYS",
     "TEXT_MODEL_NAME",
     "TEXT_MODEL_REVISION",
     "VISUAL_MODEL_ID",
     "build_manifest_draft",
+    "publish_ready_manifest",
+    "write_manifest_draft",
 ]
