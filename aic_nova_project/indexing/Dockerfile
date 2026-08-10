@@ -8,6 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy source code
 COPY indexing/ /app/
+COPY verify_frame_id_consistency.py /app/
 
 # Set Python path
 ENV PYTHONPATH=/app

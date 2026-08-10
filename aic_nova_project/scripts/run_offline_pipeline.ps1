@@ -4,7 +4,8 @@ param(
     [switch]$Force,
     [switch]$ResetIndex,
     [switch]$SkipIndex,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [string]$DatasetId = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -121,6 +122,11 @@ try {
     }
 
     $forceArgument = if ($Force) { " --force" } else { "" }
+    $resolvedDatasetId = if ([string]::IsNullOrWhiteSpace($DatasetId)) {
+        "aic2026-team-run-$([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))"
+    } else {
+        $DatasetId
+    }
     Invoke-ModalModule "module1" (
         "--input /data/raw_videos --output /data/processed " +
         "--workers 1 --device cuda"
@@ -197,6 +203,18 @@ try {
             $indexArguments += "--reset-all"
         }
         Invoke-CheckedCommand "docker" $indexArguments
+
+        Write-Stage "verify-and-publish"
+        Invoke-CheckedCommand "docker" @(
+            "compose", "run", "--rm", "indexing",
+            "python", "-m", "src.indexing.publish_cli",
+            "--data-dir", "/workspace/data/processed",
+            "--dataset-id", $resolvedDatasetId,
+            "--manifest-path",
+            "/workspace/data/processed/dataset-manifest.json",
+            "--building-manifest-path",
+            "/workspace/data/processed/dataset-manifest.building.json"
+        )
         Invoke-CheckedCommand "docker" @("compose", "ps")
     }
 

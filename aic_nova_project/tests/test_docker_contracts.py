@@ -53,6 +53,14 @@ def test_text_model_download_is_pinned_to_the_online_revision():
     ) in dockerfile
 
 
+def test_indexing_image_contains_the_full_contract_verifier():
+    dockerfile = (PROJECT_ROOT / "indexing" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+
+    assert "COPY verify_frame_id_consistency.py /app/" in dockerfile
+
+
 def test_module3_entrypoint_runs_cli_inside_its_package():
     dockerfile = (
         PROJECT_ROOT

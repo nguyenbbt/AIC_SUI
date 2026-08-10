@@ -47,6 +47,7 @@ def test_one_click_dry_run_contains_ordered_offline_stages():
         "STAGE: module6",
         "STAGE: pull-artifacts",
         "STAGE: docker-indexing",
+        "STAGE: verify-and-publish",
     ]
     offsets = [output.index(stage) for stage in expected_stages]
     assert offsets == sorted(offsets)
@@ -57,6 +58,8 @@ def test_one_click_dry_run_contains_ordered_offline_stages():
     assert "Qwen/Qwen2.5-7B-Instruct" in output
     assert "modal volume get" in output
     assert "python -m src.indexing.cli" in output
+    assert "python -m src.indexing.publish_cli" in output
+    assert "dataset-manifest.json" in output
     indexing_command = next(
         line
         for line in output.splitlines()
