@@ -14,9 +14,8 @@ def isolate_visual_pipeline_from_remote_model(monkeypatch):
             self.precision = "fp32" if precision == "fp32" else precision
 
         def encode_batch(self, images):
-            return np.asarray(
-                [[0.6, 0.8] for _ in images],
-                dtype=np.float32,
-            )
+            embeddings = np.zeros((len(images), 512), dtype=np.float32)
+            embeddings[:, 0] = 1.0
+            return embeddings
 
     monkeypatch.setattr(pipeline, "OpenCLIPEncoder", FixtureEncoder)

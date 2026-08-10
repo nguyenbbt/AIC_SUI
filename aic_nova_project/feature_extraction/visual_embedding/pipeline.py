@@ -4,6 +4,7 @@ import logging
 from typing import List, Dict, Any
 from pathlib import Path
 from PIL import Image
+import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 import time
@@ -13,6 +14,10 @@ from .encoders import OpenCLIPEncoder
 from .metadata_reader import read_metadata
 from .embedding_writer import write_embeddings_to_parquet
 from .resume_validation import visual_output_is_valid
+from .config import (
+    DEFAULT_VISUAL_MODEL_ID,
+    EXPECTED_VISUAL_EMBEDDING_DIMENSION,
+)
 
 # Setup basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
@@ -94,6 +99,29 @@ def process_video_batch(
                 batch_encoded_records = []
                 for sub_records, sub_images in sub_batches:
                     embeddings = encoder.encode_batch(sub_images)
+                    if embeddings.ndim != 2:
+                        raise ValueError(
+                            "Visual encoder output must be a 2D matrix"
+                        )
+                    if (
+                        encoder.model_id == DEFAULT_VISUAL_MODEL_ID
+                        and embeddings.shape[1]
+                        != EXPECTED_VISUAL_EMBEDDING_DIMENSION
+                    ):
+                        raise ValueError(
+                            "Canonical visual model returned dimension "
+                            f"{embeddings.shape[1]}; expected "
+                            f"{EXPECTED_VISUAL_EMBEDDING_DIMENSION}"
+                        )
+                    if not np.isfinite(embeddings).all():
+                        raise ValueError(
+                            "Visual encoder returned non-finite values"
+                        )
+                    norms = np.linalg.norm(embeddings, axis=1)
+                    if not np.allclose(norms, 1.0, atol=1e-3):
+                        raise ValueError(
+                            "Visual encoder output must be L2-normalized"
+                        )
                     
                     for i in range(len(sub_records)):
                         record_out = sub_records[i].copy()
