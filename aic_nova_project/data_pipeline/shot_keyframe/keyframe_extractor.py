@@ -4,6 +4,8 @@ import logging
 from PIL import Image
 from typing import List, Dict
 
+from .fingerprints import sha256_file
+
 logger = logging.getLogger(__name__)
 
 class KeyframeExtractor:
@@ -100,6 +102,7 @@ class KeyframeExtractor:
                             "time_sec": round(decoded_idx / fps, 3),
                             "file_path": relative_path,
                             "image_rel_path": relative_path,
+                            "image_sha256": sha256_file(absolute_path),
                         }
                     )
 

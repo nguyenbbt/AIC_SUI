@@ -1,13 +1,19 @@
 import os
 import json
 import logging
+import shutil
 from pathlib import Path, PurePosixPath
+from uuid import uuid4
 
 import cv2
 
 from .transnet_wrapper import TransNetPredictor
 from .keyframe_extractor import KeyframeExtractor
 from .metadata_schema import VideoMetadata
+from .fingerprints import (
+    build_processing_config_fingerprint,
+    sha256_file,
+)
 from .resume_validation import keyframe_artifacts_are_valid
 
 logger = logging.getLogger(__name__)
@@ -46,6 +52,13 @@ class VideoProcessor:
         try:
             video_id = os.path.splitext(os.path.basename(video_path))[0]
             metadata_path = os.path.join(self.metadata_dir, f"{video_id}.json")
+            source_video_rel_path = self._relative_source_path(video_path)
+            source_fingerprint = sha256_file(video_path)
+            config_fingerprint = build_processing_config_fingerprint(
+                threshold=self.threshold,
+                positions=self.extractor.positions,
+                webp_quality=self.extractor.webp_quality,
+            )
             
             # Idempotency / Resume check
             if os.path.exists(metadata_path):
@@ -56,6 +69,9 @@ class VideoProcessor:
                     if not keyframe_artifacts_are_valid(
                         metadata,
                         self.output_dir,
+                        expected_source_fingerprint=source_fingerprint,
+                        expected_config_fingerprint=config_fingerprint,
+                        expected_source_video_rel_path=source_video_rel_path,
                     ):
                         raise ValueError(
                             "One or more keyframe artifacts are missing or unreadable"
@@ -69,42 +85,52 @@ class VideoProcessor:
             
             # Step 1: Detect Shots
             shots = self.transnet.predict_shots(video_path, threshold=self.threshold)
-            
-            # Step 2: Extract Keyframes
-            shots_metadata, fps = self.extractor.extract_keyframes(
-                video_path=video_path,
-                video_id=video_id,
-                shots=shots,
-                output_dir=self.keyframes_dir
-            )
 
-            frame_count, width, height = self._probe_video(video_path)
-            duration_sec = frame_count / fps
-            source_video_rel_path = self._relative_source_path(video_path)
-                
-            # Step 3: Build and Validate Metadata
-            video_meta = VideoMetadata(
-                video_id=video_id,
-                source_path=source_video_rel_path,
-                source_video_rel_path=source_video_rel_path,
-                fps=fps,
-                duration_sec=duration_sec,
-                frame_count=frame_count,
-                width=width,
-                height=height,
-                num_shots=len(shots_metadata),
-                shots=shots_metadata
+            staging_root = Path(self.keyframes_dir) / (
+                f".{video_id}.staging-{uuid4().hex}"
             )
-            
-            # Step 4: Save Metadata
-            temporary_path = f"{metadata_path}.tmp"
+            staging_root.mkdir(parents=True)
             try:
-                with open(temporary_path, 'w', encoding='utf-8') as f:
-                    f.write(video_meta.model_dump_json(indent=2))
-                os.replace(temporary_path, metadata_path)
+                # Step 2: Extract into an unpublished run-scoped directory.
+                shots_metadata, fps = self.extractor.extract_keyframes(
+                    video_path=video_path,
+                    video_id=video_id,
+                    shots=shots,
+                    output_dir=str(staging_root),
+                )
+
+                frame_count, width, height = self._probe_video(video_path)
+                duration_sec = frame_count / fps
+                if sha256_file(video_path) != source_fingerprint:
+                    raise RuntimeError(
+                        f"Source video changed during processing: {video_path}"
+                    )
+
+                # Step 3: Build and validate metadata before publication.
+                video_meta = VideoMetadata(
+                    video_id=video_id,
+                    source_path=source_video_rel_path,
+                    source_video_rel_path=source_video_rel_path,
+                    source_fingerprint=source_fingerprint,
+                    producer_config_fingerprint=config_fingerprint,
+                    fps=fps,
+                    duration_sec=duration_sec,
+                    frame_count=frame_count,
+                    width=width,
+                    height=height,
+                    num_shots=len(shots_metadata),
+                    shots=shots_metadata,
+                )
+
+                # Step 4: Publish keyframes and metadata as one transaction.
+                self._publish_video_artifacts(
+                    video_id=video_id,
+                    staged_video_dir=staging_root / video_id,
+                    metadata_path=Path(metadata_path),
+                    metadata=video_meta,
+                )
             finally:
-                if os.path.exists(temporary_path):
-                    os.remove(temporary_path)
+                shutil.rmtree(staging_root, ignore_errors=True)
                 
             logger.info(f"Successfully processed video: {video_id}")
             return True
@@ -112,6 +138,66 @@ class VideoProcessor:
         except Exception as e:
             logger.error(f"Failed to process video {video_path}. Error: {e}", exc_info=True)
             return False
+
+    def _publish_video_artifacts(
+        self,
+        *,
+        video_id: str,
+        staged_video_dir: Path,
+        metadata_path: Path,
+        metadata: VideoMetadata,
+    ) -> None:
+        """Atomically replace one video's last-known-good Module 1 output."""
+        if not staged_video_dir.is_dir():
+            raise ValueError(
+                f"Missing staged keyframe directory for {video_id}"
+            )
+
+        final_video_dir = Path(self.keyframes_dir) / video_id
+        backup_dir = Path(self.keyframes_dir) / (
+            f".{video_id}.backup-{uuid4().hex}"
+        )
+        temporary_metadata = metadata_path.with_name(
+            f".{metadata_path.name}.tmp-{uuid4().hex}"
+        )
+        had_previous_keyframes = final_video_dir.exists()
+        previous_moved = False
+        staged_published = False
+        try:
+            temporary_metadata.write_text(
+                metadata.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+            if had_previous_keyframes and not final_video_dir.is_dir():
+                raise ValueError(
+                    "Expected keyframe directory, found file: "
+                    f"{final_video_dir}"
+                )
+            if had_previous_keyframes:
+                final_video_dir.replace(backup_dir)
+                previous_moved = True
+            staged_video_dir.replace(final_video_dir)
+            staged_published = True
+            os.replace(temporary_metadata, metadata_path)
+        except Exception:
+            if staged_published and final_video_dir.exists():
+                shutil.rmtree(final_video_dir)
+            if previous_moved and backup_dir.exists():
+                backup_dir.replace(final_video_dir)
+            raise
+        else:
+            if backup_dir.exists():
+                try:
+                    shutil.rmtree(backup_dir)
+                except OSError as exc:
+                    logger.warning(
+                        "Published %s but could not remove backup %s: %s",
+                        video_id,
+                        backup_dir,
+                        exc,
+                    )
+        finally:
+            temporary_metadata.unlink(missing_ok=True)
 
     def _relative_source_path(self, video_path: str) -> str:
         """Return the source path relative to the configured dataset root."""

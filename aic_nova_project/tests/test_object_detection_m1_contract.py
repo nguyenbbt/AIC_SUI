@@ -12,8 +12,12 @@ def test_object_detection_reads_module1_metadata(tmp_path):
     metadata = VideoMetadata(
         video_id="V001",
         source_path="videos/V001.mp4",
+        source_video_rel_path="videos/V001.mp4",
         fps=30.0,
         duration_sec=1.0,
+        frame_count=31,
+        width=320,
+        height=240,
         num_shots=1,
         shots=[
             ShotMetadata(

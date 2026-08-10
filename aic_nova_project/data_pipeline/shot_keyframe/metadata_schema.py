@@ -32,6 +32,11 @@ class KeyframeMetadata(BaseModel):
     time_sec: float = Field(..., ge=0.0, description="The timestamp in seconds")
     file_path: str = Field(..., description="Relative path to the saved WebP image")
     image_rel_path: str = Field(..., description="POSIX path relative to the dataset root")
+    image_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        description="SHA-256 of the published WebP image",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -73,6 +78,16 @@ class VideoMetadata(BaseModel):
     video_id: str = Field(..., description="Unique identifier for the video")
     source_path: str = Field(..., description="Path to the original video file")
     source_video_rel_path: str = Field(..., description="POSIX path relative to the dataset root")
+    source_fingerprint: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        description="SHA-256 of the raw source video",
+    )
+    producer_config_fingerprint: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        description="SHA-256 of the Module 1 producer configuration",
+    )
     fps: float = Field(..., gt=0.0, description="Frames per second")
     duration_sec: float = Field(..., ge=0.0, description="Total duration in seconds")
     frame_count: int = Field(..., gt=0)
