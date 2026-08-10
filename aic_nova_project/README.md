@@ -54,7 +54,7 @@ This repository contains the full pipeline for the AI Challenge 2026 Video Retri
 │
 ├── indexing/                          # Module 6: Vector DB and metadata indexing (scaffolded)
 ├── query_understanding/               # Module 7: Query expansion & intent (scaffolded)
-├── retrieval_api/                     # Module 8: Core retrieval engine (scaffolded)
+├── retrieval_api/                     # Module 8: Online retrieval API and runtime wiring
 └── ui/                                # Module 9: Frontend User Interface (scaffolded)
 ```
 
@@ -101,6 +101,31 @@ The runner discovers every repository `tests/` directory and executes each in
 an isolated pytest process. This prevents collisions between modules that use
 independent `src/` package layouts. Use `python scripts/run_all_tests.py --list`
 to inspect the discovered suites without running them.
+
+### Online Data & Infrastructure
+
+From PowerShell at the repository root:
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r online\requirements-runtime.txt
+python -m pip install -r online\requirements-test.txt
+python -m pytest -p no:cacheprovider --import-mode=importlib tests/online -q
+```
+
+The contract/adapter unit tests do not require running Milvus or Elasticsearch.
+Optional runtime validation is read-only:
+
+```powershell
+python -m online.validate_contract
+python -m online.validate_contract --fail-on-partial
+```
+
+Configure `AIC_ONLINE_MILVUS_URI`, `AIC_ONLINE_ES_URI`, and
+`AIC_ONLINE_SQLITE_PATH` (plus the other names documented in
+`online/README.md`) instead of embedding endpoints or credentials in code.
 
 * `feature_extraction/visual_embedding`: Generates feature vectors from keyframes.
 * `feature_extraction/ocr`: Extracts and recognizes text overlay (subtitles, banners) in keyframes.

@@ -1,0 +1,4 @@
+# Optional Person-B encoder runtime. Not required for SDK-free unit tests.
+torch>=2.0.0
+open_clip_torch>=2.20.0
+sentence-transformers>=2.2.2
