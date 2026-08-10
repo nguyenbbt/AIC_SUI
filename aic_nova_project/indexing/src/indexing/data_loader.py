@@ -15,13 +15,56 @@ import json
 import logging
 import math
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import List, Dict, Any, Optional, Tuple
+from urllib.parse import urlsplit
 
 import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+
+def _relative_posix_path(value: Any, field_name: str) -> str:
+    """Validate one artifact path relative to the configured dataset root."""
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or "\\" in value
+        or "\x00" in value
+    ):
+        raise ValueError(f"{field_name} must be a normalized POSIX relative path")
+    parsed = urlsplit(value)
+    posix_path = PurePosixPath(value)
+    windows_path = PureWindowsPath(value)
+    if (
+        parsed.scheme
+        or parsed.netloc
+        or posix_path.is_absolute()
+        or windows_path.is_absolute()
+        or bool(windows_path.drive)
+        or ".." in posix_path.parts
+    ):
+        raise ValueError(f"{field_name} must be a safe relative path")
+    return value
+
+
+def _finite_float(value: Any, field_name: str) -> float:
+    """Return a finite numeric value without accepting booleans."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field_name} must be numeric")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{field_name} must be finite")
+    return result
+
+
+def _positive_int(value: Any, field_name: str) -> int:
+    """Return a strictly positive JSON integer."""
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{field_name} must be a positive integer")
+    return value
 
 
 def normalize_frame_id(raw_frame_id: str, video_id: str) -> str:
@@ -513,29 +556,65 @@ def load_metadata_and_objects(
     Returns:
         (metadata_records, object_records)
     """
+    video_record = load_video_metadata(data_dir, video_id)
+
     # --- Metadata from Module 1 ---
     meta_path = data_dir / "metadata" / f"{video_id}.json"
     meta_data = read_json_safe(meta_path) if meta_path.exists() else None
+    if not isinstance(meta_data, dict):
+        raise ValueError(f"Missing or invalid metadata artifact for {video_id}")
 
     metadata_records = []
-    if isinstance(meta_data, dict):
-        for shot in meta_data.get("shots", []):
-            shot_id = shot.get("shot_id", 0)
-            for kf in shot.get("keyframes", []):
-                raw_frame_id = kf.get("file_path", "")
-                # Extract stem from file_path: "keyframes/VIDEO_ID/shot_00000_pos_015.webp"
-                if "/" in raw_frame_id:
-                    raw_frame_id = Path(raw_frame_id).stem
+    for shot in meta_data.get("shots", []):
+        if not isinstance(shot, dict):
+            raise ValueError("metadata.shots must contain objects")
+        shot_id = shot.get("shot_id")
+        if isinstance(shot_id, bool) or not isinstance(shot_id, int) or shot_id < 0:
+            raise ValueError("shot_id must be a non-negative integer")
+        for keyframe in shot.get("keyframes", []):
+            if not isinstance(keyframe, dict):
+                raise ValueError("keyframes must contain objects")
+            image_rel_path = _relative_posix_path(
+                keyframe.get("image_rel_path"),
+                "image_rel_path",
+            )
+            raw_frame_id = Path(image_rel_path).stem
+            frame_id = normalize_frame_id(raw_frame_id, video_id)
+            position_code = keyframe.get("position_code")
+            if (
+                isinstance(position_code, bool)
+                or not isinstance(position_code, int)
+                or not 0 <= position_code <= 100
+                or not frame_id.endswith(
+                    f"_{shot_id:05d}_{position_code:03d}"
+                )
+            ):
+                raise ValueError("frame_id suffix does not match shot/position")
+            source_frame_idx = keyframe.get("source_frame_idx")
+            if (
+                isinstance(source_frame_idx, bool)
+                or not isinstance(source_frame_idx, int)
+                or not 0 <= source_frame_idx < video_record["frame_count"]
+            ):
+                raise ValueError("source_frame_idx is outside source frame bounds")
+            timestamp = _finite_float(keyframe.get("time_sec"), "time_sec")
+            if timestamp < 0 or timestamp > video_record["duration_sec"]:
+                raise ValueError("time_sec is outside source duration")
 
-                # Normalize to Global ID: V001_00000_015
-                frame_id = normalize_frame_id(raw_frame_id, video_id)
-
-                metadata_records.append({
+            metadata_records.append(
+                {
                     "frame_id": frame_id,
                     "video_id": video_id,
-                    "shot_id": int(shot_id),
-                    "timestamp": float(kf.get("time_sec", 0.0)),
-                })
+                    "shot_id": shot_id,
+                    "source_frame_idx": source_frame_idx,
+                    "timestamp": timestamp,
+                    "image_rel_path": image_rel_path,
+                }
+            )
+
+    metadata_ids = {record["frame_id"] for record in metadata_records}
+    if len(metadata_ids) != len(metadata_records):
+        raise ValueError("metadata contains duplicate frame_id values")
 
     # --- Object Detection from Module 5 ---
     # Object detection JSON follows same schema as OCR: {video_id, frames: [{frame_id, objects: [...]}]}
@@ -548,17 +627,79 @@ def load_metadata_and_objects(
         for frame in obj_data.get("frames", []):
             raw_fid = str(frame.get("frame_id", ""))
             frame_id = normalize_frame_id(raw_fid, video_id)
+            if frame_id not in metadata_ids:
+                raise ValueError("object frame_id does not JOIN metadata")
             for obj in frame.get("objects", []):
-                bbox = obj.get("bbox", obj.get("box", [0, 0, 0, 0]))
-                object_records.append({
-                    "frame_id": frame_id,
-                    "label": str(obj.get("label", "unknown")).lower(),
-                    "confidence": float(obj.get("confidence", obj.get("score", 0.0))),
-                    "x_min": float(bbox[0]) if len(bbox) > 0 else 0.0,
-                    "y_min": float(bbox[1]) if len(bbox) > 1 else 0.0,
-                    "x_max": float(bbox[2]) if len(bbox) > 2 else 0.0,
-                    "y_max": float(bbox[3]) if len(bbox) > 3 else 0.0,
-                    "model_source": str(obj.get("model_source", "")),
-                })
+                if not isinstance(obj, dict):
+                    raise ValueError("objects must contain object records")
+                bbox = obj.get("bbox", obj.get("box"))
+                if not isinstance(bbox, list) or len(bbox) != 4:
+                    raise ValueError("bbox must contain exactly four coordinates")
+                x_min, y_min, x_max, y_max = (
+                    _finite_float(value, "bbox") for value in bbox
+                )
+                if not (
+                    0 <= x_min < x_max <= video_record["width"]
+                    and 0 <= y_min < y_max <= video_record["height"]
+                ):
+                    raise ValueError("bbox is outside absolute pixel bounds")
+                confidence = _finite_float(
+                    obj.get("confidence", obj.get("score")),
+                    "confidence",
+                )
+                if not 0 <= confidence <= 1:
+                    raise ValueError("confidence must be within [0, 1]")
+                label = obj.get("label")
+                if not isinstance(label, str) or not label.strip():
+                    raise ValueError("object label must not be empty")
+                model_source = obj.get("model_source")
+                if model_source is not None and (
+                    not isinstance(model_source, str) or not model_source.strip()
+                ):
+                    raise ValueError("model_source must be non-empty text or null")
+                object_records.append(
+                    {
+                        "frame_id": frame_id,
+                        "label": label.strip().casefold(),
+                        "confidence": confidence,
+                        "x_min": x_min,
+                        "y_min": y_min,
+                        "x_max": x_max,
+                        "y_max": y_max,
+                        "model_source": (
+                            model_source.strip() if model_source is not None else None
+                        ),
+                    }
+                )
 
     return metadata_records, object_records
+
+
+def load_video_metadata(data_dir: Path, video_id: str) -> Dict[str, Any]:
+    """Load and validate the self-indexed-v2 source-video SQLite row."""
+    meta_path = data_dir / "metadata" / f"{video_id}.json"
+    payload = read_json_safe(meta_path) if meta_path.exists() else None
+    if not isinstance(payload, dict):
+        raise ValueError(f"Missing or invalid metadata artifact for {video_id}")
+    if payload.get("contract_version") != "self-indexed-v2":
+        raise ValueError("metadata contract_version must be self-indexed-v2")
+    if payload.get("video_id") != video_id:
+        raise ValueError("metadata video_id does not match requested video")
+
+    fps = _finite_float(payload.get("fps"), "fps")
+    duration_sec = _finite_float(payload.get("duration_sec"), "duration_sec")
+    if fps <= 0 or duration_sec < 0:
+        raise ValueError("fps and duration_sec are outside valid bounds")
+
+    return {
+        "video_id": video_id,
+        "source_video_rel_path": _relative_posix_path(
+            payload.get("source_video_rel_path"),
+            "source_video_rel_path",
+        ),
+        "fps": fps,
+        "duration_sec": duration_sec,
+        "frame_count": _positive_int(payload.get("frame_count"), "frame_count"),
+        "width": _positive_int(payload.get("width"), "width"),
+        "height": _positive_int(payload.get("height"), "height"),
+    }

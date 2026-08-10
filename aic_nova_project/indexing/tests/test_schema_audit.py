@@ -82,6 +82,53 @@ def test_existing_sqlite_schema_is_audited():
     client.disconnect()
 
 
+def test_sqlite_self_indexed_v2_schema_and_video_join():
+    client = TabularClient(":memory:")
+    client.connect()
+    client.create_tables()
+
+    client.insert_video_batch(
+        [
+            {
+                "video_id": "V001",
+                "source_video_rel_path": "raw_videos/V001.mp4",
+                "fps": 25.0,
+                "duration_sec": 10.0,
+                "frame_count": 250,
+                "width": 1280,
+                "height": 720,
+            }
+        ]
+    )
+    client.insert_metadata_batch(
+        [
+            {
+                "frame_id": "V001_00000_050",
+                "video_id": "V001",
+                "shot_id": 0,
+                "source_frame_idx": 125,
+                "timestamp": 5.0,
+                "image_rel_path": "keyframes/V001/shot_00000_pos_050.webp",
+            }
+        ]
+    )
+
+    tables = {
+        row[0]
+        for row in client.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    metadata_columns = {
+        row[1] for row in client.conn.execute("PRAGMA table_info(metadata)")
+    }
+    assert "videos" in tables
+    assert {"source_frame_idx", "image_rel_path"} <= metadata_columns
+    assert client.conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+    client.disconnect()
+
+
 def test_run_provisions_or_audits_all_vector_collections(
     tmp_path,
 ):
