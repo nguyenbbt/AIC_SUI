@@ -1,12 +1,22 @@
 import pytest
 import numpy as np
 from src.text_embedding.encoders.sbert_encoder import SentenceTransformerEncoder
+from src.text_embedding.config import (
+    TEXT_MAX_LENGTH,
+    TEXT_MODEL_NAME,
+    TEXT_MODEL_REVISION,
+)
 
 @pytest.fixture(scope="module")
 def encoder():
     # Use a small model for fast testing if possible, but testing the actual model is fine since it's only ~400MB
     # For CI/CD, a smaller mock model could be used. Here we use the real one.
-    return SentenceTransformerEncoder(model_name="dangvantuan/vietnamese-embedding", device="cpu", max_length=128)
+    return SentenceTransformerEncoder(
+        model_name=TEXT_MODEL_NAME,
+        model_revision=TEXT_MODEL_REVISION,
+        device="cpu",
+        max_length=TEXT_MAX_LENGTH,
+    )
 
 def test_encode_batch_shape_and_norm(encoder):
     texts = ["Xin chào Việt Nam", "Đây là một đoạn test ngắn.", "Một câu khác."]

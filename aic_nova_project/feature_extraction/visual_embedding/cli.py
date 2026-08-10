@@ -14,7 +14,8 @@ def main():
         "--model-id",
         type=str,
         default=DEFAULT_VISUAL_MODEL_ID,
-        help="Model ID for open_clip.",
+        choices=[DEFAULT_VISUAL_MODEL_ID],
+        help="Locked OpenCLIP model ID.",
     )
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cuda", "cpu"], help="Device to use for inference.")
     parser.add_argument("--precision", type=str, default="fp16", choices=["fp16", "bf16", "fp32"], help="Precision for inference.")

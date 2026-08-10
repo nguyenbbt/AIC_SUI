@@ -1,0 +1,52 @@
+{
+  "_schema_version": "self-indexed-v2",
+  "frame": {
+    "frame_id": "L21_V001_00000_015",
+    "video_id": "L21_V001",
+    "shot_id": 0,
+    "timestamp_sec": 0.0,
+    "source_frame_idx": 0,
+    "image_rel_path": "keyframes/L21_V001/L21_V001_00000_015.jpg",
+    "rank": 1,
+    "raw_score": 0.92,
+    "normalized_score": null,
+    "provenance": {
+      "branch": "visual_dense",
+      "backend": "milvus",
+      "source_resource": "visual_features",
+      "query_variant_id": "q0",
+      "query_text": "một người đi xe đạp"
+    }
+  },
+  "asr_interval": {
+    "video_id": "L21_V001",
+    "interval_id": "0",
+    "start_time_sec": 1.0,
+    "end_time_sec": 6.0,
+    "rank": 1,
+    "raw_score": 4.2,
+    "normalized_score": null,
+    "text": "một người đi xe đạp",
+    "provenance": {
+      "branch": "asr_bm25",
+      "backend": "elasticsearch",
+      "source_resource": "asr_transcripts",
+      "query_variant_id": "q0",
+      "query_text": "một người đi xe đạp"
+    }
+  },
+  "video": {
+    "video_id": "L21_V001",
+    "rank": 1,
+    "raw_score": 0.8,
+    "normalized_score": null,
+    "summary": "Video về giao thông",
+    "provenance": {
+      "branch": "summary_dense",
+      "backend": "milvus",
+      "source_resource": "summary_features",
+      "query_variant_id": "q0",
+      "query_text": "một người đi xe đạp"
+    }
+  }
+}

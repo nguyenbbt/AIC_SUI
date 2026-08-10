@@ -5,6 +5,11 @@ from typing import Any, Dict, List
 import numpy as np
 import pandas as pd
 
+from .config import (
+    DEFAULT_VISUAL_MODEL_ID,
+    EXPECTED_VISUAL_EMBEDDING_DIMENSION,
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +64,11 @@ def visual_output_is_valid(
 
             embedding = np.asarray(row["embedding"], dtype=np.float32)
             embedding_dim = int(row["embedding_dim"])
+            if (
+                model_id == DEFAULT_VISUAL_MODEL_ID
+                and embedding_dim != EXPECTED_VISUAL_EMBEDDING_DIMENSION
+            ):
+                return False
             if embedding.ndim != 1 or embedding.size != embedding_dim:
                 return False
             if embedding_dim <= 0 or not np.isfinite(embedding).all():

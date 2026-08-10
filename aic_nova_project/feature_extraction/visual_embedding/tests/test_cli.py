@@ -1,6 +1,8 @@
 import sys
 from unittest.mock import patch
 
+import pytest
+
 from feature_extraction.visual_embedding.cli import main
 
 
@@ -25,3 +27,24 @@ def test_cli_defaults_to_openai_clip_vit_b32(monkeypatch):
         main()
 
     assert run_pipeline.call_args.kwargs["model_id"] == "ViT-B-32::openai"
+
+
+def test_cli_rejects_noncanonical_visual_model(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "visual-embedding",
+            "--metadata-dir",
+            "metadata",
+            "--keyframe-dir",
+            "keyframes",
+            "--output-dir",
+            "embeddings",
+            "--model-id",
+            "ViT-L-14::openai",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        main()

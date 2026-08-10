@@ -4,6 +4,12 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 
 from feature_extraction.asr_transcript.pipeline import ASRTranscriptPipeline
+from feature_extraction.visual_embedding.config import (
+    EXPECTED_VISUAL_EMBEDDING_DIMENSION,
+)
+from feature_extraction.text_embedding.src.text_embedding.config import (
+    TEXT_EMBEDDING_DIMENSION,
+)
 from feature_extraction.text_embedding.src.text_embedding.data_readers import (
     parse_asr_file,
 )
@@ -54,18 +60,42 @@ def test_module3_asr_contract_flows_through_module6_to_module7(
     transcript_dir.mkdir(parents=True)
 
     frame_id = "V001_00000_015"
+    visual_embedding = [1.0] + [0.0] * (
+        EXPECTED_VISUAL_EMBEDDING_DIMENSION - 1
+    )
+    text_embedding = [1.0] + [0.0] * (TEXT_EMBEDDING_DIMENSION - 1)
     (metadata_dir / f"{video_id}.json").write_text(
         json.dumps(
             {
+                "contract_version": "self-indexed-v2",
                 "video_id": video_id,
+                "source_path": "videos/V001.mp4",
+                "source_video_rel_path": "videos/V001.mp4",
+                "fps": 30.0,
+                "duration_sec": 20.0,
+                "frame_count": 600,
+                "width": 32,
+                "height": 24,
+                "num_shots": 1,
                 "shots": [
                     {
                         "shot_id": 0,
+                        "start_frame": 0,
+                        "end_frame": 599,
+                        "start_time_sec": 0.0,
+                        "end_time_sec": 20.0,
                         "keyframes": [
                             {
                                 "position": 0.15,
+                                "position_code": 15,
+                                "frame_index": 4,
+                                "source_frame_idx": 4,
                                 "time_sec": 0.133,
                                 "file_path": (
+                                    "keyframes/V001/"
+                                    "shot_00000_pos_015.webp"
+                                ),
+                                "image_rel_path": (
                                     "keyframes/V001/"
                                     "shot_00000_pos_015.webp"
                                 ),
@@ -85,7 +115,7 @@ def test_module3_asr_contract_flows_through_module6_to_module7(
                 "frame_id": frame_id,
                 "video_id": video_id,
                 "shot_id": 0,
-                "embedding": [0.5, 0.5, 0.5, 0.5],
+                "embedding": visual_embedding,
             }
         ]
     ).to_parquet(visual_dir / f"{video_id}.parquet", index=False)
@@ -135,7 +165,7 @@ def test_module3_asr_contract_flows_through_module6_to_module7(
     assert records[0]["end_time_sec"] == 17.8
     assert records[0]["text"] == "Văn bản đã làm sạch."
 
-    records[0]["embedding"] = [0.5, 0.5, 0.5, 0.5]
+    records[0]["embedding"] = text_embedding
     parquet_path = tmp_path / "embeddings" / "text_asr" / f"{video_id}.parquet"
     write_embeddings_to_parquet(records, parquet_path)
     assert parquet_path.exists()
@@ -177,7 +207,7 @@ def test_module3_asr_contract_flows_through_module6_to_module7(
             {
                 "video_id": video_id,
                 "text": "Bản tóm tắt.",
-                "embedding": [0.5, 0.5, 0.5, 0.5],
+                "embedding": text_embedding,
             }
         ],
         summary_parquet_path,
@@ -241,6 +271,15 @@ def test_module3_asr_contract_flows_through_module6_to_module7(
         },
         metadata=metadata_records,
         objects=[],
+        video={
+            "video_id": video_id,
+            "source_video_rel_path": "videos/V001.mp4",
+            "fps": 30.0,
+            "duration_sec": 20.0,
+            "frame_count": 600,
+            "width": 32,
+            "height": 24,
+        },
     )
     orchestrator._capture_snapshot = MagicMock(
         side_effect=[empty_snapshot, indexed_snapshot]
@@ -249,8 +288,8 @@ def test_module3_asr_contract_flows_through_module6_to_module7(
     assert orchestrator.process_video(
         video_id,
         tmp_path,
-        visual_dim=4,
-        text_dim=4,
+        visual_dim=EXPECTED_VISUAL_EMBEDDING_DIMENSION,
+        text_dim=TEXT_EMBEDDING_DIMENSION,
     )
 
     milvus_asr_calls = [

@@ -16,6 +16,7 @@ from src.indexing.clients.milvus_client import (
     SUMMARY_COLLECTION,
 )
 from src.indexing.clients.es_client import OCR_INDEX, ASR_INDEX, SUMMARY_INDEX
+from tests.contract_fixtures import canonical_video_record
 
 
 @pytest.fixture
@@ -213,6 +214,10 @@ class TestSuccessfulProcessing:
         tabular.snapshot_by_video_id.side_effect = [
             ([], []),
             ([metadata_record], []),
+        ]
+        tabular.snapshot_video_by_id.side_effect = [
+            None,
+            canonical_video_record("V1"),
         ]
 
         result = orchestrator.process_video("V1", Path("/fake"), visual_dim=512, text_dim=768)

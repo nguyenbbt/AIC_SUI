@@ -3,7 +3,12 @@ from src.text_embedding.encoders.sbert_encoder import SentenceTransformerEncoder
 
 def main():
     print("Initializing SentenceTransformerEncoder...")
-    encoder = SentenceTransformerEncoder(model_name="dangvantuan/vietnamese-embedding", device="cpu")
+    encoder = SentenceTransformerEncoder(
+        model_name="dangvantuan/vietnamese-embedding",
+        model_revision="4ab46e46ba5902328ba0742e489e75f787932f2b",
+        max_length=256,
+        device="cpu",
+    )
     
     # Test batch short texts
     texts = ["Xin chào Việt Nam", "Đại học Khoa học Tự nhiên"]

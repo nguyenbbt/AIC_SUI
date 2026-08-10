@@ -19,6 +19,7 @@ from src.indexing.data_loader import (
     load_ocr_texts,
     load_asr_transcripts,
     load_video_summary,
+    load_video_metadata,
     load_metadata_and_objects,
     load_visual_embeddings,
     load_text_asr_embeddings,
@@ -39,13 +40,27 @@ def data_dir():
         meta_dir = root / "metadata"
         meta_dir.mkdir()
         meta = {
+            "contract_version": "self-indexed-v2",
             "video_id": video_id,
+            "source_path": f"raw_videos/{video_id}.mp4",
+            "source_video_rel_path": f"raw_videos/{video_id}.mp4",
+            "fps": 25.0,
+            "duration_sec": 10.0,
+            "frame_count": 250,
+            "width": 640,
+            "height": 480,
+            "num_shots": 2,
             "shots": [
                 {
                     "shot_id": 0,
                     "keyframes": [
                         {
                             "file_path": f"keyframes/{video_id}/shot_00000_pos_050.webp",
+                            "image_rel_path": f"keyframes/{video_id}/shot_00000_pos_050.webp",
+                            "position": 0.5,
+                            "position_code": 50,
+                            "frame_index": 62,
+                            "source_frame_idx": 62,
                             "time_sec": 2.5,
                         }
                     ],
@@ -55,6 +70,11 @@ def data_dir():
                     "keyframes": [
                         {
                             "file_path": f"keyframes/{video_id}/shot_00001_pos_050.webp",
+                            "image_rel_path": f"keyframes/{video_id}/shot_00001_pos_050.webp",
+                            "position": 0.5,
+                            "position_code": 50,
+                            "frame_index": 175,
+                            "source_frame_idx": 175,
                             "time_sec": 7.0,
                         }
                     ],
@@ -383,6 +403,7 @@ class TestLoadAsrTranscripts:
 def test_asr_mapping_uses_canonical_timestamp_names():
     properties = ASR_MAPPING["properties"]
 
+    assert properties["_doc_id"] == {"type": "keyword"}
     assert properties["start_time_sec"] == {"type": "float"}
     assert properties["end_time_sec"] == {"type": "float"}
     assert "start_time" not in properties
@@ -398,6 +419,21 @@ class TestLoadVideoSummary:
 
 
 class TestLoadMetadataAndObjects:
+    def test_loads_video_contract(self, data_dir):
+        root, video_id = data_dir
+
+        video = load_video_metadata(root, video_id)
+
+        assert video == {
+            "video_id": video_id,
+            "source_video_rel_path": f"raw_videos/{video_id}.mp4",
+            "fps": 25.0,
+            "duration_sec": 10.0,
+            "frame_count": 250,
+            "width": 640,
+            "height": 480,
+        }
+
     def test_loads_metadata_and_objects(self, data_dir):
         root, video_id = data_dir
         meta, objs = load_metadata_and_objects(root, video_id)
@@ -406,7 +442,11 @@ class TestLoadMetadataAndObjects:
         # frame_id should be normalized to Global ID format
         assert meta[0]["frame_id"] == f"{video_id}_00000_050"
         assert meta[0]["shot_id"] == 0
+        assert meta[0]["source_frame_idx"] == 62
         assert meta[0]["timestamp"] == 2.5
+        assert meta[0]["image_rel_path"] == (
+            f"keyframes/{video_id}/shot_00000_pos_050.webp"
+        )
 
         assert len(objs) == 2  # 2 objects in shot 0
         assert objs[0]["label"] == "person"
@@ -414,6 +454,26 @@ class TestLoadMetadataAndObjects:
         assert objs[0]["frame_id"] == f"{video_id}_00000_050"
         assert objs[0]["x_min"] == 10.0
         assert objs[1]["label"] == "car"
+
+    def test_rejects_object_bbox_outside_video_bounds(self, data_dir):
+        root, video_id = data_dir
+        object_path = root / "object_detection" / f"{video_id}.json"
+        payload = json.loads(object_path.read_text(encoding="utf-8"))
+        payload["frames"][0]["objects"][0]["bbox"] = [10, 20, 641, 200]
+        object_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        with pytest.raises(ValueError, match="bbox"):
+            load_metadata_and_objects(root, video_id)
+
+    def test_rejects_unsafe_image_relative_path(self, data_dir):
+        root, video_id = data_dir
+        metadata_path = root / "metadata" / f"{video_id}.json"
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+        payload["shots"][0]["keyframes"][0]["image_rel_path"] = "../escape.webp"
+        metadata_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        with pytest.raises(ValueError, match="image_rel_path"):
+            load_metadata_and_objects(root, video_id)
 
 
 class TestLoadVisualEmbeddings:

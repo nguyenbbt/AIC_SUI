@@ -41,6 +41,26 @@ def test_module2_entrypoint_runs_cli_inside_its_package():
     ) in dockerfile
 
 
+def test_text_model_download_is_pinned_to_the_online_revision():
+    dockerfile = (
+        PROJECT_ROOT / "feature_extraction" / "text_embedding" / "Dockerfile"
+    ).read_text(encoding="utf-8")
+
+    assert "dangvantuan/vietnamese-embedding" in dockerfile
+    assert (
+        "--model-revision "
+        "4ab46e46ba5902328ba0742e489e75f787932f2b"
+    ) in dockerfile
+
+
+def test_indexing_image_contains_the_full_contract_verifier():
+    dockerfile = (PROJECT_ROOT / "indexing" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+
+    assert "COPY verify_frame_id_consistency.py /app/" in dockerfile
+
+
 def test_module3_entrypoint_runs_cli_inside_its_package():
     dockerfile = (
         PROJECT_ROOT

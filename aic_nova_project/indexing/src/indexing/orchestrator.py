@@ -36,6 +36,7 @@ from .data_loader import (
     load_ocr_texts,
     load_asr_transcripts,
     load_video_summary,
+    load_video_metadata,
     load_metadata_and_objects,
 )
 
@@ -50,6 +51,7 @@ class VideoSnapshot:
     elasticsearch: Dict[str, list]
     metadata: list
     objects: list
+    video: Optional[dict] = None
 
 
 class IndexingOrchestrator:
@@ -120,12 +122,15 @@ class IndexingOrchestrator:
         else:
             metadata = []
             objects = []
+        video_snapshot = self.tabular.snapshot_video_by_id(video_id)
+        video = video_snapshot if isinstance(video_snapshot, dict) else None
 
         return VideoSnapshot(
             milvus=milvus_snapshot,
             elasticsearch=es_snapshot,
             metadata=metadata,
             objects=objects,
+            video=video,
         )
 
     def _restore_snapshot(
@@ -152,6 +157,7 @@ class IndexingOrchestrator:
             if documents:
                 self.es.restore_snapshot(index_name, documents)
 
+        self.tabular.restore_video_snapshot(snapshot.video)
         self.tabular.restore_snapshot(
             snapshot.metadata,
             snapshot.objects,
@@ -185,6 +191,7 @@ class IndexingOrchestrator:
         summary_text_records: list,
         metadata_records: list,
         object_records: list,
+        video_record: Optional[dict] = None,
         mismatch_details: Optional[List[str]] = None,
     ) -> bool:
         """Return whether every persisted stream has the expected identities."""
@@ -260,6 +267,23 @@ class IndexingOrchestrator:
                 ),
             ),
         )
+        if video_record is not None:
+            comparisons = comparisons + (
+                (
+                    "sqlite.videos",
+                    [snapshot.video] if snapshot.video is not None else [],
+                    [video_record],
+                    (
+                        "video_id",
+                        "source_video_rel_path",
+                        "fps",
+                        "duration_sec",
+                        "frame_count",
+                        "width",
+                        "height",
+                    ),
+                ),
+            )
         matches = True
         for stream_name, existing, expected, fields in comparisons:
             if self._same_record_keys(existing, expected, fields):
@@ -343,6 +367,7 @@ class IndexingOrchestrator:
         visual_dim: Optional[int],
         text_dim: Optional[int],
         ocr_dim: Optional[int],
+        video_record: Optional[dict] = None,
     ) -> None:
         """Validate counts, join IDs, vector shape, and norm after inserts."""
         mismatch_details: List[str] = []
@@ -357,6 +382,7 @@ class IndexingOrchestrator:
             summary_text_records=summary_text_records,
             metadata_records=metadata_records,
             object_records=object_records,
+            video_record=video_record,
             mismatch_details=mismatch_details,
         ):
             raise ValueError(
@@ -497,6 +523,7 @@ class IndexingOrchestrator:
         ocr_text_records = load_ocr_texts(data_dir, video_id)
         asr_text_records = load_asr_transcripts(data_dir, video_id)
         summary_text_records = load_video_summary(data_dir, video_id)
+        video_record = load_video_metadata(data_dir, video_id)
         metadata_records, object_records = load_metadata_and_objects(data_dir, video_id)
 
         core_errors = []
@@ -547,6 +574,7 @@ class IndexingOrchestrator:
             summary_text_records=summary_text_records,
             metadata_records=metadata_records,
             object_records=object_records,
+            video_record=video_record,
         ):
             logger.info(
                 "Skipping %s because all indexed record identities match. "
@@ -627,6 +655,8 @@ class IndexingOrchestrator:
                 )
 
             # ===== PHASE 4: Insert into SQLite =====
+            self.tabular.insert_video_batch([video_record])
+
             if metadata_records:
                 self._insert_batched(
                     metadata_records,
@@ -657,6 +687,7 @@ class IndexingOrchestrator:
                 visual_dim=visual_dim,
                 text_dim=text_dim,
                 ocr_dim=effective_ocr_dim,
+                video_record=video_record,
             )
 
         except Exception:

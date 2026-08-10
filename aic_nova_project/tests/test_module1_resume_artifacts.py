@@ -5,17 +5,22 @@ from data_pipeline.shot_keyframe.metadata_schema import (
     ShotMetadata,
     VideoMetadata,
 )
+from data_pipeline.shot_keyframe.fingerprints import sha256_file
 from data_pipeline.shot_keyframe.resume_validation import (
     keyframe_artifacts_are_valid,
 )
 
 
-def _metadata() -> VideoMetadata:
+def _metadata(image_sha256: str = "0" * 64) -> VideoMetadata:
     return VideoMetadata(
         video_id="V001",
         source_path="videos/V001.mp4",
+        source_video_rel_path="videos/V001.mp4",
         fps=30.0,
         duration_sec=1.0,
+        frame_count=31,
+        width=320,
+        height=240,
         num_shots=1,
         shots=[
             ShotMetadata(
@@ -32,6 +37,7 @@ def _metadata() -> VideoMetadata:
                         file_path=(
                             "keyframes/V001/shot_00000_pos_015.webp"
                         ),
+                        image_sha256=image_sha256,
                     )
                 ],
             )
@@ -46,7 +52,10 @@ def test_resume_accepts_readable_keyframe_artifacts(tmp_path):
     image_path.parent.mkdir(parents=True)
     Image.new("RGB", (10, 10)).save(image_path)
 
-    assert keyframe_artifacts_are_valid(_metadata(), tmp_path)
+    assert keyframe_artifacts_are_valid(
+        _metadata(sha256_file(image_path)),
+        tmp_path,
+    )
 
 
 def test_resume_rejects_missing_keyframe_artifacts(tmp_path):

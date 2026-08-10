@@ -1,7 +1,7 @@
 import pytest
 import os
 import tempfile
-from PIL import Image
+import numpy as np
 from data_pipeline.shot_keyframe.keyframe_extractor import KeyframeExtractor
 
 def test_keyframe_extractor_short_shot(mock_video_path):
@@ -40,7 +40,54 @@ def test_keyframe_extractor_normal_shot(mock_video_path):
         assert kfs[2]["frame_index"] == 85 # 0 + 0.85 * 100
 
 
-def test_keyframe_extractor_creates_valid_fallback_image(
+def test_keyframe_extractor_records_the_frame_that_fallback_decoded(
+    tmp_path,
+    monkeypatch,
+):
+    class FallbackCapture:
+        def __init__(self):
+            self.frame_index = 0
+
+        def isOpened(self):
+            return True
+
+        def get(self, property_id):
+            return 25.0
+
+        def set(self, property_id, value):
+            self.frame_index = int(value)
+            return True
+
+        def read(self):
+            if self.frame_index == 15:
+                return False, None
+            return True, np.full((24, 32, 3), 127, dtype=np.uint8)
+
+        def release(self):
+            return None
+
+    monkeypatch.setattr(
+        "data_pipeline.shot_keyframe.keyframe_extractor.cv2.VideoCapture",
+        lambda _: FallbackCapture(),
+    )
+    extractor = KeyframeExtractor(positions=[0.15])
+
+    metadata, fps = extractor.extract_keyframes(
+        "fallback.mp4",
+        "V001",
+        [(0, 100)],
+        str(tmp_path / "keyframes"),
+    )
+
+    keyframe = metadata[0]["keyframes"][0]
+    assert keyframe["frame_index"] == 0
+    assert keyframe["source_frame_idx"] == 0
+    assert keyframe["time_sec"] == 0.0
+    assert keyframe["image_rel_path"] == keyframe["file_path"]
+    assert fps == 25.0
+
+
+def test_keyframe_extractor_fails_closed_without_placeholder(
     tmp_path,
     monkeypatch,
 ):
@@ -66,14 +113,12 @@ def test_keyframe_extractor_creates_valid_fallback_image(
     )
     extractor = KeyframeExtractor(positions=[0.15])
 
-    metadata, fps = extractor.extract_keyframes(
-        "unreadable.mp4",
-        "V001",
-        [(0, 10)],
-        str(tmp_path / "keyframes"),
-    )
+    with pytest.raises(RuntimeError, match="Could not decode a real keyframe"):
+        extractor.extract_keyframes(
+            "unreadable.mp4",
+            "V001",
+            [(0, 10)],
+            str(tmp_path / "keyframes"),
+        )
 
-    image_path = tmp_path / metadata[0]["keyframes"][0]["file_path"]
-    with Image.open(image_path) as image:
-        image.verify()
-    assert fps == 25.0
+    assert list(tmp_path.rglob("*.webp")) == []

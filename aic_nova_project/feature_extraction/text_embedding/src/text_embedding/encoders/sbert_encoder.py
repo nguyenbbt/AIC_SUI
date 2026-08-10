@@ -1,8 +1,14 @@
 import numpy as np
 import logging
-from typing import List, Optional
+from typing import List
 from sentence_transformers import SentenceTransformer
 
+from ..config import (
+    TEXT_EMBEDDING_DIMENSION,
+    TEXT_MAX_LENGTH,
+    TEXT_MODEL_NAME,
+    TEXT_MODEL_REVISION,
+)
 from .base import BaseTextEncoder
 
 logger = logging.getLogger(__name__)
@@ -12,10 +18,23 @@ class SentenceTransformerEncoder(BaseTextEncoder):
         self,
         model_name: str,
         device: str = "cuda",
-        max_length: int = 256,
+        max_length: int = TEXT_MAX_LENGTH,
         batch_size: int = 32,
-        model_revision: Optional[str] = None,
+        model_revision: str = TEXT_MODEL_REVISION,
     ):
+        if not isinstance(model_revision, str) or not model_revision.strip():
+            raise ValueError("model_revision must be an explicit revision")
+        if model_name == TEXT_MODEL_NAME:
+            if model_revision != TEXT_MODEL_REVISION:
+                raise ValueError(
+                    "Default text model must use the locked revision "
+                    f"{TEXT_MODEL_REVISION}"
+                )
+            if max_length != TEXT_MAX_LENGTH:
+                raise ValueError(
+                    "Default text model must use max_length "
+                    f"{TEXT_MAX_LENGTH}"
+                )
         self.model_name = model_name
         self.device = device
         self.max_length = max_length
@@ -27,31 +46,21 @@ class SentenceTransformerEncoder(BaseTextEncoder):
             device=device,
             revision=model_revision,
         )
-        self.model_revision = (
-            model_revision
-            or self._resolve_model_revision()
-            or "default"
-        )
+        self.model_revision = model_revision
         self.model.max_seq_length = max_length
         
         # Test shape
         dummy_embedding = self.model.encode(["test"])
         self.embedding_dim = dummy_embedding.shape[1]
+        if (
+            model_name == TEXT_MODEL_NAME
+            and self.embedding_dim != TEXT_EMBEDDING_DIMENSION
+        ):
+            raise ValueError(
+                "Default text model returned dimension "
+                f"{self.embedding_dim}; expected {TEXT_EMBEDDING_DIMENSION}"
+            )
         logger.info(f"Model loaded. Embedding dimension: {self.embedding_dim}")
-
-    def _resolve_model_revision(self) -> Optional[str]:
-        """Read the resolved Hugging Face commit hash when available."""
-        try:
-            first_module = self.model[0]
-        except (IndexError, KeyError, TypeError):
-            return None
-
-        auto_model = getattr(first_module, "auto_model", None)
-        config = getattr(auto_model, "config", None)
-        revision = getattr(config, "_commit_hash", None)
-        if isinstance(revision, str) and revision.strip():
-            return revision.strip()
-        return None
 
     def encode_batch(self, texts: List[str]) -> np.ndarray:
         """

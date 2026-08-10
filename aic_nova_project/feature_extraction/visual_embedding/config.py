@@ -1,6 +1,7 @@
 """Configuration shared by the visual embedding entry points."""
 
 DEFAULT_VISUAL_MODEL_ID = "ViT-B-32::openai"
+EXPECTED_VISUAL_EMBEDDING_DIMENSION = 512
 
 
 def parse_open_clip_model_id(model_id: str) -> tuple[str, str | None]:

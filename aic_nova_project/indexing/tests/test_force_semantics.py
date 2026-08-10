@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 import src.indexing.orchestrator as orchestrator_module
 from src.indexing.clients.milvus_client import VISUAL_COLLECTION
 from src.indexing.orchestrator import IndexingOrchestrator
+from tests.contract_fixtures import canonical_video_record
 
 
 def _configure_core(monkeypatch):
@@ -54,6 +55,9 @@ def test_force_controls_replacement_of_complete_snapshot(monkeypatch):
     )
     es.snapshot_by_video_id.return_value = []
     tabular.snapshot_by_video_id.return_value = (metadata, [])
+    tabular.snapshot_video_by_id.return_value = canonical_video_record(
+        "V001"
+    )
     milvus.insert_batch.side_effect = (
         lambda collection, records, dimension: len(records)
     )

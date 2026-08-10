@@ -33,6 +33,11 @@ def test_pipeline_e2e(mock_video_path):
             data = json.load(f)
             
         assert data["video_id"] == video_id
+        assert data["contract_version"] == "self-indexed-v2"
+        assert data["source_video_rel_path"] == "videos/test_video.mp4"
+        assert data["frame_count"] == 90
+        assert data["width"] == 320
+        assert data["height"] == 240
         assert data["num_shots"] == 3
         assert len(data["shots"]) == 3
         
@@ -40,6 +45,9 @@ def test_pipeline_e2e(mock_video_path):
         for shot in data["shots"]:
             assert len(shot["keyframes"]) == 3
             for kf in shot["keyframes"]:
+                assert kf["source_frame_idx"] == kf["frame_index"]
+                assert kf["image_rel_path"] == kf["file_path"]
+                assert kf["position_code"] in (15, 50, 85)
                 abs_path = os.path.join(temp_dir, kf["file_path"])
                 assert os.path.exists(abs_path)
 

@@ -47,13 +47,28 @@ def test_one_click_dry_run_contains_ordered_offline_stages():
         "STAGE: module6",
         "STAGE: pull-artifacts",
         "STAGE: docker-indexing",
+        "STAGE: verify-and-publish",
+        "STAGE: online-contract-validation",
     ]
     offsets = [output.index(stage) for stage in expected_stages]
     assert offsets == sorted(offsets)
     assert "ViT-B-32::openai" in output
+    assert "dangvantuan/vietnamese-embedding" in output
+    assert "4ab46e46ba5902328ba0742e489e75f787932f2b" in output
+    assert "--max-length 256" in output
     assert "Qwen/Qwen2.5-7B-Instruct" in output
     assert "modal volume get" in output
     assert "python -m src.indexing.cli" in output
+    assert "python -m src.indexing.publish_cli" in output
+    assert "python -m online.validate_contract" in output
+    assert "--fail-on-partial" in output
+    assert "AIC_ONLINE_DATASET_EXPECTED_FINGERPRINT=" in output
+    assert (
+        "AIC_ONLINE_DATASET_MANIFEST_PATH="
+        "/workspace/data/processed/dataset-manifest.json"
+    ) in output
+    assert "AIC_ONLINE_DATA_ROOT=/workspace/data/processed" in output
+    assert "dataset-manifest.json" in output
     indexing_command = next(
         line
         for line in output.splitlines()
@@ -106,3 +121,30 @@ def test_indexing_worker_is_rebuilt_before_it_runs():
     assert build in script
     assert run in script
     assert script.index(build) < script.index(run)
+
+
+def test_online_validation_uses_ephemeral_smoke_artifact():
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert '"online-encoder-smoke.json"' in script
+    assert "[System.IO.File]::WriteAllText" in script
+    assert "[System.IO.File]::Delete($onlineSmokePath)" in script
+
+
+def test_modal_cli_runs_with_utf8_process_encoding():
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert 'SetEnvironmentVariable("PYTHONUTF8", "1", "Process")' in script
+    assert (
+        'SetEnvironmentVariable("PYTHONIOENCODING", "utf-8", "Process")'
+        in script
+    )
+    assert (
+        'SetEnvironmentVariable("PYTHONUTF8", $previousPythonUtf8, "Process")'
+        in script
+    )
+    assert (
+        'SetEnvironmentVariable('
+        '"PYTHONIOENCODING", $previousPythonIoEncoding, "Process")'
+        in script
+    )
