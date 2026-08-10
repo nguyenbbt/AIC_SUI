@@ -78,3 +78,33 @@ def test_modal_image_reasserts_and_import_checks_binary_dependencies() -> None:
     assert f'"{SETUPTOOLS_REQUIREMENT}"' in source
     assert SETUPTOOLS_REQUIREMENT in ocr_requirements
     assert "import cv2, gdown, numpy, pkg_resources" in source
+
+
+def test_embedding_model_runtimes_are_exactly_pinned() -> None:
+    visual_requirements = (
+        PROJECT_ROOT
+        / "feature_extraction"
+        / "visual_embedding"
+        / "requirements.txt"
+    ).read_text(encoding="utf-8").splitlines()
+    text_requirements = (
+        PROJECT_ROOT
+        / "feature_extraction"
+        / "text_embedding"
+        / "requirements.txt"
+    ).read_text(encoding="utf-8").splitlines()
+
+    assert {
+        "torch==2.13.0",
+        "torchvision==0.28.0",
+        "Pillow==12.3.0",
+        "open_clip_torch==3.3.0",
+    } <= set(visual_requirements)
+    assert {
+        "torch==2.13.0",
+        "sentence-transformers==5.6.0",
+        "transformers==5.13.1",
+        "tokenizers==0.22.2",
+        "pandas==3.0.3",
+        "pyarrow==25.0.0",
+    } <= set(text_requirements)
