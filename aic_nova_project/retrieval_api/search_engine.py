@@ -131,7 +131,7 @@ def create_app(
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
         return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content={
                 "error": {
                     "code": "INVALID_QUERY",
@@ -337,7 +337,7 @@ def _get_ui_resources(app: FastAPI) -> DatasetUIResources:
 
 def _http_status_for_error(exc: DataInfrastructureError) -> int:
     if isinstance(exc, InvalidQueryError):
-        return status.HTTP_422_UNPROCESSABLE_ENTITY
+        return status.HTTP_422_UNPROCESSABLE_CONTENT
     if isinstance(exc, ResourceUnavailableError):
         return status.HTTP_503_SERVICE_UNAVAILABLE
     if isinstance(exc, BranchTimeoutError):
