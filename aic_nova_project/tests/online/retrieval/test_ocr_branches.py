@@ -74,7 +74,7 @@ class OCRBranchTests(unittest.TestCase):
         query = KISQueryBuilder().build(
             "store sign",
             mode=QueryMode.KIS_TEXT,
-            paraphrases=("shop text", "words on storefront"),
+            paraphrases=("shop text",),
         )
 
         results = branch.retrieve(query, top_k=2)
@@ -118,18 +118,18 @@ class OCRBranchTests(unittest.TestCase):
         query = KISQueryBuilder().build(
             "original OCR query",
             mode=QueryMode.KIS_VIDEO,
-            paraphrases=("OCR paraphrase one", "OCR paraphrase two"),
+            paraphrases=("OCR paraphrase one",),
         )
 
         results = branch.retrieve(query, top_k=2)
 
-        self.assertEqual(tuple(result.query_variant_id for result in results), ("q0", "q1", "q2"))
+        self.assertEqual(tuple(result.query_variant_id for result in results), ("q0", "q1"))
         self.assertEqual(
             encoder.calls,
-            [("original OCR query",), ("OCR paraphrase one",), ("OCR paraphrase two",)],
+            [("original OCR query",), ("OCR paraphrase one",)],
         )
-        self.assertEqual(len(milvus.ocr_calls), 3)
-        self.assertEqual(len({call[0] for call in milvus.ocr_calls}), 3)
+        self.assertEqual(len(milvus.ocr_calls), 2)
+        self.assertEqual(len({call[0] for call in milvus.ocr_calls}), 2)
         self.assertTrue(all(call[1] == 2 for call in milvus.ocr_calls))
         self.assertTrue(all(result.branch is RetrievalBranch.OCR_DENSE for result in results))
         self.assertTrue(all(result.returned_count == 2 for result in results))

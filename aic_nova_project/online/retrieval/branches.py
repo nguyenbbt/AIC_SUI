@@ -315,7 +315,7 @@ class VisualSemanticBranch(_FrameBranchBase):
     """OpenCLIP text-to-frame retrieval with mandatory batch hydration.
 
     One ``BranchResult`` is produced per query variant. This class deliberately
-    does not aggregate q0/q1/q2, normalize scores, fuse branches or deduplicate
+    does not aggregate q0/q1, normalize scores, fuse branches or deduplicate
     frames. Missing-metadata behavior is still an open policy, so it surfaces as
     a typed error instead of silently dropping hits.
     """

@@ -15,11 +15,11 @@ class KISQueryBuilderTests(unittest.TestCase):
     def setUp(self) -> None:
         self.builder = KISQueryBuilder()
 
-    def test_builds_q0_q1_q2_and_preserves_structured_constraints(self) -> None:
+    def test_builds_q0_q1_and_preserves_structured_constraints(self) -> None:
         bundle = self.builder.build(
             "  một người đi xe đạp  ",
             mode=QueryMode.KIS_TEXT,
-            paraphrases=("người đang đạp xe", "một người chạy xe đạp"),
+            paraphrases=("người đang đạp xe",),
             object_constraints=(
                 {
                     "label": "person",
@@ -36,7 +36,7 @@ class KISQueryBuilderTests(unittest.TestCase):
         self.assertEqual(bundle.original_query, "một người đi xe đạp")
         self.assertEqual(
             tuple(variant.variant_id for variant in bundle.text_variants),
-            ("q0", "q1", "q2"),
+            ("q0", "q1"),
         )
         self.assertEqual(bundle.text_variants[0].text, bundle.original_query)
         self.assertEqual(bundle.enabled_branches, BASELINE_KIS_BRANCHES)
@@ -70,7 +70,7 @@ class KISQueryBuilderTests(unittest.TestCase):
         with self.assertRaises(InvalidQueryError):
             self.builder.build("query", mode="unknown")
         with self.assertRaises(InvalidQueryError):
-            self.builder.build("query", mode=QueryMode.KIS_TEXT, paraphrases=("a", "b", "c"))
+            self.builder.build("query", mode=QueryMode.KIS_TEXT, paraphrases=("a", "b"))
 
     def test_rejects_blank_paraphrase_duplicate_branches_and_empty_branch_set(self) -> None:
         with self.assertRaises(InvalidQueryError):

@@ -67,13 +67,13 @@ class QueryBundle(StrictFrozenModel):
         if self.mode not in {QueryMode.KIS_TEXT, QueryMode.KIS_VIDEO}:
             raise ValueError("QueryBundle currently supports only KIS text-query modes")
 
-        if not 1 <= len(self.text_variants) <= 3:
-            raise ValueError("KIS QueryBundle must contain q0 and at most q1/q2")
+        if not 1 <= len(self.text_variants) <= 2:
+            raise ValueError("KIS QueryBundle must contain q0 and at most q1")
 
         variant_ids = tuple(variant.variant_id for variant in self.text_variants)
         expected_ids = tuple(f"q{index}" for index in range(len(self.text_variants)))
         if variant_ids != expected_ids:
-            raise ValueError("text variant IDs must be ordered and contiguous: q0, q1, q2")
+            raise ValueError("text variant IDs must be ordered and contiguous: q0, q1")
 
         if self.text_variants[0].text != self.original_query:
             raise ValueError("q0 text must equal original_query")

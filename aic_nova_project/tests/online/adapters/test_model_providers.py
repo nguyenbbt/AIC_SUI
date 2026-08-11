@@ -5,10 +5,12 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 from PIL import Image
 
-from online.adapters.qwen_vlm import DEFAULT_QWEN_MODEL, QwenVLMAdapter
+from online.adapters.qwen_vlm import DEFAULT_QWEN_MODEL, DEFAULT_QWEN_REVISION, QwenVLMAdapter
 from online.domain.vqa import ImageEvidence, VQAAnswerType, VQAQuestion
+from online.domain.errors import ContractMismatchError
 from online.vqa.vlm_request import build_vlm_request
 from query_understanding.openai_rewriter import DEFAULT_REWRITE_MODEL, OpenAIQueryRewriter
 from query_understanding.rewrite import QueryRewriteRequest, RewritePurpose
@@ -19,7 +21,8 @@ def test_openai_rewriter_uses_structured_responses_output() -> None:
         payload = json.loads(request.content)
         assert payload["model"] == DEFAULT_REWRITE_MODEL
         assert payload["reasoning"] == {"effort": "none"}
-        return httpx.Response(200, json={"output_text": json.dumps({"primary_text": "a person beside a car", "paraphrases": ["human near vehicle"]})})
+        assert payload["text"]["format"]["schema"]["required"] == ["primary_text"]
+        return httpx.Response(200, json={"output_text": json.dumps({"primary_text": "một người đứng cạnh ô tô"})})
 
     async def run():
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://example.test")
@@ -29,7 +32,8 @@ def test_openai_rewriter_uses_structured_responses_output() -> None:
         return result
 
     result = asyncio.run(run())
-    assert result.primary_text == "a person beside a car"
+    assert result.primary_text == "một người đứng cạnh ô tô"
+    assert result.paraphrases == ()
     assert result.model_id == DEFAULT_REWRITE_MODEL
 
 
@@ -44,7 +48,8 @@ def test_qwen_vlm_sends_resized_local_evidence_and_validates_grounding(tmp_path:
         payload = json.loads(request.content)
         assert payload["chat_template_kwargs"]["enable_thinking"] is False
         assert payload["max_tokens"] == 256
-        assert payload["messages"][1]["content"][0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+        assert payload["messages"][1]["content"][0]["text"] == "Evidence image ID: image-1"
+        assert payload["messages"][1]["content"][1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
         content = json.dumps({"status": "answered", "answer": "có", "answer_type": "yes_no", "confidence": "high", "evidence_ids": ["image-1"]})
         return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
 
@@ -54,4 +59,23 @@ def test_qwen_vlm_sends_resized_local_evidence_and_validates_grounding(tmp_path:
     evidence = ImageEvidence(evidence_id="image-1", video_id="V001", frame_id="V001_00000_001", shot_id=0, timestamp_sec=1, source_frame_idx=30, image_reference="keyframes/V001/001.jpg")
     request = build_vlm_request(VQAQuestion(question_id="q1", question="Có người không?", answer_type=VQAAnswerType.YES_NO), (evidence,))
     assert adapter.answer(request).answer == "có"
+    client.close()
+
+
+def test_qwen_vlm_rejects_unpinned_or_mismatched_revision(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="pinned"):
+        QwenVLMAdapter(data_root=tmp_path, revision="main")
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"data": [{"id": DEFAULT_QWEN_MODEL, "revision": "0" * 40}]},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="http://qwen.test/v1")
+    adapter = QwenVLMAdapter(
+        data_root=tmp_path, revision=DEFAULT_QWEN_REVISION, client=client
+    )
+    with pytest.raises(ContractMismatchError, match="revision"):
+        adapter.health_check()
     client.close()

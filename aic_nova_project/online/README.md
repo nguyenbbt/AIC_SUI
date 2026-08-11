@@ -118,12 +118,12 @@ approved production ranking policy. Runtime deployments must review and pin
 these values before claiming production readiness:
 
 - Branch-local score normalizer: RRF with `k=60`.
-- Query-variant aggregation: `weighted_sum_query_variant_v1` with q0/q1/q2
+- Query-variant aggregation: `weighted_sum_query_variant_v1` with q0/q1
   weights.
 - Fusion: `experimental_weighted_sum_normalized_v1` with equal default branch
   weights.
 - Summary propagation: `summary_video_score_cap_v1`, `weight=0.1`,
-  `max_boost=0.2`; it uses the same q0/q1/q2 weights and normalization RRF
+  `max_boost=0.2`; it uses the same q0/q1 weights and normalization RRF
   fallback configured for the frame branches.
 - ASR interval mapping: `timestamp_inclusive_distributed_v1`,
   `max_frames_per_interval=50`, interval-level RRF `k=60` when upstream ASR
@@ -139,7 +139,6 @@ $env:AIC_ONLINE_RANKING_POLICY_STATUS = "experimental"
 $env:AIC_ONLINE_RANKING_NORMALIZATION_RRF_K = "60"
 $env:AIC_ONLINE_RANKING_QUERY_Q0_WEIGHT = "1.0"
 $env:AIC_ONLINE_RANKING_QUERY_Q1_WEIGHT = "1.0"
-$env:AIC_ONLINE_RANKING_QUERY_Q2_WEIGHT = "1.0"
 $env:AIC_ONLINE_RANKING_FUSION_DEFAULT_WEIGHT = "1.0"
 $env:AIC_ONLINE_RANKING_SUMMARY_WEIGHT = "0.1"
 $env:AIC_ONLINE_RANKING_SUMMARY_MAX_BOOST = "0.2"

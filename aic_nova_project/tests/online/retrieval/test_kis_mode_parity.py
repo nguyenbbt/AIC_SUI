@@ -58,7 +58,6 @@ class KISModeParityTests(unittest.TestCase):
             "original_query": "một người mặc áo đỏ đang đi xe đạp",
             "paraphrases": (
                 "người áo đỏ đạp xe",
-                "một người đang chạy xe đạp với áo màu đỏ",
             ),
         }
         textual = parse_kis_query(

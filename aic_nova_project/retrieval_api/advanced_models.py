@@ -67,11 +67,22 @@ class InternalVQAResponse(StrictFrozenModel):
     result: VQAResult
 
 
-# Concise aliases for callers that already scope imports to advanced_models.
+class TRAKEResponse(StrictFrozenModel):
+    schema_version: str = "online-v1"
+    query_id: NonEmptyStr
+    results: tuple[TRAKEVideoResult, ...]
+    diagnostics: TRAKEDiagnostics
+
+
+class VQAResponse(StrictFrozenModel):
+    schema_version: str = "online-v1"
+    question_id: NonEmptyStr
+    result: VQAResult
+
+
+# Concise request aliases for callers that already scope imports to advanced_models.
 TRAKERequest = InternalTRAKERequest
-TRAKEResponse = InternalTRAKEResponse
 VQARequest = InternalVQARequest
-VQAResponse = InternalVQAResponse
 
 
 __all__ = [

@@ -36,7 +36,7 @@ class RankingPolicyConfig(StrictFrozenModel):
         Mapping[NonEmptyStr, Annotated[FiniteFloat, Field(ge=0.0)]],
         AfterValidator(freeze_mapping),
         PlainSerializer(serialize_mapping, return_type=dict),
-    ] = Field(default_factory=lambda: {"q0": 1.0, "q1": 1.0, "q2": 1.0})
+    ] = Field(default_factory=lambda: {"q0": 1.0, "q1": 1.0})
     fusion_method: NonEmptyStr = "experimental_weighted_sum_normalized_v1"
     fusion_weights: Annotated[
         Mapping[RetrievalBranch, Annotated[FiniteFloat, Field(ge=0.0)]],
@@ -72,6 +72,8 @@ class RankingPolicyConfig(StrictFrozenModel):
             raise ValueError("fusion must have at least one positive weight")
         if self.summary_method != "summary_video_score_cap_v1":
             raise ValueError("only summary_video_score_cap_v1 summary propagation is currently implemented")
+        if set(self.query_variant_weights) - {"q0", "q1"}:
+            raise ValueError("query_variant_weights supports only q0 and q1")
         _assert_finite_mapping(self.query_variant_weights, "query_variant_weights")
         _assert_finite_mapping(self.fusion_weights, "fusion_weights")
         return self

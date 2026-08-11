@@ -122,6 +122,18 @@ def test_advanced_routes_success_and_preserve_ids() -> None:
     assert vqa.json()["question_id"] == "q1"
     assert vqa.json()["result"]["response"]["status"] == "insufficient_evidence"
 
+    public_trake = client.post(
+        "/trake", json={"query_id": "t2", "event_texts": ["first", "second"]}
+    )
+    public_vqa = client.post(
+        "/vqa",
+        json={"question_id": "q-public", "question": "What?", "answer_type": "short_text"},
+    )
+    assert trake.json()["schema_version"] == "internal-unstable-v1"
+    assert vqa.json()["schema_version"] == "internal-unstable-v1"
+    assert public_trake.json()["schema_version"] == "online-v1"
+    assert public_vqa.json()["schema_version"] == "online-v1"
+
 
 def test_advanced_routes_invalid_and_disabled() -> None:
     client = TestClient(create_app())

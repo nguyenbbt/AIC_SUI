@@ -38,6 +38,8 @@ from retrieval_api.advanced_models import (
     InternalTRAKEResponse,
     InternalVQARequest,
     InternalVQAResponse,
+    TRAKEResponse,
+    VQAResponse,
 )
 from retrieval_api.submission import serialize_kis_submissions
 from retrieval_api.ui_resources import (
@@ -67,7 +69,7 @@ class VQAModePort(Protocol):
 class SearchRequest(StrictFrozenModel):
     query: NonEmptyStr
     mode: QueryMode = QueryMode.KIS_TEXT
-    paraphrases: tuple[NonEmptyStr, ...] = ()
+    paraphrases: tuple[NonEmptyStr, ...] = Field(default=(), max_length=1)
     object_constraints: tuple[ObjectConstraint, ...] = ()
     enabled_branches: tuple[RetrievalBranch, ...] | None = None
     include_diagnostics: bool = False
@@ -197,18 +199,25 @@ def create_app(
 
     @app.post(
         "/trake",
-        response_model=InternalTRAKEResponse,
+        response_model=TRAKEResponse,
         summary="Run TRAKE temporal retrieval",
     )
+    async def trake(request: InternalTRAKERequest) -> TRAKEResponse:
+        execution = await _get_trake_mode(app).execute(request.to_domain())
+        return TRAKEResponse(
+            query_id=execution.query_id,
+            results=execution.results,
+            diagnostics=execution.diagnostics,
+        )
+
     @app.post(
         "/internal/unstable/trake",
         response_model=InternalTRAKEResponse,
         summary="Unstable internal TRAKE endpoint",
         description="Internal integration contract; not a competition-ready API.",
     )
-    async def trake(request: InternalTRAKERequest) -> InternalTRAKEResponse:
-        current = _get_trake_mode(app)
-        execution = await current.execute(request.to_domain())
+    async def internal_trake(request: InternalTRAKERequest) -> InternalTRAKEResponse:
+        execution = await _get_trake_mode(app).execute(request.to_domain())
         return InternalTRAKEResponse(
             query_id=execution.query_id,
             results=execution.results,
@@ -217,18 +226,21 @@ def create_app(
 
     @app.post(
         "/vqa",
-        response_model=InternalVQAResponse,
+        response_model=VQAResponse,
         summary="Answer VQA from retrieved evidence",
     )
+    async def vqa(request: InternalVQARequest) -> VQAResponse:
+        result = await _get_vqa_mode(app).answer(request.to_domain(), request.evidence_budget)
+        return VQAResponse(question_id=result.question_id, result=result)
+
     @app.post(
         "/internal/unstable/vqa",
         response_model=InternalVQAResponse,
         summary="Unstable internal VQA endpoint",
         description="Internal integration contract; not a competition-ready API.",
     )
-    async def vqa(request: InternalVQARequest) -> InternalVQAResponse:
-        current = _get_vqa_mode(app)
-        result = await current.answer(request.to_domain(), request.evidence_budget)
+    async def internal_vqa(request: InternalVQARequest) -> InternalVQAResponse:
+        result = await _get_vqa_mode(app).answer(request.to_domain(), request.evidence_budget)
         return InternalVQAResponse(question_id=result.question_id, result=result)
 
     @app.get("/catalog/object-labels", response_model=ObjectCatalogResponse)

@@ -12,14 +12,11 @@ from hashlib import sha256
 from typing import Any
 
 from fastapi import FastAPI, Query, Response
-from pydantic import BaseModel, ConfigDict
+from retrieval_api.advanced_models import InternalTRAKERequest, InternalVQARequest
+from retrieval_api.search_engine import RewriteRequest, SearchRequest
 
 
 app = FastAPI(title="AIC Nova UI Demo", version="demo-v1")
-
-
-class Payload(BaseModel):
-    model_config = ConfigDict(extra="allow")
 
 
 @app.get("/health/live")
@@ -57,26 +54,25 @@ def catalog() -> dict[str, Any]:
 
 
 @app.post("/query/rewrite")
-def rewrite(request: Payload) -> dict[str, Any]:
-    query = str(request.model_dump().get("query", "cảnh cần tìm"))
-    request_id = str(request.model_dump().get("request_id", "demo-rewrite"))
-    q1, q2 = _demo_rewrite_variants(query)
+def rewrite(request: RewriteRequest) -> dict[str, Any]:
+    query = request.query
+    q1 = _demo_rewrite_variant(query)
+    degraded = q1 is None
     return {
-        "request_id": request_id,
+        "request_id": request.request_id,
         "original_text": query,
         "primary_text": query,
-        "paraphrases": [q1, q2],
-        "status": "success",
-        "warnings": [],
+        "paraphrases": [] if degraded else [q1],
+        "status": "degraded" if degraded else "success",
+        "warnings": ["DEMO_REWRITE_UNSUPPORTED"] if degraded else [],
         "latency_ms": 18.4,
-        "model_id": "demo-gpt-rewriter",
+        "model_id": "demo-rule-rewriter",
     }
 
 
 @app.post("/search")
-def search(request: Payload) -> dict[str, Any]:
-    raw = request.model_dump()
-    query_id = str(raw.get("query_id") or "demo-kis")
+def search(request: SearchRequest) -> dict[str, Any]:
+    query_id = request.query_id or "demo-kis"
     candidates = tuple(_candidate(index) for index in range(1, 13))
     return {
         "query_id": query_id,
@@ -98,9 +94,8 @@ def search(request: Payload) -> dict[str, Any]:
 
 
 @app.post("/trake")
-def trake(request: Payload) -> dict[str, Any]:
-    raw = request.model_dump()
-    texts = tuple(raw.get("event_texts") or ("bước vào cửa hàng", "rời cửa hàng"))
+def trake(request: InternalTRAKERequest) -> dict[str, Any]:
+    texts = request.event_texts
     results = []
     for video_no in range(1, 4):
         video_id = f"L21_V{video_no:03d}"
@@ -110,17 +105,16 @@ def trake(request: Payload) -> dict[str, Any]:
         results.append({"video_id": video_id, "score": 0.92 - video_no * 0.07, "event_ids": [x["event_id"] for x in sequence], "sequence": sequence})
     return {
         "schema_version": "demo-v1",
-        "query_id": str(raw.get("query_id") or "demo-trake"),
+        "query_id": request.query_id,
         "results": results,
         "diagnostics": {"policy_version": "dante-index-gap-v1", "lambda_penalty": 0.001, "event_count": len(texts), "video_count": 3, "frame_count": len(texts) * 3, "similarity_latency_ms": 21.5, "dp_latency_ms": 3.2, "invalid_sequence_count": 0, "warnings": ["DEMO_DATA_ONLY"]},
     }
 
 
 @app.post("/vqa")
-def vqa(request: Payload) -> dict[str, Any]:
-    raw = request.model_dump()
-    question_id = str(raw.get("question_id") or "demo-vqa")
-    answer_type = str(raw.get("answer_type") or "short_text")
+def vqa(request: InternalVQARequest) -> dict[str, Any]:
+    question_id = request.question_id
+    answer_type = request.answer_type.value
     evidence = []
     for index in range(1, 4):
         candidate = _candidate(index)
@@ -187,8 +181,8 @@ def _parse_frame_id(frame_id: str) -> tuple[str, int, int]:
     return video_id, int(shot), int(position)
 
 
-def _demo_rewrite_variants(query: str) -> tuple[str, str]:
-    """Transparent deterministic sample; production uses the OpenAI adapter."""
+def _demo_rewrite_variant(query: str) -> str | None:
+    """Return one transparent Vietnamese q1; production uses the OpenAI adapter."""
 
     normalized = " ".join(query.strip().split())
     vietnamese = normalized
@@ -198,34 +192,11 @@ def _demo_rewrite_variants(query: str) -> tuple[str, str]:
         ("đứng cạnh xe ô tô", "đang đứng bên cạnh một chiếc xe ô tô"),
         ("đi xe đạp", "đang điều khiển một chiếc xe đạp"),
         ("cầm điện thoại", "đang cầm một chiếc điện thoại"),
+        ("đang chạy", "đang thực hiện hành động chạy bộ"),
     )
     for source, target in vietnamese_replacements:
         vietnamese = vietnamese.replace(source, target).replace(source.capitalize(), target)
-    if vietnamese == normalized:
-        vietnamese = f"Chi tiết thị giác cần giữ nguyên: {normalized}"
-
-    english = normalized.casefold()
-    english_replacements = (
-        ("một người", "a person"),
-        ("người đàn ông", "a man"),
-        ("người phụ nữ", "a woman"),
-        ("mặc áo đỏ", "wearing a red shirt"),
-        ("mặc một chiếc áo màu đỏ", "wearing a red shirt"),
-        ("đứng cạnh ô tô", "standing next to a car"),
-        ("đứng cạnh xe ô tô", "standing next to a car"),
-        ("đang đứng bên cạnh một chiếc xe ô tô", "standing next to a car"),
-        ("đi xe đạp", "riding a bicycle"),
-        ("cầm điện thoại", "holding a cell phone"),
-    )
-    changed = False
-    for source, target in english_replacements:
-        if source in english:
-            english = english.replace(source, target)
-            changed = True
-    english = " ".join(english.split())
-    if not changed:
-        english = "Demo cannot translate this query; production GPT will create the English CLIP caption."
-    return vietnamese, english
+    return None if vietnamese == normalized else " ".join(vietnamese.split())
 
 
 __all__ = ["app"]

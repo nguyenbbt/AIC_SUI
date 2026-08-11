@@ -2,13 +2,17 @@
 
 ## 1. Status and precedence
 
-**Status:** CONFIRMED_DESIGN
+**Status:** CONFIRMED_DESIGN (updated 2026-08-11: q1-only)
 
 This document records the user's 2026-08-11 decisions for the competition UI,
 query rewriting and evidence-grounded VQA runtime. It supersedes only the
 provider/model-specific parts of DD-031 and OQ-018. The SDK-neutral
 `QueryRewritePort`, `VLMPort`, VQA evidence contract and DD-030 evidence budget
 remain unchanged.
+
+The q0/q1-only rule in section 3 supersedes every earlier planning-document
+reference to q2. Older wave/task documents remain historical records and must
+not be used as the active rewrite contract.
 
 ## 2. Object-constraint UI
 
@@ -37,14 +41,16 @@ provider_id: openai
 model_id: gpt-5.4-mini-2026-03-17
 API: Responses API
 reasoning_effort: none
-prompt_version: aic-query-rewrite-v2
+prompt_version: aic-query-rewrite-v3-vi-q1-only
 timeout: 5 seconds
-maximum paraphrases: 2
+maximum paraphrases: 1
 ```
 
-KIS always preserves the original query as `q0`. `q1` is a normalized
-Vietnamese visual description; `q2` is a concise English caption for OpenCLIP.
-Prefix-only and near-duplicate variants are rejected before retrieval.
+KIS always preserves the original query as `q0`. The provider creates at most
+one rewrite: `q1`, a normalized Vietnamese visual description. There is no
+English `q2`; the UI, API contract, query builder and ranking configuration all
+enforce the same q0/q1-only decision. Prefix-only and near-duplicate variants
+are rejected before retrieval.
 Failure, timeout or invalid output degrades to `q0` without failing search.
 VQA rewriting produces a visual-evidence retrieval description and must never
 answer the question.
@@ -101,7 +107,8 @@ sequences, timeline preview and selection.
 VQA provides question/answer-type input, automatic evidence retrieval,
 evidence gallery, grounded answer status/confidence/evidence IDs, and an
 editable submission answer that remains separate from the original model
-response.
+response. The operator must explicitly choose one VLM-cited image as the VQA
+submission frame; the UI does not silently submit the first evidence anymore.
 
 The shared selection tray deduplicates KIS/VQA by
 `(video_id, source_frame_idx)`, preserves TRAKE event order, limits KIS/TRAKE
@@ -115,6 +122,19 @@ Model selection does not prove runtime readiness. The system owner must still:
 
 1. pin the exact model revision and serving-image version;
 2. validate GPU memory with the maximum evidence budget;
-3. benchmark Vietnamese and English rewrite/VQA examples;
+3. benchmark Vietnamese q1 rewrites and Vietnamese/English VQA inputs;
 4. verify structured-output conformance and deadline behavior;
 5. run a real-data vertical slice before competition readiness is claimed.
+
+## 7. Local fixes versus integrator runtime work
+
+The codebase now handles q0/q1-only contracts, stale rewrite invalidation,
+strict demo request validation, canonical object-label validation, explicit VQA
+frame selection, periodic readiness polling, stable public TRAKE/VQA response
+versions, and evidence-ID/image ordering for Qwen requests.
+
+The system owner who runs Docker must still configure and verify the actual
+OpenAI key, Qwen/vLLM container and pinned revision, network routing, GPU memory,
+real Offline indexes/data, production health checks, and the organizer's final
+submission transport. These runtime checks cannot be completed from the UI-only
+development machine.

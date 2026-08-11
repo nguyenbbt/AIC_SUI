@@ -32,14 +32,23 @@ npm run build
 
 ## Implemented operator workflow
 
-- t-KIS and v-KIS text input, optional GPT rewrite, seven-branch selection.
+- t-KIS and v-KIS text input, optional single Vietnamese q1 rewrite, and
+  seven-branch selection. q0 remains the operator's original text; q2 is not
+  part of the active contract.
 - Object autocomplete from the active SQLite object vocabulary, with explicit
-  COCO-80 fallback, counts `1+`/`2+`/`3+`, and soft/hard behavior.
+  COCO-80 fallback, counts `1+`/`2+`/`3+`, and soft/hard behavior. Unknown
+  labels are rejected and hard filtering is disabled unless the SQLite catalog
+  (or the isolated demo fixture) is active.
 - Ranked keyframe grid, diagnostics, adjacent keyframes, video seek preview.
 - Selection tray capped at 100 and logical KIS export using BTC
   `frame_id = source_frame_idx`.
 - Ordered-event TRAKE editor, DANTE timeline and logical TRAKE export.
-- VQA answer type, grounded evidence display and logical VQA export.
+- VQA answer type, grounded evidence display, explicit cited-frame selection,
+  and logical VQA export.
+
+Production must serve the UI and `/api` through the same gateway origin, or set
+`VITE_API_BASE_URL` and configure an explicit trusted-origin policy at that
+gateway. The API intentionally does not enable permissive CORS.
 
 The organizer PDF does not freeze the upload transport or file delimiter. The
 downloads are therefore deliberately named `logical-submission.json`; adapt

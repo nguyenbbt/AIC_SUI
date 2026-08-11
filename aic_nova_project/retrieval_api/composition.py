@@ -65,7 +65,7 @@ from retrieval_api.search_engine import HealthResponse, create_app
 from retrieval_api.ui_resources import DatasetUIResources
 
 
-VARIANT_IDS = ("q0", "q1", "q2")
+VARIANT_IDS = ("q0", "q1")
 
 
 @dataclass(frozen=True)
@@ -737,7 +737,6 @@ def _ranking_policy_from_env(prefix: str) -> RankingPolicyConfig:
         query_variant_weights={
             "q0": _env_float(prefix, "RANKING_QUERY_Q0_WEIGHT", 1.0),
             "q1": _env_float(prefix, "RANKING_QUERY_Q1_WEIGHT", 1.0),
-            "q2": _env_float(prefix, "RANKING_QUERY_Q2_WEIGHT", 1.0),
         },
         fusion_default_weight=_env_float(prefix, "RANKING_FUSION_DEFAULT_WEIGHT", 1.0),
         fusion_weights={

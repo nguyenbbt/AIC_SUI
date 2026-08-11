@@ -29,6 +29,8 @@ class RankingPolicyConfigTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             RankingPolicyConfig(query_variant_weights={"q0": math.inf})
         with self.assertRaises(ValidationError):
+            RankingPolicyConfig(query_variant_weights={"q0": 1.0, "q2": 1.0})
+        with self.assertRaises(ValidationError):
             RankingPolicyConfig(
                 fusion_default_weight=0.0,
                 fusion_weights={RetrievalBranch.VISUAL_DENSE: 0.0},

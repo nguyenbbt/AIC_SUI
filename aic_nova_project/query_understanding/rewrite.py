@@ -19,7 +19,7 @@ from online.domain.errors import BranchTimeoutError, DataInfrastructureError
 from online.domain.vqa import VQAQuestion
 
 
-MAX_REWRITE_PARAPHRASES = 2
+MAX_REWRITE_PARAPHRASES = 1
 MAX_DIAGNOSTIC_IDENTIFIER_LENGTH = 128
 
 
@@ -240,7 +240,7 @@ class QueryRewriteService:
             or not isinstance(max_paraphrases, int)
             or not 0 <= max_paraphrases <= MAX_REWRITE_PARAPHRASES
         ):
-            raise ValueError("max_paraphrases must be within [0, 2]")
+            raise ValueError("max_paraphrases must be within [0, 1]")
         self._rewriter = resolved_rewriter
         self._timeout_sec = float(timeout_sec)
         self._max_paraphrases = max_paraphrases

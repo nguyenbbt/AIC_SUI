@@ -5,7 +5,9 @@ from __future__ import annotations
 import base64
 import io
 import json
+import math
 from pathlib import Path
+import re
 from typing import Any
 
 import httpx
@@ -32,7 +34,29 @@ class QwenVLMAdapter:
         max_image_long_edge: int = 768,
         client: httpx.Client | None = None,
     ) -> None:
-        self.model = model
+        if not isinstance(model, str) or not model.strip():
+            raise ValueError("Qwen model must be non-empty")
+        if (
+            not isinstance(revision, str)
+            or re.fullmatch(r"[0-9a-f]{40}", revision) is None
+        ):
+            raise ValueError("Qwen revision must be a pinned 40-character commit SHA")
+        if not isinstance(base_url, str) or not base_url.strip():
+            raise ValueError("Qwen base_url must be non-empty")
+        if (
+            isinstance(timeout_sec, bool)
+            or not isinstance(timeout_sec, (int, float))
+            or not math.isfinite(timeout_sec)
+            or timeout_sec <= 0
+        ):
+            raise ValueError("Qwen timeout_sec must be a positive finite number")
+        if (
+            isinstance(max_image_long_edge, bool)
+            or not isinstance(max_image_long_edge, int)
+            or max_image_long_edge < 64
+        ):
+            raise ValueError("Qwen max_image_long_edge must be an integer >= 64")
+        self.model = model.strip()
         self.revision = revision
         self._data_root = Path(data_root).expanduser().resolve()
         self._max_image_long_edge = max_image_long_edge
@@ -46,15 +70,20 @@ class QwenVLMAdapter:
         try:
             response = self._client.get("/models")
             response.raise_for_status()
-            ids = {
-                item.get("id") for item in response.json().get("data", [])
-                if isinstance(item, dict)
-            }
-            if self.model not in ids:
+            models = tuple(
+                item for item in response.json().get("data", []) if isinstance(item, dict)
+            )
+            served = next((item for item in models if item.get("id") == self.model), None)
+            if served is None:
                 raise ContractMismatchError("Configured Qwen model is not served")
+            served_revision = served.get("revision") or served.get("model_revision")
+            if served_revision is not None and served_revision != self.revision:
+                raise ContractMismatchError(
+                    "Served Qwen model revision does not match configuration"
+                )
         except ContractMismatchError:
             raise
-        except (httpx.HTTPError, TypeError, ValueError) as exc:
+        except (httpx.HTTPError, AttributeError, TypeError, ValueError) as exc:
             raise ResourceUnavailableError(
                 "Qwen VLM service is unavailable", details={"resource": "qwen_vlm"}
             ) from exc
@@ -72,6 +101,10 @@ class QwenVLMAdapter:
             public_evidence.append(dumped)
             if evidence.evidence_type is EvidenceType.IMAGE:
                 image_reference = getattr(evidence, "image_reference")
+                content.append({
+                    "type": "text",
+                    "text": f"Evidence image ID: {evidence.evidence_id}",
+                })
                 content.append({
                     "type": "image_url",
                     "image_url": {"url": self._image_data_url(image_reference)},
