@@ -7,9 +7,9 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Annotated, Any, Protocol, runtime_checkable
 
-from fastapi import Depends, FastAPI, Request, Response, status
+from fastapi import Depends, FastAPI, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import Field
 
 from online.domain.base import NonEmptyStr, StrictFrozenModel
@@ -32,6 +32,7 @@ from online.domain.trake import TRAKEQuery
 from online.domain.vqa import VQAEvidenceBudget, VQAQuestion, VQAResult
 from online.trake.service import TRAKEExecution
 from query_understanding.parser import parse_kis_query
+from query_understanding.rewrite import QueryRewriteService
 from retrieval_api.advanced_models import (
     InternalTRAKERequest,
     InternalTRAKEResponse,
@@ -39,6 +40,11 @@ from retrieval_api.advanced_models import (
     InternalVQAResponse,
 )
 from retrieval_api.submission import serialize_kis_submissions
+from retrieval_api.ui_resources import (
+    DatasetUIResources,
+    NeighborFramesResponse,
+    ObjectCatalogResponse,
+)
 
 
 @runtime_checkable
@@ -79,12 +85,30 @@ class HealthResponse(StrictFrozenModel):
     checks: Mapping[str, str] = Field(default_factory=dict)
 
 
+class RewriteRequest(StrictFrozenModel):
+    query: NonEmptyStr
+    request_id: NonEmptyStr
+
+
+class RewriteResponse(StrictFrozenModel):
+    request_id: NonEmptyStr
+    original_text: NonEmptyStr
+    primary_text: NonEmptyStr
+    paraphrases: tuple[NonEmptyStr, ...]
+    status: NonEmptyStr
+    warnings: tuple[NonEmptyStr, ...]
+    latency_ms: float = Field(ge=0.0)
+    model_id: str | None = None
+
+
 def create_app(
     *,
     orchestrator: SearchOrchestratorPort | None = None,
     trake_mode: TRAKEModePort | None = None,
     vqa_mode: VQAModePort | None = None,
     health_provider: Callable[[], HealthResponse] | None = None,
+    ui_resources: DatasetUIResources | None = None,
+    rewriter: QueryRewriteService | None = None,
     lifespan: Any | None = None,
 ) -> FastAPI:
     app = FastAPI(title="AIC Online Retrieval API", lifespan=lifespan)
@@ -92,6 +116,8 @@ def create_app(
     app.state.trake_mode = trake_mode
     app.state.vqa_mode = vqa_mode
     app.state.health_provider = health_provider
+    app.state.ui_resources = ui_resources
+    app.state.rewriter = rewriter
 
     @app.exception_handler(DataInfrastructureError)
     async def handle_domain_error(_: Request, exc: DataInfrastructureError) -> JSONResponse:
@@ -170,6 +196,11 @@ def create_app(
         )
 
     @app.post(
+        "/trake",
+        response_model=InternalTRAKEResponse,
+        summary="Run TRAKE temporal retrieval",
+    )
+    @app.post(
         "/internal/unstable/trake",
         response_model=InternalTRAKEResponse,
         summary="Unstable internal TRAKE endpoint",
@@ -185,6 +216,11 @@ def create_app(
         )
 
     @app.post(
+        "/vqa",
+        response_model=InternalVQAResponse,
+        summary="Answer VQA from retrieved evidence",
+    )
+    @app.post(
         "/internal/unstable/vqa",
         response_model=InternalVQAResponse,
         summary="Unstable internal VQA endpoint",
@@ -194,6 +230,31 @@ def create_app(
         current = _get_vqa_mode(app)
         result = await current.answer(request.to_domain(), request.evidence_budget)
         return InternalVQAResponse(question_id=result.question_id, result=result)
+
+    @app.get("/catalog/object-labels", response_model=ObjectCatalogResponse)
+    async def object_labels() -> ObjectCatalogResponse:
+        return _get_ui_resources(app).object_labels()
+
+    @app.get("/media/keyframes/{frame_id}", response_class=FileResponse)
+    async def keyframe(frame_id: str) -> FileResponse:
+        media = _get_ui_resources(app).resolve_keyframe(frame_id)
+        return FileResponse(media.path, media_type=media.media_type)
+
+    @app.get("/media/videos/{video_id}", response_class=FileResponse)
+    async def video(video_id: str) -> FileResponse:
+        media = _get_ui_resources(app).resolve_video(video_id)
+        return FileResponse(media.path, media_type=media.media_type)
+
+    @app.get(
+        "/media/keyframes/{frame_id}/neighbors",
+        response_model=NeighborFramesResponse,
+    )
+    async def neighbors(
+        frame_id: str,
+        before: int = Query(default=2, ge=0, le=20),
+        after: int = Query(default=2, ge=0, le=20),
+    ) -> NeighborFramesResponse:
+        return _get_ui_resources(app).neighbors(frame_id, before=before, after=after)
 
     return app
 
@@ -230,6 +291,36 @@ def _get_vqa_mode(app: FastAPI) -> VQAModePort:
     if not isinstance(mode, VQAModePort):
         raise ContractMismatchError("Configured VQA mode is invalid")
     return mode
+
+
+def _get_ui_resources(app: FastAPI) -> DatasetUIResources:
+    resources = getattr(app.state, "ui_resources", None)
+    if not isinstance(resources, DatasetUIResources):
+        raise ResourceUnavailableError(
+            "Dataset UI resources are not configured",
+            details={"resource": "ui_resources"},
+        )
+
+    @app.post("/query/rewrite", response_model=RewriteResponse)
+    async def rewrite(request: RewriteRequest) -> RewriteResponse:
+        service = getattr(app.state, "rewriter", None)
+        if not isinstance(service, QueryRewriteService):
+            raise ResourceUnavailableError(
+                "Query rewrite is not configured",
+                details={"resource": "query_rewrite"},
+            )
+        result = await service.rewrite_kis(request.query, request_id=request.request_id)
+        return RewriteResponse(
+            request_id=result.request_id,
+            original_text=result.original_text,
+            primary_text=result.primary_text,
+            paraphrases=result.paraphrases,
+            status=result.status.value,
+            warnings=result.warnings,
+            latency_ms=result.latency_ms,
+            model_id=result.model_id,
+        )
+    return resources
 
 
 def _http_status_for_error(exc: DataInfrastructureError) -> int:
@@ -343,6 +434,8 @@ __all__ = [
     "SearchOrchestratorPort",
     "SearchRequest",
     "SearchResponse",
+    "RewriteRequest",
+    "RewriteResponse",
     "TRAKEModePort",
     "VQAModePort",
     "competition_candidates",

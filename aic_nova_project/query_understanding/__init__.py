@@ -1,6 +1,7 @@
 """Query-understanding entry points."""
 
 from .parser import KISQueryBuilder, parse_kis_query
+from .openai_rewriter import OpenAIQueryRewriter
 from .rewrite import (
     MappingQueryRewriter,
     NoOpQueryRewriter,
@@ -19,6 +20,7 @@ __all__ = [
     "KISQueryBuilder",
     "MappingQueryRewriter",
     "NoOpQueryRewriter",
+    "OpenAIQueryRewriter",
     "QueryRewritePort",
     "QueryRewriteProposal",
     "QueryRewriteRequest",

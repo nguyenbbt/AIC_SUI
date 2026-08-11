@@ -456,15 +456,18 @@ trả explicit diagnostics thay vì bịa nội dung hoặc âm thầm vượt b
 
 ---
 
-## DD-031 — VQA dùng Gemini 3.5 Flash với structured evidence-only output
+## DD-031 — VQA dùng Qwen3.5-4B local với structured evidence-only output
 
 **Status:** CONFIRMED_DESIGN
 
 **Resolves:** OQ-018
 
-Primary VLM là stable model `gemini-3.5-flash` qua một mockable `VLMPort`.
-Lựa chọn này dùng một stable multimodal model có image understanding và
-structured output; model ID vẫn nằm trong config để có thể migrate có kiểm soát.
+Primary VLM là `Qwen/Qwen3.5-4B` revision
+`851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a` qua một mockable `VLMPort` và
+OpenAI-compatible local vLLM service. Thinking mode bị tắt. Model ID, revision,
+endpoint và prompt version đều nằm trong config để có thể migrate có kiểm soát.
+Chi tiết runtime và UI xem
+`docs/25-ONLINE-UI-AND-MODEL-RUNTIME-DECISIONS.md`.
 
 Prompt contract:
 
@@ -494,5 +497,6 @@ Runtime defaults:
 - Malformed schema được xem là VLM failure, không parse tự do.
 - Adapter/model unavailable trả explicit error; không tạo answer giả.
 
-Google API key chỉ được đọc từ environment/secret manager. Tests và local fake
-integration dùng `FakeVLMPort`, không cần gọi network.
+VLM endpoint/API token (nếu endpoint yêu cầu) chỉ được đọc từ
+environment/secret manager. Tests và local fake integration dùng `FakeVLMPort`,
+không cần gọi network.

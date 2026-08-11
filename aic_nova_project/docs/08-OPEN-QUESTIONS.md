@@ -254,9 +254,10 @@ ASR 4,000 ký tự, summary 800 ký tự/video và tổng evidence text 8,000 k�
 
 **Status:** RESOLVED — xem DD-031.
 
-Dùng stable `gemini-3.5-flash` qua mockable port, structured evidence-only output,
-categorical confidence, explicit insufficient-evidence và trả lời cùng ngôn ngữ
-với câu hỏi.
+Dùng `Qwen/Qwen3.5-4B` revision
+`851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a` qua local vLLM và mockable port,
+structured evidence-only output, categorical confidence, explicit
+insufficient-evidence và trả lời cùng ngôn ngữ với câu hỏi. Xem document 25.
 
 ---
 

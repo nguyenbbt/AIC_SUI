@@ -182,7 +182,7 @@ class VLMRequest(StrictFrozenModel):
     question: VQAQuestion
     evidence: tuple[VQAEvidence, ...] = Field(min_length=1)
     temperature: Annotated[FiniteFloat, Field(ge=0.0, le=1.0)] = 0.1
-    max_output_tokens: StrictIntValue = Field(default=512, ge=1)
+    max_output_tokens: StrictIntValue = Field(default=256, ge=1)
 
     @model_validator(mode="after")
     def validate_evidence_ids(self) -> "VLMRequest":

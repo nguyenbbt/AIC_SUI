@@ -88,6 +88,21 @@ class FrameMetadata(StrictFrozenModel):
         return self
 
 
+class ObjectLabelStat(StrictFrozenModel):
+    """Canonical label inventory exposed by the active Offline dataset."""
+
+    label: NonEmptyStr
+    detection_count: StrictIntValue = Field(ge=0)
+
+    @field_validator("label")
+    @classmethod
+    def validate_canonical_label(cls, value: str) -> str:
+        normalized = value.strip().casefold()
+        if value != normalized:
+            raise ValueError("object label must be stripped lowercase text")
+        return value
+
+
 ObjectMap = dict[str, tuple[ObjectDetection, ...]]
 
 

@@ -23,7 +23,7 @@ def build_vlm_request(
     evidence: Sequence[VQAEvidence],
     *,
     temperature: float = 0.1,
-    max_output_tokens: int = 512,
+    max_output_tokens: int = 256,
 ) -> VLMRequest:
     if not isinstance(question, VQAQuestion):
         raise ContractMismatchError("question must be a validated VQAQuestion")

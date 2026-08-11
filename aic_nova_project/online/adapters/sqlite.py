@@ -11,7 +11,7 @@ from pathlib import Path
 from online.config import SQLiteResourceConfig
 from online.domain.candidates import ObjectDetection
 from online.domain.errors import ContractMismatchError, InvalidQueryError, ResourceUnavailableError
-from online.ports.records import FrameMetadata, VideoMetadata
+from online.ports.records import FrameMetadata, ObjectLabelStat, VideoMetadata
 
 from ._errors import call_backend
 
@@ -256,6 +256,34 @@ class SQLiteReadAdapter:
                             "Invalid object row returned by SQLite"
                         ) from exc
         return {frame_id: tuple(objects) for frame_id, objects in output.items()}
+
+    def list_object_labels(self) -> Sequence[ObjectLabelStat]:
+        """Return the exact object vocabulary present in the active SQLite index."""
+
+        table = self._quote_identifier(self.config.objects_table)
+        sql = (
+            f"SELECT LOWER(TRIM(label)) AS label, COUNT(*) AS detection_count "
+            f"FROM {table} WHERE TRIM(label) <> '' "
+            "GROUP BY LOWER(TRIM(label)) ORDER BY label ASC"
+        )
+        with self._lock:
+            rows = call_backend(
+                "list_object_labels",
+                "sqlite",
+                lambda: self._conn().execute(sql).fetchall(),
+            )
+        try:
+            return tuple(
+                ObjectLabelStat(
+                    label=self._row_text(row, "label"),
+                    detection_count=self._row_int(row, "detection_count"),
+                )
+                for row in rows
+            )
+        except Exception as exc:
+            raise ContractMismatchError(
+                "Invalid object catalog row returned by SQLite"
+            ) from exc
 
     @staticmethod
     def _frame_from_row(row: sqlite3.Row) -> FrameMetadata:

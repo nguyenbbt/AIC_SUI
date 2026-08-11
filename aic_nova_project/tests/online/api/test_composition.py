@@ -194,6 +194,8 @@ class RuntimeCompositionTests(unittest.TestCase):
                     "trake.readiness": "disabled",
                     "vqa.enabled": "false",
                     "vqa.readiness": "disabled",
+                    "rewrite.enabled": "false",
+                    "ui_resources.enabled": "true",
                 },
             )
 

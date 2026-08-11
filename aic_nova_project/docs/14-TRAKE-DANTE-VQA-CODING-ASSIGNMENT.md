@@ -28,7 +28,7 @@ VQA question
 → retrieval rewrite
 → KIS evidence retrieval
 → bounded evidence selection
-→ Gemini VLM through a port
+→ Qwen3.5-4B VLM through a port
 → evidence-grounded answer
 ```
 
@@ -95,17 +95,18 @@ DP[i,t] = S[i,t] + max_tau<t(DP[i-1,tau] - lambda * (t - tau))
 
 ## 2.6 VQA model/prompt — DD-031
 
-- Primary model: stable `gemini-3.5-flash`.
+- Primary model: `Qwen/Qwen3.5-4B` revision
+  `851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a` through local vLLM.
 - Structured output, không parse free-form answer.
 - Evidence-only; evidence thiếu thì `insufficient_evidence`.
 - Trả lời cùng ngôn ngữ câu hỏi.
 - Confidence dùng `low | medium | high`, không dùng số giả chính xác.
 - Temperature `0.1`, max output 512 tokens, timeout 15 giây.
 - Tối đa một transient retry trong total deadline.
-- API key chỉ từ environment/secret manager.
+- Endpoint/API token chỉ từ environment/secret manager.
 
-Nguồn model: [Gemini models](https://ai.google.dev/gemini-api/docs/models) và
-[Gemini image understanding](https://ai.google.dev/gemini-api/docs/image-understanding).
+Nguồn model: [Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B). Runtime/UI
+chi tiết xem `docs/25-ONLINE-UI-AND-MODEL-RUNTIME-DECISIONS.md`.
 
 ---
 
@@ -897,7 +898,7 @@ Ngoài ra phải chạy riêng:
 
 ## Người C
 
-- Chạy actual Gemini adapter theo DD-031.
+- Chạy actual Qwen local-vLLM adapter theo DD-031 và document 25.
 - Đo VQA latency/cost/answer grounding.
 - Tune evidence budget chỉ qua config/benchmark; thay contract cần decision mới.
 - Đóng OQ-002 và competition output schema.

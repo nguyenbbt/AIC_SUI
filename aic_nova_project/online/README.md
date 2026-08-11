@@ -94,10 +94,17 @@ Data-backed TRAKE can be enabled with:
 $env:AIC_ONLINE_TRAKE_ENABLED = "true"
 ```
 
-VQA data adapters are also wired by `build_online_runtime`, but enabling VQA
-requires the host application to inject an explicit production `VLMPort`. No
-model or external provider is silently selected. A provider may inject a
-`QueryRewriteService`; otherwise VQA safely reuses the original question.
+VQA data adapters are wired by `build_online_runtime`. The approved default
+adapter targets a local OpenAI-compatible `Qwen/Qwen3.5-4B` service pinned to
+revision `851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a`. Enable explicit
+environment composition with `AIC_ONLINE_QWEN_VLM_AUTO_CONFIGURE=true`, or
+inject another validated `VLMPort`. Startup still fails closed when VQA is
+enabled but neither choice is present.
+
+Optional KIS/VQA rewrite uses OpenAI Responses structured output with
+`gpt-5.4-mini-2026-03-17`. Set `AIC_ONLINE_QUERY_REWRITE_ENABLED=true` and
+`AIC_ONLINE_OPENAI_API_KEY`; provider failure safely retains the original q0.
+The key is read from environment only and is never returned by diagnostics.
 
 Production mode requires the manifest gate and a pinned
 `AIC_ONLINE_DATASET_EXPECTED_FINGERPRINT`. Conversion of relative keyframe
@@ -201,8 +208,10 @@ Minimal v-KIS request:
 }
 ```
 
-Public endpoints are `/health/live`, `/health/ready`, and `/search`. The API is
-internal/unstable until OQ-002 is closed. Runtime startup probes the required
+Operator endpoints are `/health/live`, `/health/ready`, `/search`, `/trake`,
+`/vqa`, `/query/rewrite`, `/catalog/object-labels`, and read-only `/media/*`.
+The old `/internal/unstable/trake` and `/internal/unstable/vqa` aliases remain
+for backward compatibility. Runtime startup probes the required
 visual encoder and optional Vietnamese encoder for batch shape, dimension,
 finite values and positive vector norm; these checks do not replace the full
 Offline contract validator or a real database vertical slice.
