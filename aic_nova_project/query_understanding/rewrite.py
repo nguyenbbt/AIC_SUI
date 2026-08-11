@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import math
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from enum import Enum
 from threading import Lock
 from time import perf_counter
@@ -415,19 +417,72 @@ def _normalize_variants(
         return ()
     if isinstance(values, (str, bytes)):
         raise TypeError("rewrite variants must be a sequence")
-    seen = set(exclude)
+    references = [" ".join(value.split()) for value in exclude]
+    seen = set(references)
     output: list[str] = []
     for value in values:
         if not isinstance(value, str):
             raise TypeError("rewrite variants must contain strings")
         normalized = " ".join(value.split())
-        if not normalized or normalized in seen:
+        if (
+            not normalized
+            or normalized in seen
+            or any(_is_near_duplicate(normalized, reference) for reference in references)
+        ):
             continue
         seen.add(normalized)
+        references.append(normalized)
         output.append(normalized)
         if len(output) == limit:
             break
     return tuple(output)
+
+
+_GENERIC_REWRITE_PREFIXES = (
+    "khung hình có",
+    "khung hình cho thấy",
+    "hình ảnh có",
+    "hình ảnh cho thấy",
+    "cảnh có",
+    "cảnh cho thấy",
+    "visual scene",
+    "scene showing",
+    "image showing",
+    "image of",
+    "a photo of",
+    "a video frame of",
+)
+
+
+def _is_near_duplicate(candidate: str, reference: str) -> bool:
+    left = _similarity_text(candidate)
+    right = _similarity_text(reference)
+    if not left or not right:
+        return left == right
+    if left == right:
+        return True
+    left_tokens = left.split()
+    right_tokens = right.split()
+    if sorted(left_tokens) == sorted(right_tokens):
+        return True
+    return SequenceMatcher(None, left, right).ratio() >= 0.94
+
+
+def _similarity_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    normalized = " ".join(re.findall(r"\w+", normalized, flags=re.UNICODE))
+    changed = True
+    while changed:
+        changed = False
+        for prefix in _GENERIC_REWRITE_PREFIXES:
+            canonical_prefix = " ".join(re.findall(r"\w+", prefix.casefold()))
+            if normalized == canonical_prefix:
+                return ""
+            if normalized.startswith(canonical_prefix + " "):
+                normalized = normalized[len(canonical_prefix) + 1 :]
+                changed = True
+                break
+    return normalized
 
 
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")

@@ -16,7 +16,7 @@ from query_understanding.rewrite import (
 
 
 DEFAULT_REWRITE_MODEL = "gpt-5.4-mini-2026-03-17"
-PROMPT_VERSION = "aic-query-rewrite-v1"
+PROMPT_VERSION = "aic-query-rewrite-v2"
 
 
 class OpenAIQueryRewriter:
@@ -39,13 +39,21 @@ class OpenAIQueryRewriter:
 
     async def rewrite(self, request: QueryRewriteRequest) -> QueryRewriteProposal:
         instructions = (
-            "Convert the user's Vietnamese or English request into concise visual-search text. "
-            "Preserve named entities, visible actions, objects, setting, time order, OCR-like words, "
-            "and uncertainty. Never invent facts. Return JSON only. "
+            "You rewrite queries for a video keyframe retrieval system. Preserve every named entity, "
+            "visible object, action, attribute, count, spatial/temporal relation, quoted/OCR-like text, "
+            "and uncertainty from the input. Never add a color, place, object, action, count, identity, "
+            "or event not supported by the input. Do not answer questions. Do not add boilerplate such "
+            "as 'khung hình có', 'visual scene', 'image of', or 'scene showing'. Return JSON only. "
             + (
-                "Keep the original intent and provide at most two distinct visual paraphrases."
+                "For KIS: primary_text is q1, a natural Vietnamese visual description organized as "
+                "subject-action-attributes-relations-setting. paraphrases must contain exactly one item: "
+                "q2, a concise English caption optimized for OpenCLIP visual retrieval. q1 and q2 must "
+                "both be meaning-preserving, and must be lexically distinct from the original q0 and "
+                "from each other."
                 if request.purpose is RewritePurpose.KIS
-                else "Describe only visual evidence that could help answer the question."
+                else "For VQA evidence retrieval: primary_text describes only the visual evidence that "
+                "could answer the question, without proposing an answer. paraphrases contains exactly "
+                "one concise English visual-retrieval caption with the same evidence need."
             )
         )
         payload = {
@@ -65,7 +73,8 @@ class OpenAIQueryRewriter:
                             "paraphrases": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "maxItems": 2,
+                                "minItems": 1,
+                                "maxItems": 1,
                             },
                         },
                         "required": ["primary_text", "paraphrases"],

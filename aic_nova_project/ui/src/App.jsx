@@ -8,6 +8,7 @@ export default function App() {
   const [mode, setMode] = useState("kis_text");
   const [query, setQuery] = useState("");
   const [paraphrases, setParaphrases] = useState([]);
+  const [rewriteMeta, setRewriteMeta] = useState(null);
   const [events, setEvents] = useState(["", ""]);
   const [answerType, setAnswerType] = useState("short_text");
   const [constraints, setConstraints] = useState([]);
@@ -32,8 +33,8 @@ export default function App() {
   async function rewrite() {
     if (!query.trim()) return;
     setBusy(true); setError("");
-    try { const x = await api.rewrite(query.trim(), `rw-${uid()}`); setParaphrases(x.paraphrases); }
-    catch (e) { setError(e.message); setParaphrases([]); }
+    try { const x = await api.rewrite(query.trim(), `rw-${uid()}`); setParaphrases(x.paraphrases); setRewriteMeta(x); }
+    catch (e) { setError(e.message); setParaphrases([]); setRewriteMeta(null); }
     finally { setBusy(false); }
   }
 
@@ -76,7 +77,7 @@ export default function App() {
         {mode === "trake" ? <TRAKEEditor events={events} setEvents={setEvents} /> : <>
           <label>{mode === "vqa" ? "Câu hỏi" : mode === "kis_video" ? "Mô tả clip đang xem" : "Mô tả cần tìm"}</label>
           <textarea value={query} onChange={(e)=>setQuery(e.target.value)} placeholder={mode === "kis_video" ? "Bạn xem video BTC chiếu rồi tự mô tả cảnh ở đây…" : "Nhập truy vấn bằng tiếng Việt hoặc tiếng Anh…"} />
-          {mode.startsWith("kis") && <div className="rewrite"><button className="secondary" onClick={rewrite} title={health?.checks?.["rewrite.enabled"]==="true"?"GPT rewrite đã sẵn sàng":"Bật QUERY_REWRITE_ENABLED trên API"} disabled={busy || !query.trim() || health?.checks?.["rewrite.enabled"]!=="true"}>LLM rewrite</button>{paraphrases.map((x,i)=><span key={i}>q{i+1}: {x}</span>)}</div>}
+          {mode.startsWith("kis") && <div className="rewrite"><button className="secondary" onClick={rewrite} title={health?.checks?.["rewrite.enabled"]==="true"?"GPT rewrite đã sẵn sàng":"Bật QUERY_REWRITE_ENABLED trên API"} disabled={busy || !query.trim() || health?.checks?.["rewrite.enabled"]!=="true"}>LLM rewrite</button>{rewriteMeta?.model_id&&<small>{rewriteMeta.model_id}</small>}{paraphrases.map((x,i)=><span key={i}>q{i+1}: {x}</span>)}</div>}
           {mode === "vqa" && <select value={answerType} onChange={(e)=>setAnswerType(e.target.value)}><option value="short_text">Short text</option><option value="yes_no">Yes / No</option><option value="number">Number</option><option value="list">List</option></select>}
         </>}
         {mode.startsWith("kis") && <ObjectConstraints labels={labels} source={catalogSource} items={constraints} setItems={setConstraints} />}
@@ -96,7 +97,7 @@ export default function App() {
   </div>;
 }
 
-function Status({health}) { const ok=health?.status==="ready"||health?.status==="healthy"; return <div className={`status ${ok?"ok":"bad"}`}><i />{health?.status||"checking"}</div>; }
+function Status({health}) { const ok=health?.status==="ready"||health?.status==="healthy"; const demo=health?.checks?.demo==="true";return <div className={`status ${ok?"ok":"bad"}`}><i />{health?.status||"checking"}{demo&&" · DEMO"}</div>; }
 function TRAKEEditor({events,setEvents}) { const move=(i,d)=>{const next=[...events];[next[i],next[i+d]]=[next[i+d],next[i]];setEvents(next)};return <div><label>Chuỗi sự kiện theo đúng thứ tự</label>{events.map((x,i)=><div className="event" key={i}><b>{i+1}</b><input value={x} onChange={(e)=>setEvents(events.map((v,j)=>j===i?e.target.value:v))} placeholder={`Sự kiện ${i+1}`} /><span><button className="ghost" disabled={i===0} onClick={()=>move(i,-1)}>↑</button><button className="ghost" disabled={i===events.length-1} onClick={()=>move(i,1)}>↓</button><button className="ghost" onClick={()=>events.length>2&&setEvents(events.filter((_,j)=>j!==i))}>×</button></span></div>)}<button className="secondary" onClick={()=>setEvents([...events,""])}>+ Thêm sự kiện</button></div>; }
 function ObjectConstraints({labels,source,items,setItems}) { return <details open><summary>Object constraints <small>{source}</small></summary><datalist id="object-labels">{labels.map((x)=><option key={x.label} value={x.label}>{x.detection_count}</option>)}</datalist>{items.map((x)=><div className="constraint" key={x.id}><input list="object-labels" value={x.label} onChange={(e)=>setItems(items.map(v=>v.id===x.id?{...v,label:e.target.value}:v))} placeholder="object"/><select value={x.count} onChange={(e)=>setItems(items.map(v=>v.id===x.id?{...v,count:Number(e.target.value)}:v))}><option value={1}>1+</option><option value={2}>2+</option><option value={3}>3+</option></select><select value={x.filter_mode} onChange={(e)=>setItems(items.map(v=>v.id===x.id?{...v,filter_mode:e.target.value}:v))}><option value="soft">Soft boost</option><option value="hard">Hard filter</option></select><button className="ghost" onClick={()=>setItems(items.filter(v=>v.id!==x.id))}>×</button></div>)}<button className="secondary" onClick={()=>setItems([...items,{id:uid(),label:"person",count_operator:"gte",count:1,min_confidence:.5,position:null,filter_mode:"soft"}])}>+ Object</button></details>; }
 function BranchPicker({enabled,setEnabled}) { return <details><summary>7 retrieval branches <small>{enabled.length}/7</small></summary><div className="branches">{BRANCHES.map((b)=><label key={b}><input type="checkbox" checked={enabled.includes(b)} onChange={()=>setEnabled(enabled.includes(b)?enabled.filter(x=>x!==b):[...enabled,b])}/>{b}</label>)}</div></details>; }

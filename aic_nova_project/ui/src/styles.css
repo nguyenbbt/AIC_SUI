@@ -2,3 +2,4 @@
 :root{}
 .modal .hero{width:100%;background:#000}.neighbor-strip{display:flex;gap:6px;margin-top:8px;overflow:auto}.neighbor-strip img{width:110px;aspect-ratio:16/10;object-fit:cover;border:2px solid transparent;border-radius:5px}.neighbor-strip img.current{border-color:#62d5b5}
 .event{grid-template-columns:25px 1fr 112px}.event>span{display:flex;gap:3px}.event>span button{padding:5px 7px}.answer label{display:grid;gap:6px;margin:14px 0}.answer label input{max-width:600px}
+.rewrite small{align-self:center;color:#758396;font-family:ui-monospace;font-size:10px}

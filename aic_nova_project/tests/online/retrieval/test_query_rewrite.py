@@ -221,3 +221,47 @@ def test_zero_paraphrase_policy_keeps_only_original_kis_query() -> None:
     assert result.status is RewriteStatus.DEGRADED
     assert result.variants == ("query",)
     assert result.warnings == ("QUERY_REWRITE_NO_USABLE_VARIANTS",)
+
+
+def test_prefix_only_and_near_duplicate_variants_are_rejected() -> None:
+    original = "Một người mặc áo đỏ đứng cạnh ô tô"
+    provider = MappingQueryRewriter(
+        {
+            (RewritePurpose.KIS, original): QueryRewriteProposal(
+                primary_text=f"Khung hình có {original}",
+                paraphrases=(
+                    f"visual scene: {original}",
+                    "A person wearing a red shirt standing next to a car",
+                ),
+            )
+        }
+    )
+
+    result = asyncio.run(
+        QueryRewriteService(provider).rewrite_kis(original, request_id="dedupe")
+    )
+
+    assert result.status is RewriteStatus.SUCCESS
+    assert result.paraphrases == (
+        "A person wearing a red shirt standing next to a car",
+    )
+
+
+def test_all_semantic_duplicates_degrade_to_q0() -> None:
+    original = "người đứng cạnh xe"
+    provider = MappingQueryRewriter(
+        {
+            (RewritePurpose.KIS, original): QueryRewriteProposal(
+                primary_text=f"Cảnh cho thấy {original}",
+                paraphrases=(f"image showing {original}",),
+            )
+        }
+    )
+
+    result = asyncio.run(
+        QueryRewriteService(provider).rewrite_kis(original, request_id="all-duplicate")
+    )
+
+    assert result.status is RewriteStatus.DEGRADED
+    assert result.variants == (original,)
+    assert result.warnings == ("QUERY_REWRITE_NO_USABLE_VARIANTS",)

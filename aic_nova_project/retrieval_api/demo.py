@@ -60,11 +60,12 @@ def catalog() -> dict[str, Any]:
 def rewrite(request: Payload) -> dict[str, Any]:
     query = str(request.model_dump().get("query", "cảnh cần tìm"))
     request_id = str(request.model_dump().get("request_id", "demo-rewrite"))
+    q1, q2 = _demo_rewrite_variants(query)
     return {
         "request_id": request_id,
         "original_text": query,
         "primary_text": query,
-        "paraphrases": [f"khung hình có {query}", f"visual scene: {query}"],
+        "paraphrases": [q1, q2],
         "status": "success",
         "warnings": [],
         "latency_ms": 18.4,
@@ -184,6 +185,47 @@ def _frame_match(video_id: str, position: int, event_id: str) -> dict[str, Any]:
 def _parse_frame_id(frame_id: str) -> tuple[str, int, int]:
     video_id, shot, position = frame_id.rsplit("_", 2)
     return video_id, int(shot), int(position)
+
+
+def _demo_rewrite_variants(query: str) -> tuple[str, str]:
+    """Transparent deterministic sample; production uses the OpenAI adapter."""
+
+    normalized = " ".join(query.strip().split())
+    vietnamese = normalized
+    vietnamese_replacements = (
+        ("mặc áo đỏ", "mặc một chiếc áo màu đỏ"),
+        ("đứng cạnh ô tô", "đang đứng bên cạnh một chiếc xe ô tô"),
+        ("đứng cạnh xe ô tô", "đang đứng bên cạnh một chiếc xe ô tô"),
+        ("đi xe đạp", "đang điều khiển một chiếc xe đạp"),
+        ("cầm điện thoại", "đang cầm một chiếc điện thoại"),
+    )
+    for source, target in vietnamese_replacements:
+        vietnamese = vietnamese.replace(source, target).replace(source.capitalize(), target)
+    if vietnamese == normalized:
+        vietnamese = f"Chi tiết thị giác cần giữ nguyên: {normalized}"
+
+    english = normalized.casefold()
+    english_replacements = (
+        ("một người", "a person"),
+        ("người đàn ông", "a man"),
+        ("người phụ nữ", "a woman"),
+        ("mặc áo đỏ", "wearing a red shirt"),
+        ("mặc một chiếc áo màu đỏ", "wearing a red shirt"),
+        ("đứng cạnh ô tô", "standing next to a car"),
+        ("đứng cạnh xe ô tô", "standing next to a car"),
+        ("đang đứng bên cạnh một chiếc xe ô tô", "standing next to a car"),
+        ("đi xe đạp", "riding a bicycle"),
+        ("cầm điện thoại", "holding a cell phone"),
+    )
+    changed = False
+    for source, target in english_replacements:
+        if source in english:
+            english = english.replace(source, target)
+            changed = True
+    english = " ".join(english.split())
+    if not changed:
+        english = "Demo cannot translate this query; production GPT will create the English CLIP caption."
+    return vietnamese, english
 
 
 __all__ = ["app"]

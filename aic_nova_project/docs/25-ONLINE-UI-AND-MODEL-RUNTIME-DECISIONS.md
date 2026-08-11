@@ -37,15 +37,17 @@ provider_id: openai
 model_id: gpt-5.4-mini-2026-03-17
 API: Responses API
 reasoning_effort: none
-prompt_version: aic-query-rewrite-v1
+prompt_version: aic-query-rewrite-v2
 timeout: 5 seconds
 maximum paraphrases: 2
 ```
 
-KIS always preserves the original query as `q0`. Successful rewriting may add
-at most `q1` and `q2`; failure, timeout or invalid output degrades to `q0`
-without failing search. VQA rewriting produces a visual-evidence retrieval
-description and must never answer the question.
+KIS always preserves the original query as `q0`. `q1` is a normalized
+Vietnamese visual description; `q2` is a concise English caption for OpenCLIP.
+Prefix-only and near-duplicate variants are rejected before retrieval.
+Failure, timeout or invalid output degrades to `q0` without failing search.
+VQA rewriting produces a visual-evidence retrieval description and must never
+answer the question.
 
 KIS exposes rewriting as an optional user action, off by default. VQA enables
 the retrieval-oriented rewrite automatically when the provider is configured.
