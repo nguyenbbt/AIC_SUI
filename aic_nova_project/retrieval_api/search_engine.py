@@ -243,6 +243,26 @@ def create_app(
         result = await _get_vqa_mode(app).answer(request.to_domain(), request.evidence_budget)
         return InternalVQAResponse(question_id=result.question_id, result=result)
 
+    @app.post("/query/rewrite", response_model=RewriteResponse)
+    async def rewrite(request: RewriteRequest) -> RewriteResponse:
+        service = getattr(app.state, "rewriter", None)
+        if not isinstance(service, QueryRewriteService):
+            raise ResourceUnavailableError(
+                "Query rewrite is not configured",
+                details={"resource": "query_rewrite"},
+            )
+        result = await service.rewrite_kis(request.query, request_id=request.request_id)
+        return RewriteResponse(
+            request_id=result.request_id,
+            original_text=result.original_text,
+            primary_text=result.primary_text,
+            paraphrases=result.paraphrases,
+            status=result.status.value,
+            warnings=result.warnings,
+            latency_ms=result.latency_ms,
+            model_id=result.model_id,
+        )
+
     @app.get("/catalog/object-labels", response_model=ObjectCatalogResponse)
     async def object_labels() -> ObjectCatalogResponse:
         return _get_ui_resources(app).object_labels()
@@ -311,26 +331,6 @@ def _get_ui_resources(app: FastAPI) -> DatasetUIResources:
         raise ResourceUnavailableError(
             "Dataset UI resources are not configured",
             details={"resource": "ui_resources"},
-        )
-
-    @app.post("/query/rewrite", response_model=RewriteResponse)
-    async def rewrite(request: RewriteRequest) -> RewriteResponse:
-        service = getattr(app.state, "rewriter", None)
-        if not isinstance(service, QueryRewriteService):
-            raise ResourceUnavailableError(
-                "Query rewrite is not configured",
-                details={"resource": "query_rewrite"},
-            )
-        result = await service.rewrite_kis(request.query, request_id=request.request_id)
-        return RewriteResponse(
-            request_id=result.request_id,
-            original_text=result.original_text,
-            primary_text=result.primary_text,
-            paraphrases=result.paraphrases,
-            status=result.status.value,
-            warnings=result.warnings,
-            latency_ms=result.latency_ms,
-            model_id=result.model_id,
         )
     return resources
 

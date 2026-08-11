@@ -9,6 +9,7 @@ from online.domain.diagnostics import BranchDiagnostics, QueryDiagnostics
 from online.domain.enums import BranchStatus, RetrievalBranch
 from online.domain.errors import ContractMismatchError, ResourceUnavailableError
 from online.modes.kis import KISSearchResult
+from query_understanding.rewrite import QueryRewriteService
 from retrieval_api.search_engine import competition_candidates, create_app
 
 
@@ -63,6 +64,18 @@ class FakeOrchestrator:
 
 
 class SearchEngineAPITests(unittest.TestCase):
+    def test_query_rewrite_route_is_registered_when_app_is_created(self) -> None:
+        client = TestClient(create_app(rewriter=QueryRewriteService()))
+
+        response = client.post(
+            "/query/rewrite",
+            json={"query": "một người cạnh ô tô", "request_id": "rewrite-1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["request_id"], "rewrite-1")
+        self.assertEqual(response.json()["status"], "degraded")
+
     def test_health_live_and_ready(self) -> None:
         client = TestClient(create_app(orchestrator=FakeOrchestrator()))
 
