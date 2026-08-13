@@ -26,6 +26,7 @@ from .encoders import (
     VietnameseTextEncoder,
 )
 from .factory import build_retrieval_service
+from .modal_encoders import ModalTextEmbeddingBackend
 from .query_builder import BASELINE_KIS_BRANCHES, KISQueryBuilder
 from .service import (
     BranchInvocationDiagnostics,
@@ -71,6 +72,7 @@ __all__ = [
     "VIETNAMESE_MODEL_NAME",
     "VIETNAMESE_MODEL_REVISION",
     "VietnameseTextEncoder",
+    "ModalTextEmbeddingBackend",
     "VISUAL_SOURCE_RESOURCE",
     "VisualSemanticBranch",
     "VQACandidateRetriever",
