@@ -120,10 +120,7 @@ def _rewriter(question: VQAQuestion) -> QueryRewriteService:
             {
                 (RewritePurpose.VQA_EVIDENCE, question.question): QueryRewriteProposal(
                     primary_text="cảnh người phụ nữ đứng cạnh một phương tiện",
-                    paraphrases=(
-                        "khung hình có người phụ nữ và phương tiện bên cạnh",
-                        "người phụ nữ đứng gần xe",
-                    ),
+                    paraphrases=("khung hình có người phụ nữ và phương tiện bên cạnh",),
                     provider_id="fake-vqa-rewriter",
                 )
             }
@@ -149,11 +146,10 @@ def test_adapter_rewrites_question_and_calls_shared_kis_pipeline_once() -> None:
     assert bundle.query_id == "vqa:q-vqa"
     assert bundle.mode is QueryMode.KIS_TEXT
     assert bundle.original_query == "cảnh người phụ nữ đứng cạnh một phương tiện"
-    assert tuple(item.variant_id for item in bundle.text_variants) == ("q0", "q1", "q2")
+    assert tuple(item.variant_id for item in bundle.text_variants) == ("q0", "q1")
     assert tuple(item.text for item in bundle.text_variants) == (
         "cảnh người phụ nữ đứng cạnh một phương tiện",
         "khung hình có người phụ nữ và phương tiện bên cạnh",
-        "người phụ nữ đứng gần xe",
     )
     assert execution.rewrite.status is RewriteStatus.SUCCESS
     assert execution.query_bundle is bundle

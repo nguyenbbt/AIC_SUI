@@ -113,10 +113,7 @@ def test_vqa_question_reaches_real_kis_seven_branch_ranking_handoff() -> None:
             {
                 (RewritePurpose.VQA_EVIDENCE, question.question): QueryRewriteProposal(
                     primary_text=evidence_query,
-                    paraphrases=(
-                        "người đang điều khiển một phương tiện",
-                        "khung hình cho thấy người và phương tiện di chuyển",
-                    ),
+                    paraphrases=("người đang điều khiển một phương tiện",),
                 )
             }
         )
@@ -142,7 +139,6 @@ def test_vqa_question_reaches_real_kis_seven_branch_ranking_handoff() -> None:
     assert tuple(item.text for item in execution.query_bundle.text_variants) == (
         evidence_query,
         "người đang điều khiển một phương tiện",
-        "khung hình cho thấy người và phương tiện di chuyển",
     )
     assert execution.candidates
     assert all(isinstance(item, FusedFrameCandidate) for item in execution.candidates)
@@ -152,9 +148,9 @@ def test_vqa_question_reaches_real_kis_seven_branch_ranking_handoff() -> None:
     assert set(execution.kis_diagnostics.branches) == set(BASELINE_KIS_BRANCHES)
     assert execution.kis_diagnostics.query_id == "vqa:vqa-handoff"
     assert {call.query for call in elasticsearch.calls} == {evidence_query}
-    assert len(milvus.calls) == 12
-    assert len(visual_encoder.calls) == 3
-    assert len(vietnamese_encoder.calls) == 9
+    assert len(milvus.calls) == 8
+    assert len(visual_encoder.calls) == 2
+    assert len(vietnamese_encoder.calls) == 6
 
 
 def test_rewrite_timeout_degrades_to_original_question_and_still_retrieves() -> None:

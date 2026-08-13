@@ -50,7 +50,7 @@ class QueryVariantAggregationConfig:
 
 
 class RRFQueryVariantAggregator:
-    """Apply configured weights to branch-local normalized q0/q1/q2 evidence.
+    """Apply configured weights to branch-local normalized q0/q1 evidence.
 
     The class name is retained for import compatibility with earlier C code.
     Its policy name reflects the current behavior: weighted sum across query
@@ -59,7 +59,7 @@ class RRFQueryVariantAggregator:
 
     def __init__(self, config: QueryVariantAggregationConfig | None = None) -> None:
         self.config = config or QueryVariantAggregationConfig(
-            query_variant_weights={"q0": 1.0, "q1": 1.0, "q2": 1.0}
+            query_variant_weights={"q0": 1.0, "q1": 1.0}
         )
 
     @property

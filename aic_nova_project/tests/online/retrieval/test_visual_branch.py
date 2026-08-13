@@ -117,7 +117,7 @@ class VisualSemanticBranchTests(unittest.TestCase):
         self.assertEqual(first.provenance.query_variant_id, "q0")
         self.assertEqual(first.provenance.query_text, "a person riding a bicycle")
 
-    def test_bundle_retrieves_q0_q1_q2_independently_without_aggregation(self) -> None:
+    def test_bundle_retrieves_q0_q1_independently_without_aggregation(self) -> None:
         fixture = build_integration_fixture()
         encoder = FakeTextEncoder(dimension=4)
         milvus = FakeMilvusSearchPort(visual=fixture.visual_hits[:1])
@@ -130,20 +130,20 @@ class VisualSemanticBranchTests(unittest.TestCase):
         query = KISQueryBuilder().build(
             "original query",
             mode=QueryMode.KIS_TEXT,
-            paraphrases=("first paraphrase", "second paraphrase"),
+            paraphrases=("first paraphrase",),
             query_id="query-visual",
         )
 
         results = branch.retrieve(query, top_k=1)
 
-        self.assertEqual(tuple(result.query_variant_id for result in results), ("q0", "q1", "q2"))
+        self.assertEqual(tuple(result.query_variant_id for result in results), ("q0", "q1"))
         self.assertEqual(
             encoder.calls,
-            [("original query",), ("first paraphrase",), ("second paraphrase",)],
+            [("original query",), ("first paraphrase",)],
         )
-        self.assertEqual(len(milvus.visual_calls), 3)
-        self.assertEqual([call[1] for call in milvus.visual_calls], [1, 1, 1])
-        self.assertEqual(len({call[0] for call in milvus.visual_calls}), 3)
+        self.assertEqual(len(milvus.visual_calls), 2)
+        self.assertEqual([call[1] for call in milvus.visual_calls], [1, 1])
+        self.assertEqual(len({call[0] for call in milvus.visual_calls}), 2)
         self.assertTrue(all(result.returned_count == 1 for result in results))
 
     def test_empty_search_is_success_and_does_not_query_metadata(self) -> None:

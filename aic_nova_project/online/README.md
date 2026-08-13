@@ -94,10 +94,17 @@ Data-backed TRAKE can be enabled with:
 $env:AIC_ONLINE_TRAKE_ENABLED = "true"
 ```
 
-VQA data adapters are also wired by `build_online_runtime`, but enabling VQA
-requires the host application to inject an explicit production `VLMPort`. No
-model or external provider is silently selected. A provider may inject a
-`QueryRewriteService`; otherwise VQA safely reuses the original question.
+VQA data adapters are wired by `build_online_runtime`. The approved default
+adapter targets a local OpenAI-compatible `Qwen/Qwen3.5-4B` service pinned to
+revision `851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a`. Enable explicit
+environment composition with `AIC_ONLINE_QWEN_VLM_AUTO_CONFIGURE=true`, or
+inject another validated `VLMPort`. Startup still fails closed when VQA is
+enabled but neither choice is present.
+
+Optional KIS/VQA rewrite uses OpenAI Responses structured output with
+`gpt-5.4-mini-2026-03-17`. Set `AIC_ONLINE_QUERY_REWRITE_ENABLED=true` and
+`AIC_ONLINE_OPENAI_API_KEY`; provider failure safely retains the original q0.
+The key is read from environment only and is never returned by diagnostics.
 
 Production mode requires the manifest gate and a pinned
 `AIC_ONLINE_DATASET_EXPECTED_FINGERPRINT`. Conversion of relative keyframe
@@ -111,12 +118,12 @@ approved production ranking policy. Runtime deployments must review and pin
 these values before claiming production readiness:
 
 - Branch-local score normalizer: RRF with `k=60`.
-- Query-variant aggregation: `weighted_sum_query_variant_v1` with q0/q1/q2
+- Query-variant aggregation: `weighted_sum_query_variant_v1` with q0/q1
   weights.
 - Fusion: `experimental_weighted_sum_normalized_v1` with equal default branch
   weights.
 - Summary propagation: `summary_video_score_cap_v1`, `weight=0.1`,
-  `max_boost=0.2`; it uses the same q0/q1/q2 weights and normalization RRF
+  `max_boost=0.2`; it uses the same q0/q1 weights and normalization RRF
   fallback configured for the frame branches.
 - ASR interval mapping: `timestamp_inclusive_distributed_v1`,
   `max_frames_per_interval=50`, interval-level RRF `k=60` when upstream ASR
@@ -132,7 +139,6 @@ $env:AIC_ONLINE_RANKING_POLICY_STATUS = "experimental"
 $env:AIC_ONLINE_RANKING_NORMALIZATION_RRF_K = "60"
 $env:AIC_ONLINE_RANKING_QUERY_Q0_WEIGHT = "1.0"
 $env:AIC_ONLINE_RANKING_QUERY_Q1_WEIGHT = "1.0"
-$env:AIC_ONLINE_RANKING_QUERY_Q2_WEIGHT = "1.0"
 $env:AIC_ONLINE_RANKING_FUSION_DEFAULT_WEIGHT = "1.0"
 $env:AIC_ONLINE_RANKING_SUMMARY_WEIGHT = "0.1"
 $env:AIC_ONLINE_RANKING_SUMMARY_MAX_BOOST = "0.2"
@@ -201,8 +207,10 @@ Minimal v-KIS request:
 }
 ```
 
-Public endpoints are `/health/live`, `/health/ready`, and `/search`. The API is
-internal/unstable until OQ-002 is closed. Runtime startup probes the required
+Operator endpoints are `/health/live`, `/health/ready`, `/search`, `/trake`,
+`/vqa`, `/query/rewrite`, `/catalog/object-labels`, and read-only `/media/*`.
+The old `/internal/unstable/trake` and `/internal/unstable/vqa` aliases remain
+for backward compatibility. Runtime startup probes the required
 visual encoder and optional Vietnamese encoder for batch shape, dimension,
 finite values and positive vector norm; these checks do not replace the full
 Offline contract validator or a real database vertical slice.

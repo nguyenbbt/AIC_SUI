@@ -20,6 +20,7 @@ from online.adapters.images import FilesystemImageResolver
 from online.adapters.manifest import DatasetManifestGate
 from online.adapters.milvus import MilvusSearchAdapter
 from online.adapters.sqlite import SQLiteReadAdapter
+from online.adapters.qwen_vlm import DEFAULT_QWEN_MODEL, DEFAULT_QWEN_REVISION, QwenVLMAdapter
 from online.adapters.visual_corpus import MilvusSQLiteVisualCorpusAdapter
 from online.config import OnlineDataConfig
 from online.domain.enums import RetrievalBranch
@@ -39,6 +40,7 @@ from online.ports import (
     MetadataReaderPort,
     MilvusSearchPort,
     ObjectReaderPort,
+    ObjectCatalogPort,
     TextEncoderPort,
     VLMPort,
     VisualCorpusPort,
@@ -50,18 +52,31 @@ from online.ranking.normalizers import RRFScoreNormalizer
 from online.ranking.object_filter import ObjectProcessingConfig
 from online.ranking.policy import RankingPolicyConfig
 from online.ranking.summary import SummaryPropagationConfig, SummaryScorePropagator
-from online.retrieval.encoders import OpenCLIPTextEncoder, VietnameseTextEncoder
+from online.retrieval.encoders import (
+    OPENCLIP_MODEL_ID,
+    VIETNAMESE_MODEL_NAME,
+    VIETNAMESE_MODEL_REVISION,
+    OpenCLIPTextEncoder,
+    VietnameseTextEncoder,
+)
 from online.retrieval.factory import build_retrieval_service
+from online.retrieval.modal_encoders import (
+    DEFAULT_MODAL_ENCODER_APP,
+    DEFAULT_MODAL_ENCODER_FUNCTION,
+    ModalTextEmbeddingBackend,
+)
 from online.retrieval.query_builder import BASELINE_KIS_BRANCHES
 from online.retrieval.service import RetrievalInvocationConfig, RetrievalService
 from online.retrieval.vqa import VQACandidateRetriever
 from online.trake import TRAKEService
 from online.vqa import EvidenceSelector, VQAOrchestrator
+from query_understanding.openai_rewriter import DEFAULT_REWRITE_MODEL, OpenAIQueryRewriter
 from query_understanding.rewrite import NoOpQueryRewriter, QueryRewriteService
 from retrieval_api.search_engine import HealthResponse, create_app
+from retrieval_api.ui_resources import DatasetUIResources
 
 
-VARIANT_IDS = ("q0", "q1", "q2")
+VARIANT_IDS = ("q0", "q1")
 
 
 @dataclass(frozen=True)
@@ -78,6 +93,13 @@ class RuntimeCompositionConfig:
     deployment_mode: str = "development"
     trake_enabled: bool = False
     vqa_enabled: bool = False
+    query_rewrite_enabled: bool = False
+    qwen_vlm_auto_configure: bool = False
+    encoder_backend: str = "local"
+    modal_encoder_app: str = DEFAULT_MODAL_ENCODER_APP
+    modal_encoder_function: str = DEFAULT_MODAL_ENCODER_FUNCTION
+    modal_environment: str | None = None
+    modal_encoder_cache_size: int = 256
 
     def __post_init__(self) -> None:
         if not isinstance(self.deployment_mode, str):
@@ -86,8 +108,30 @@ class RuntimeCompositionConfig:
         if deployment_mode not in {"development", "test", "production"}:
             raise ValueError("deployment_mode must be development, test or production")
         object.__setattr__(self, "deployment_mode", deployment_mode)
-        if not isinstance(self.trake_enabled, bool) or not isinstance(self.vqa_enabled, bool):
+        if (
+            not isinstance(self.trake_enabled, bool)
+            or not isinstance(self.vqa_enabled, bool)
+            or not isinstance(self.query_rewrite_enabled, bool)
+            or not isinstance(self.qwen_vlm_auto_configure, bool)
+        ):
             raise ValueError("advanced mode flags must be booleans")
+        if not isinstance(self.encoder_backend, str):
+            raise ValueError("encoder_backend must be local or modal")
+        encoder_backend = self.encoder_backend.strip().lower()
+        if encoder_backend not in {"local", "modal"}:
+            raise ValueError("encoder_backend must be local or modal")
+        object.__setattr__(self, "encoder_backend", encoder_backend)
+        for name in ("modal_encoder_app", "modal_encoder_function"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{name} must be non-empty")
+            object.__setattr__(self, name, value.strip())
+        if self.modal_environment is not None:
+            if not isinstance(self.modal_environment, str) or not self.modal_environment.strip():
+                raise ValueError("modal_environment must be non-empty when provided")
+            object.__setattr__(self, "modal_environment", self.modal_environment.strip())
+        if _invalid_positive_int(self.modal_encoder_cache_size):
+            raise ValueError("modal_encoder_cache_size must be a positive integer")
         if _invalid_positive_int(self.max_workers):
             raise ValueError("max_workers must be a positive integer")
         if _invalid_positive_int(self.ranking_max_workers):
@@ -149,6 +193,19 @@ class RuntimeCompositionConfig:
             deployment_mode=os.getenv(f"{prefix}DEPLOYMENT_MODE", "development").strip() or "development",
             trake_enabled=_env_bool(prefix, "TRAKE_ENABLED", False),
             vqa_enabled=_env_bool(prefix, "VQA_ENABLED", False),
+            query_rewrite_enabled=_env_bool(prefix, "QUERY_REWRITE_ENABLED", False),
+            qwen_vlm_auto_configure=_env_bool(prefix, "QWEN_VLM_AUTO_CONFIGURE", False),
+            encoder_backend=os.getenv(f"{prefix}ENCODER_BACKEND", "local"),
+            modal_encoder_app=os.getenv(
+                f"{prefix}MODAL_ENCODER_APP", DEFAULT_MODAL_ENCODER_APP
+            ),
+            modal_encoder_function=os.getenv(
+                f"{prefix}MODAL_ENCODER_FUNCTION", DEFAULT_MODAL_ENCODER_FUNCTION
+            ),
+            modal_environment=(
+                os.getenv(f"{prefix}MODAL_ENVIRONMENT", "").strip() or None
+            ),
+            modal_encoder_cache_size=_env_int(prefix, "MODAL_ENCODER_CACHE_SIZE", 256),
         )
 
     def top_k_for(self, branch: RetrievalBranch) -> int:
@@ -170,6 +227,8 @@ class OnlineRuntime:
     readiness_probes: tuple["RuntimeReadinessProbe", ...] = ()
     readiness_components: tuple[ComponentHealth, ...] = ()
     last_health: InfrastructureHealth | None = None
+    ui_resources: DatasetUIResources | None = None
+    rewriter: QueryRewriteService | None = None
 
     def start(self) -> InfrastructureHealth:
         infrastructure = self.lifecycle.start()
@@ -265,12 +324,43 @@ def build_online_runtime(
             raise ValueError("production requires the dataset manifest startup gate")
         if data_config.dataset.expected_fingerprint is None:
             raise ValueError("production requires DATASET_EXPECTED_FINGERPRINT")
-    if runtime_config.vqa_enabled and advanced_vlm is None:
-        raise ValueError("VQA_ENABLED requires an explicitly configured VLMPort")
     if runtime_config.vqa_enabled and vqa_mode is not None:
         raise ValueError("vqa_mode and vqa_enabled cannot both configure VQA")
     if runtime_config.trake_enabled and trake_mode is not None:
         raise ValueError("trake_mode and trake_enabled cannot both configure TRAKE")
+    if runtime_config.query_rewrite_enabled and advanced_rewriter is None:
+        api_key = os.getenv("AIC_ONLINE_OPENAI_API_KEY", "").strip()
+        if not api_key:
+            raise ValueError("QUERY_REWRITE_ENABLED requires AIC_ONLINE_OPENAI_API_KEY")
+        advanced_rewriter = QueryRewriteService(
+            OpenAIQueryRewriter(
+                api_key=api_key,
+                base_url=os.getenv(
+                    "AIC_ONLINE_OPENAI_BASE_URL", "https://api.openai.com/v1"
+                ),
+                model=os.getenv("AIC_ONLINE_OPENAI_REWRITE_MODEL", DEFAULT_REWRITE_MODEL),
+                timeout_sec=_env_float("AIC_ONLINE_", "OPENAI_REWRITE_TIMEOUT_SEC", 4.5),
+            ),
+            timeout_sec=5.0,
+        )
+    if (
+        runtime_config.vqa_enabled
+        and advanced_vlm is None
+        and runtime_config.qwen_vlm_auto_configure
+    ):
+        advanced_vlm = QwenVLMAdapter(
+            data_root=data_config.dataset.data_root,
+            base_url=os.getenv("AIC_ONLINE_QWEN_VLM_BASE_URL", "http://localhost:8001/v1"),
+            model=os.getenv("AIC_ONLINE_QWEN_VLM_MODEL", DEFAULT_QWEN_MODEL),
+            revision=os.getenv("AIC_ONLINE_QWEN_VLM_REVISION", DEFAULT_QWEN_REVISION),
+            timeout_sec=_env_float("AIC_ONLINE_", "QWEN_VLM_TIMEOUT_SEC", 15.0),
+            max_image_long_edge=_env_int("AIC_ONLINE_", "QWEN_VLM_MAX_IMAGE_LONG_EDGE", 768),
+        )
+    if runtime_config.vqa_enabled and advanced_vlm is None:
+        raise ValueError(
+            "VQA_ENABLED requires an explicitly configured VLMPort or "
+            "QWEN_VLM_AUTO_CONFIGURE=true"
+        )
     visual_expected_dimension = runtime_config.visual_expected_dimension
     vietnamese_expected_dimension = runtime_config.vietnamese_expected_dimension
     if data_config.dataset.manifest_required:
@@ -284,18 +374,48 @@ def build_online_runtime(
         object_reader = object_reader or sqlite_adapter
     milvus = milvus or MilvusSearchAdapter(data_config.milvus)
     elasticsearch = elasticsearch or ElasticsearchSearchAdapter(data_config.elasticsearch)
-    visual_encoder = visual_encoder or OpenCLIPTextEncoder(
-        expected_dimension=visual_expected_dimension,
-    )
-    vietnamese_encoder = vietnamese_encoder or VietnameseTextEncoder(
-        expected_dimension=vietnamese_expected_dimension,
-    )
+    if visual_encoder is None:
+        visual_backend_factory = None
+        if runtime_config.encoder_backend == "modal":
+            visual_backend_factory = lambda: ModalTextEmbeddingBackend(
+                model_kind="visual",
+                model_id=OPENCLIP_MODEL_ID,
+                model_revision=None,
+                expected_dimension=visual_expected_dimension,
+                app_name=runtime_config.modal_encoder_app,
+                function_name=runtime_config.modal_encoder_function,
+                environment_name=runtime_config.modal_environment,
+                cache_size=runtime_config.modal_encoder_cache_size,
+            )
+        visual_encoder = OpenCLIPTextEncoder(
+            expected_dimension=visual_expected_dimension,
+            backend_factory=visual_backend_factory,
+        )
+    if vietnamese_encoder is None:
+        vietnamese_backend_factory = None
+        if runtime_config.encoder_backend == "modal":
+            vietnamese_backend_factory = lambda: ModalTextEmbeddingBackend(
+                model_kind="vietnamese",
+                model_id=VIETNAMESE_MODEL_NAME,
+                model_revision=VIETNAMESE_MODEL_REVISION,
+                expected_dimension=vietnamese_expected_dimension,
+                app_name=runtime_config.modal_encoder_app,
+                function_name=runtime_config.modal_encoder_function,
+                environment_name=runtime_config.modal_environment,
+                cache_size=runtime_config.modal_encoder_cache_size,
+            )
+        vietnamese_encoder = VietnameseTextEncoder(
+            expected_dimension=vietnamese_expected_dimension,
+            backend_factory=vietnamese_backend_factory,
+        )
 
     lifecycle = InfrastructureLifecycle()
+    manifest_gate: DatasetManifestGate | None = None
     if data_config.dataset.manifest_required:
+        manifest_gate = DatasetManifestGate(data_config.dataset)
         lifecycle.register(
             "dataset_manifest",
-            DatasetManifestGate(data_config.dataset),
+            manifest_gate,
             required=True,
         )
     lifecycle.register("milvus", _as_managed(milvus), required=True)
@@ -388,6 +508,22 @@ def build_online_runtime(
                 ),
             ),
         ),
+        ui_resources=DatasetUIResources(
+            data_root=data_config.dataset.data_root,
+            metadata_reader=metadata,
+            object_catalog=(
+                object_reader if isinstance(object_reader, ObjectCatalogPort) else None
+            ),
+            identity_provider=(
+                (lambda: (
+                    manifest_gate.manifest.dataset_id,
+                    manifest_gate.manifest.dataset_fingerprint,
+                ))
+                if manifest_gate is not None
+                else None
+            ),
+        ),
+        rewriter=advanced_rewriter,
     )
     if runtime_config.trake_enabled:
         if not callable(getattr(milvus, "iter_records", None)):
@@ -418,6 +554,8 @@ def build_online_runtime(
             rewriter=advanced_rewriter,
             readiness=_vqa_data_readiness(image_resolver, advanced_vlm),
         )
+        if isinstance(advanced_vlm, QwenVLMAdapter):
+            runtime.advanced_resources = (*runtime.advanced_resources, advanced_vlm)
     return runtime
 
 
@@ -587,7 +725,9 @@ def create_runtime_app_from_env(
         app.state.trake_mode = runtime.trake_mode
         app.state.vqa_mode = runtime.vqa_mode
         app.state.health_provider = _health_response_for_runtime(runtime)
-        runtime.start()
+        app.state.ui_resources = runtime.ui_resources
+        app.state.rewriter = runtime.rewriter
+        await asyncio.to_thread(runtime.start)
         try:
             yield
         finally:
@@ -624,6 +764,8 @@ def _health_response_for_runtime(runtime: OnlineRuntime) -> Callable[[], HealthR
                 "trake.readiness": readiness("trake", enabled=trake_enabled),
                 "vqa.enabled": str(vqa_enabled).lower(),
                 "vqa.readiness": readiness("vqa", enabled=vqa_enabled),
+                "rewrite.enabled": str(runtime.rewriter is not None).lower(),
+                "ui_resources.enabled": str(runtime.ui_resources is not None).lower(),
             },
         )
 
@@ -667,7 +809,6 @@ def _ranking_policy_from_env(prefix: str) -> RankingPolicyConfig:
         query_variant_weights={
             "q0": _env_float(prefix, "RANKING_QUERY_Q0_WEIGHT", 1.0),
             "q1": _env_float(prefix, "RANKING_QUERY_Q1_WEIGHT", 1.0),
-            "q2": _env_float(prefix, "RANKING_QUERY_Q2_WEIGHT", 1.0),
         },
         fusion_default_weight=_env_float(prefix, "RANKING_FUSION_DEFAULT_WEIGHT", 1.0),
         fusion_weights={

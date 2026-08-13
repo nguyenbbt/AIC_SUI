@@ -95,6 +95,13 @@ class SQLiteAdapterTests(unittest.TestCase):
         detection = result["V001_00000_050"][0]
         self.assertEqual((detection.x_min, detection.x_max), (0.0, 0.1))
 
+    def test_object_catalog_is_canonical_counted_and_sorted(self) -> None:
+        labels = self.adapter.list_object_labels()
+        self.assertEqual(
+            [(item.label, item.detection_count) for item in labels],
+            [("car", 1), ("person", 2)],
+        )
+
     def test_empty_input_does_not_query_full_table(self) -> None:
         self.assertEqual(self.adapter.get_frames_by_ids([]), {})
         self.assertEqual(self.adapter.get_objects_by_frame_ids([]), {})

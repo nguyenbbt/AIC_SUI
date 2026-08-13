@@ -4,8 +4,8 @@ from .encoders import ImageEncoderPort, TextEncoderPort
 from .evidence import EvidenceHydrationPort, EvidenceReaderPort
 from .images import ImageResolverPort
 from .metadata import MetadataReaderPort
-from .objects import ObjectReaderPort
-from .records import ASRSearchHit, FrameMetadata, FrameSearchHit, VideoMetadata, VideoSearchHit
+from .objects import ObjectCatalogPort, ObjectReaderPort
+from .records import ASRSearchHit, FrameMetadata, FrameSearchHit, ObjectLabelStat, VideoMetadata, VideoSearchHit
 from .search import ElasticsearchSearchPort, MilvusSearchPort
 from .visual_corpus import (
     OrderedVisualBatch,
@@ -28,6 +28,8 @@ __all__ = [
     "MetadataReaderPort",
     "MilvusSearchPort",
     "ObjectReaderPort",
+    "ObjectCatalogPort",
+    "ObjectLabelStat",
     "OrderedVisualBatch",
     "OrderedVisualFrame",
     "TextEncoderPort",

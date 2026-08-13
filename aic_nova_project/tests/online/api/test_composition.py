@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -68,6 +69,18 @@ class BrokenTextEncoder(FakeTextEncoder):
         raise RuntimeError("encoder unavailable")
 
 
+class StaticCompositionBackend:
+    def __init__(self, dimension: int = 4) -> None:
+        self._dimension = dimension
+
+    @property
+    def dimension(self) -> int:
+        return self._dimension
+
+    def encode_texts(self, texts):
+        return [[1.0, 0.0, 0.0, 0.0] for _ in texts]
+
+
 def runtime_with_fakes() -> tuple[object, ManagedMilvus, ManagedElasticsearch]:
     frame = FrameMetadata(
         frame_id="V001_00000_015",
@@ -119,6 +132,11 @@ class RuntimeCompositionTests(unittest.TestCase):
                 "AIC_ONLINE_RANKING_QUERY_Q1_WEIGHT": "0.25",
                 "AIC_ONLINE_RANKING_ASR_MAX_FRAMES_PER_INTERVAL": "9",
                 "AIC_ONLINE_TRAKE_ENABLED": "true",
+                "AIC_ONLINE_ENCODER_BACKEND": "modal",
+                "AIC_ONLINE_MODAL_ENCODER_APP": "custom-encoder-app",
+                "AIC_ONLINE_MODAL_ENCODER_FUNCTION": "custom_encode",
+                "AIC_ONLINE_MODAL_ENVIRONMENT": "main",
+                "AIC_ONLINE_MODAL_ENCODER_CACHE_SIZE": "32",
             },
             clear=True,
         ):
@@ -131,6 +149,11 @@ class RuntimeCompositionTests(unittest.TestCase):
         self.assertEqual(config.ranking_policy.query_variant_weights["q1"], 0.25)
         self.assertEqual(config.ranking_policy.asr_max_frames_per_interval, 9)
         self.assertTrue(config.trake_enabled)
+        self.assertEqual(config.encoder_backend, "modal")
+        self.assertEqual(config.modal_encoder_app, "custom-encoder-app")
+        self.assertEqual(config.modal_encoder_function, "custom_encode")
+        self.assertEqual(config.modal_environment, "main")
+        self.assertEqual(config.modal_encoder_cache_size, 32)
         invocation_configs = build_invocation_configs(config)
         self.assertEqual(invocation_configs[(RetrievalBranch.VISUAL_DENSE, "q0")].top_k, 7)
         self.assertEqual(invocation_configs[(RetrievalBranch.OCR_DENSE, "q1")].top_k, 11)
@@ -150,6 +173,43 @@ class RuntimeCompositionTests(unittest.TestCase):
         self.assertTrue(elasticsearch.closed)
         with self.assertRaises(RuntimeError):
             runtime.ranking_executor.submit(lambda: None)
+
+    def test_modal_backend_is_used_only_when_explicitly_selected(self) -> None:
+        created: list[dict[str, object]] = []
+
+        def build_backend(**kwargs):
+            created.append(kwargs)
+            return StaticCompositionBackend()
+
+        with patch(
+            "retrieval_api.composition.ModalTextEmbeddingBackend",
+            side_effect=build_backend,
+        ):
+            runtime = build_online_runtime(
+                data_config=OnlineDataConfig(
+                    dataset=DatasetResourceConfig(manifest_required=False)
+                ),
+                runtime_config=RuntimeCompositionConfig(
+                    encoder_backend="modal",
+                    modal_encoder_app="encoder-app",
+                    modal_encoder_function="encode_text",
+                    modal_environment="main",
+                    modal_encoder_cache_size=17,
+                ),
+                milvus=ManagedMilvus(),
+                elasticsearch=ManagedElasticsearch(),
+                metadata=FakeMetadataReaderPort(()),
+                object_reader=FakeObjectReaderPort({}),
+            )
+            health = runtime.start()
+            runtime.close()
+
+        self.assertEqual(health.status.value, "healthy")
+        self.assertEqual([item["model_kind"] for item in created], ["visual", "vietnamese"])
+        self.assertTrue(all(item["app_name"] == "encoder-app" for item in created))
+        self.assertTrue(all(item["function_name"] == "encode_text" for item in created))
+        self.assertTrue(all(item["environment_name"] == "main" for item in created))
+        self.assertTrue(all(item["cache_size"] == 17 for item in created))
 
     def test_required_encoder_probe_marks_runtime_unhealthy(self) -> None:
         frame = FrameMetadata(
@@ -194,6 +254,8 @@ class RuntimeCompositionTests(unittest.TestCase):
                     "trake.readiness": "disabled",
                     "vqa.enabled": "false",
                     "vqa.readiness": "disabled",
+                    "rewrite.enabled": "false",
+                    "ui_resources.enabled": "true",
                 },
             )
 
@@ -212,6 +274,25 @@ class RuntimeCompositionTests(unittest.TestCase):
         self.assertEqual(response.json()["candidates"][0]["frame_id"], "V001_00000_015")
         self.assertTrue(milvus.closed)
         self.assertTrue(elasticsearch.closed)
+
+    def test_runtime_start_does_not_block_the_async_lifespan_thread(self) -> None:
+        runtime, _, _ = runtime_with_fakes()
+        thread_ids: dict[str, int] = {}
+        original_start = runtime.start
+
+        def runtime_factory():
+            thread_ids["lifespan"] = threading.get_ident()
+            return runtime
+
+        def recorded_start():
+            thread_ids["start"] = threading.get_ident()
+            return original_start()
+
+        runtime.start = recorded_start  # type: ignore[method-assign]
+        with TestClient(create_runtime_app_from_env(runtime_factory=runtime_factory)) as client:
+            self.assertEqual(client.get("/health/ready").status_code, 200)
+
+        self.assertNotEqual(thread_ids["lifespan"], thread_ids["start"])
 
     def test_production_rejects_experimental_ranking_policy(self) -> None:
         with patch.dict(
@@ -246,6 +327,14 @@ class RuntimeCompositionTests(unittest.TestCase):
         ):
             with self.assertRaises(ValueError):
                 RuntimeCompositionConfig.from_env()
+
+        for invalid in ("remote", "gpu", ""):
+            with self.subTest(encoder_backend=invalid):
+                with self.assertRaises(ValueError):
+                    RuntimeCompositionConfig(encoder_backend=invalid)
+
+        with self.assertRaises(ValueError):
+            RuntimeCompositionConfig(encoder_backend="modal", modal_encoder_cache_size=0)
 
     def test_vqa_runtime_flag_requires_explicit_vlm(self) -> None:
         with self.assertRaisesRegex(ValueError, "VLMPort"):

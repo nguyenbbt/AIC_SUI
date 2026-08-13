@@ -62,7 +62,7 @@ class SummaryBranchTests(unittest.TestCase):
         query = KISQueryBuilder().build(
             "video about a bicycle",
             mode=QueryMode.KIS_TEXT,
-            paraphrases=("bicycle clip", "someone cycling"),
+            paraphrases=("bicycle clip",),
         )
 
         results = branch.retrieve(query, top_k=2)
@@ -109,22 +109,21 @@ class SummaryBranchTests(unittest.TestCase):
         query = KISQueryBuilder().build(
             "original summary query",
             mode=QueryMode.KIS_VIDEO,
-            paraphrases=("summary paraphrase one", "summary paraphrase two"),
+            paraphrases=("summary paraphrase one",),
         )
 
         results = branch.retrieve(query, top_k=3)
 
-        self.assertEqual(tuple(result.query_variant_id for result in results), ("q0", "q1", "q2"))
+        self.assertEqual(tuple(result.query_variant_id for result in results), ("q0", "q1"))
         self.assertEqual(
             encoder.calls,
             [
                 ("original summary query",),
                 ("summary paraphrase one",),
-                ("summary paraphrase two",),
             ],
         )
-        self.assertEqual(len(milvus.summary_calls), 3)
-        self.assertEqual(len({call[0] for call in milvus.summary_calls}), 3)
+        self.assertEqual(len(milvus.summary_calls), 2)
+        self.assertEqual(len({call[0] for call in milvus.summary_calls}), 2)
         self.assertTrue(all(call[1] == 3 for call in milvus.summary_calls))
         self.assertTrue(all(result.branch is RetrievalBranch.SUMMARY_DENSE for result in results))
         self.assertTrue(all(result.returned_count == 3 for result in results))

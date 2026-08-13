@@ -12,6 +12,7 @@ from .evidence import ElasticsearchEvidenceHydrator
 from .images import FilesystemImageResolver
 from .milvus import MilvusSearchAdapter
 from .manifest import DatasetManifestGate
+from .qwen_vlm import QwenVLMAdapter
 from .sqlite import SQLiteReadAdapter
 from .visual_corpus import MilvusSQLiteVisualCorpusAdapter
 
@@ -25,6 +26,7 @@ __all__ = [
     "MilvusSearchAdapter",
     "DatasetManifestGate",
     "OfflineContractValidator",
+    "QwenVLMAdapter",
     "SQLiteReadAdapter",
     "MilvusSQLiteVisualCorpusAdapter",
     "ValidationStatus",

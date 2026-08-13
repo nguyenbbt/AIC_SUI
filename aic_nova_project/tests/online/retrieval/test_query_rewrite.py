@@ -44,7 +44,7 @@ def _vqa_question(question_id: str = "question-1") -> VQAQuestion:
     )
 
 
-def test_kis_rewrite_keeps_q0_and_normalizes_at_most_q1_q2() -> None:
+def test_kis_rewrite_keeps_q0_and_normalizes_at_most_q1() -> None:
     original = "Một người đang đi xe đạp"
     provider = MappingQueryRewriter(
         {
@@ -70,10 +70,7 @@ def test_kis_rewrite_keeps_q0_and_normalizes_at_most_q1_q2() -> None:
 
     assert result.status is RewriteStatus.SUCCESS
     assert result.primary_text == original
-    assert result.paraphrases == (
-        "người đạp xe trên đường",
-        "một người điều khiển xe đạp",
-    )
+    assert result.paraphrases == ("người đạp xe trên đường",)
     assert result.variants == (original, *result.paraphrases)
     assert result.warnings == ()
     assert result.provider_id == "fake-provider"
@@ -99,10 +96,7 @@ def test_vqa_rewrite_uses_visual_evidence_description_without_answering() -> Non
 
     assert result.status is RewriteStatus.SUCCESS
     assert result.primary_text == evidence_query
-    assert result.paraphrases == (
-        "khung hình cho thấy đồ vật trong tay người đàn ông",
-        "cảnh vật thể được người đàn ông cầm",
-    )
+    assert result.paraphrases == ("khung hình cho thấy đồ vật trong tay người đàn ông",)
     assert "chai nước" not in " ".join(result.variants)
     assert provider.calls[0].answer_type == VQAAnswerType.SHORT_TEXT.value
 
@@ -199,7 +193,7 @@ def test_rewrite_request_and_service_configuration_are_strict() -> None:
     with pytest.raises(ValueError):
         QueryRewriteService(timeout_sec=float("nan"))
     with pytest.raises(ValueError):
-        QueryRewriteService(max_paraphrases=3)
+        QueryRewriteService(max_paraphrases=2)
 
 
 def test_zero_paraphrase_policy_keeps_only_original_kis_query() -> None:
@@ -220,4 +214,45 @@ def test_zero_paraphrase_policy_keeps_only_original_kis_query() -> None:
 
     assert result.status is RewriteStatus.DEGRADED
     assert result.variants == ("query",)
+    assert result.warnings == ("QUERY_REWRITE_NO_USABLE_VARIANTS",)
+
+
+def test_prefix_only_and_near_duplicate_variants_are_rejected() -> None:
+    original = "Một người mặc áo đỏ đứng cạnh ô tô"
+    provider = MappingQueryRewriter(
+        {
+            (RewritePurpose.KIS, original): QueryRewriteProposal(
+                primary_text=f"Khung hình có {original}",
+                paraphrases=("Một người áo đỏ ở ngay bên một chiếc ô tô",),
+            )
+        }
+    )
+
+    result = asyncio.run(
+        QueryRewriteService(provider).rewrite_kis(original, request_id="dedupe")
+    )
+
+    assert result.status is RewriteStatus.SUCCESS
+    assert result.paraphrases == (
+        "Một người áo đỏ ở ngay bên một chiếc ô tô",
+    )
+
+
+def test_all_semantic_duplicates_degrade_to_q0() -> None:
+    original = "người đứng cạnh xe"
+    provider = MappingQueryRewriter(
+        {
+            (RewritePurpose.KIS, original): QueryRewriteProposal(
+                primary_text=f"Cảnh cho thấy {original}",
+                paraphrases=(f"image showing {original}",),
+            )
+        }
+    )
+
+    result = asyncio.run(
+        QueryRewriteService(provider).rewrite_kis(original, request_id="all-duplicate")
+    )
+
+    assert result.status is RewriteStatus.DEGRADED
+    assert result.variants == (original,)
     assert result.warnings == ("QUERY_REWRITE_NO_USABLE_VARIANTS",)

@@ -64,7 +64,7 @@ class ASRBranchTests(unittest.TestCase):
         query = KISQueryBuilder().build(
             "spoken bicycle",
             mode=QueryMode.KIS_TEXT,
-            paraphrases=("speech about a bike", "bicycle mentioned aloud"),
+            paraphrases=("speech about a bike",),
         )
 
         results = branch.retrieve(query, top_k=2)
@@ -94,7 +94,7 @@ class ASRBranchTests(unittest.TestCase):
         self.assertEqual(candidate.provenance.query_text, "spoken bicycle")
         self.assertFalse(hasattr(candidate, "frame_id"))
 
-    def test_semantic_runs_q0_q1_q2_independently_without_frame_mapping(self) -> None:
+    def test_semantic_runs_q0_q1_independently_without_frame_mapping(self) -> None:
         fixture = build_integration_fixture()
         encoder = FakeTextEncoder(dimension=5)
         milvus = FakeMilvusSearchPort(asr=fixture.asr_hits)
@@ -106,18 +106,18 @@ class ASRBranchTests(unittest.TestCase):
         query = KISQueryBuilder().build(
             "original ASR query",
             mode=QueryMode.KIS_VIDEO,
-            paraphrases=("ASR paraphrase one", "ASR paraphrase two"),
+            paraphrases=("ASR paraphrase one",),
         )
 
         results = branch.retrieve(query, top_k=3)
 
-        self.assertEqual(tuple(result.query_variant_id for result in results), ("q0", "q1", "q2"))
+        self.assertEqual(tuple(result.query_variant_id for result in results), ("q0", "q1"))
         self.assertEqual(
             encoder.calls,
-            [("original ASR query",), ("ASR paraphrase one",), ("ASR paraphrase two",)],
+            [("original ASR query",), ("ASR paraphrase one",)],
         )
-        self.assertEqual(len(milvus.asr_calls), 3)
-        self.assertEqual(len({call[0] for call in milvus.asr_calls}), 3)
+        self.assertEqual(len(milvus.asr_calls), 2)
+        self.assertEqual(len({call[0] for call in milvus.asr_calls}), 2)
         self.assertTrue(all(call[1] == 3 for call in milvus.asr_calls))
         self.assertTrue(all(result.branch is RetrievalBranch.ASR_DENSE for result in results))
         self.assertTrue(all(result.returned_count == 3 for result in results))

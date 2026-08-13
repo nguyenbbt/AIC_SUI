@@ -33,7 +33,7 @@ class KISQueryBuilder:
     """Create one shared text-query contract for t-KIS and v-KIS.
 
     Paraphrase generation is intentionally outside this class. Callers provide
-    zero, one or two paraphrases, which become q1 and q2. Each variant remains
+    zero or one paraphrase, which becomes q1. Each variant remains
     independent for retrieval; no embedding averaging or score aggregation is
     performed here.
     """
@@ -55,8 +55,8 @@ class KISQueryBuilder:
         if isinstance(paraphrases, (str, bytes)):
             raise InvalidQueryError("paraphrases must be a sequence of text values")
         paraphrase_values = tuple(paraphrases)
-        if len(paraphrase_values) > 2:
-            raise InvalidQueryError("KIS baseline accepts at most two paraphrases")
+        if len(paraphrase_values) > 1:
+            raise InvalidQueryError("KIS baseline accepts at most one paraphrase")
 
         variants = [TextQueryVariant(variant_id="q0", text=query_text)]
         for index, text in enumerate(paraphrase_values, start=1):
