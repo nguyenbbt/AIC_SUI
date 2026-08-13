@@ -1,6 +1,6 @@
 # Báo cáo Phase Online gửi nhóm Offline kiểm tra
 
-Ngày cập nhật: 2026-08-05
+Ngày cập nhật: 2026-08-13
 
 Online branch: `feature/online-phase-Knguyen`
 

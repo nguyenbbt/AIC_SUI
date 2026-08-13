@@ -1,6 +1,6 @@
 # Báo cáo trạng thái Online - Self-Indexed V2
 
-Ngày cập nhật: 2026-08-05
+Ngày cập nhật: 2026-08-13
 
 Branch tích hợp: `feature/online-phase-Knguyen`
 

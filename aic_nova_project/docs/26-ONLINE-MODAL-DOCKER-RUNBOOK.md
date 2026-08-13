@@ -13,7 +13,7 @@ React/Vite :5173
         -> dangvantuan/vietnamese-embedding@4ab46e...
 ```
 
-Trạng thái được kiểm chứng ngày 2026-08-12:
+Trạng thái được kiểm chứng ngày 2026-08-13:
 
 | Mode | Trạng thái | Ghi chú |
 |---|---|---|
