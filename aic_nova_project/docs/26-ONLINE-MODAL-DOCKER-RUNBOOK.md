@@ -6,7 +6,7 @@ Runbook này dùng kiến trúc sau:
 
 ```text
 React/Vite :5173
-  -> FastAPI :8000 (local)
+  -> FastAPI :8000
      -> Milvus :19530 + Elasticsearch :9200 + SQLite (local Docker/filesystem)
      -> private Modal Function (L4 GPU)
         -> OpenCLIP ViT-B-32::openai
