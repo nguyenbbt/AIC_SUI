@@ -13,7 +13,9 @@ services:
     expose:
       - 2379
     volumes:
-      - etcd_data:/etcd
+      - type: bind
+        source: ${AIC_LOCAL_DATA_ROOT:-./data}/databases/etcd
+        target: /etcd
     healthcheck:
       test: ["CMD", "etcdctl", "endpoint", "health"]
       interval: 30s
@@ -31,7 +33,9 @@ services:
     expose:
       - 9000
     volumes:
-      - minio_data:/minio_data
+      - type: bind
+        source: ${AIC_LOCAL_DATA_ROOT:-./data}/databases/minio
+        target: /minio_data
     command: minio server /minio_data --console-address ":9001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
@@ -52,7 +56,9 @@ services:
       - "19530:19530"
       - "9091:9091"
     volumes:
-      - milvus_data:/var/lib/milvus
+      - type: bind
+        source: ${AIC_LOCAL_DATA_ROOT:-./data}/databases/milvus
+        target: /var/lib/milvus
     depends_on:
       etcd:
         condition: service_healthy
@@ -78,7 +84,9 @@ services:
     ports:
       - "9200:9200"
     volumes:
-      - es_data:/usr/share/elasticsearch/data
+      - type: bind
+        source: ${AIC_LOCAL_DATA_ROOT:-./data}/databases/elasticsearch
+        target: /usr/share/elasticsearch/data
     healthcheck:
       test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'"]
       interval: 30s
@@ -93,7 +101,9 @@ services:
       dockerfile: indexing/Dockerfile
     container_name: aic_nova_indexing
     volumes:
-      - ./data:/workspace/data
+      - type: bind
+        source: ${AIC_LOCAL_DATA_ROOT:-./data}
+        target: /workspace/data
     environment:
       DATA_DIR: /workspace/data/processed
       MILVUS_URI: http://milvus-standalone:19530
@@ -108,9 +118,3 @@ services:
       - python
       - -m
       - src.indexing.cli
-
-volumes:
-  etcd_data:
-  minio_data:
-  milvus_data:
-  es_data:

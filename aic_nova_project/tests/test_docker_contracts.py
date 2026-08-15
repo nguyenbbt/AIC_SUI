@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import yaml
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -90,3 +92,43 @@ def test_module4_dockerfile_uses_project_root_build_context():
     ) in dockerfile
     assert "COPY feature_extraction/ocr/src /app/src" in dockerfile
     assert 'ENTRYPOINT ["python", "-m", "ocr_module.cli"]' in dockerfile
+
+
+def test_compose_uses_configurable_host_bind_mounts():
+    compose = yaml.safe_load(
+        (PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    )
+
+    expected_targets = {
+        "etcd": "/etcd",
+        "minio": "/minio_data",
+        "milvus-standalone": "/var/lib/milvus",
+        "elasticsearch": "/usr/share/elasticsearch/data",
+        "indexing": "/workspace/data",
+    }
+    for service_name, target in expected_targets.items():
+        mounts = compose["services"][service_name]["volumes"]
+        mount = next(item for item in mounts if item["target"] == target)
+        assert mount["type"] == "bind"
+        assert "AIC_LOCAL_DATA_ROOT" in mount["source"]
+
+    assert "volumes" not in compose
+
+
+def test_rollback_compose_maps_exact_legacy_external_volumes():
+    rollback = yaml.safe_load(
+        (PROJECT_ROOT / "docker-compose.rollback.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    expected = {
+        "legacy_etcd_data": "aic_nova_project_etcd_data",
+        "legacy_minio_data": "aic_nova_project_minio_data",
+        "legacy_milvus_data": "aic_nova_project_milvus_data",
+        "legacy_es_data": "aic_nova_project_es_data",
+    }
+    assert {
+        name: config["name"] for name, config in rollback["volumes"].items()
+    } == expected
+    assert all(config["external"] is True for config in rollback["volumes"].values())

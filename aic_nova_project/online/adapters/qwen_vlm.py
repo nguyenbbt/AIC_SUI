@@ -30,6 +30,7 @@ class QwenVLMAdapter:
         base_url: str = "http://localhost:8001/v1",
         model: str = DEFAULT_QWEN_MODEL,
         revision: str = DEFAULT_QWEN_REVISION,
+        api_key: str | None = None,
         timeout_sec: float = 15.0,
         max_image_long_edge: int = 768,
         client: httpx.Client | None = None,
@@ -43,6 +44,10 @@ class QwenVLMAdapter:
             raise ValueError("Qwen revision must be a pinned 40-character commit SHA")
         if not isinstance(base_url, str) or not base_url.strip():
             raise ValueError("Qwen base_url must be non-empty")
+        if api_key is not None and (
+            not isinstance(api_key, str) or not api_key.strip()
+        ):
+            raise ValueError("Qwen API key must be non-empty when provided")
         if (
             isinstance(timeout_sec, bool)
             or not isinstance(timeout_sec, (int, float))
@@ -60,6 +65,11 @@ class QwenVLMAdapter:
         self.revision = revision
         self._data_root = Path(data_root).expanduser().resolve()
         self._max_image_long_edge = max_image_long_edge
+        self._request_headers = (
+            {"Authorization": f"Bearer {api_key.strip()}"}
+            if api_key is not None
+            else {}
+        )
         self._owns_client = client is None
         self._client = client or httpx.Client(base_url=base_url.rstrip("/"), timeout=timeout_sec)
 
@@ -68,7 +78,7 @@ class QwenVLMAdapter:
 
     def health_check(self) -> None:
         try:
-            response = self._client.get("/models")
+            response = self._client.get("/models", headers=self._request_headers)
             response.raise_for_status()
             models = tuple(
                 item for item in response.json().get("data", []) if isinstance(item, dict)
@@ -127,7 +137,7 @@ class QwenVLMAdapter:
                 {"role": "user", "content": content},
             ],
             "temperature": request.temperature,
-            "max_tokens": min(request.max_output_tokens, 256),
+            "max_tokens": min(request.max_output_tokens, 512),
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {"name": "aic_vqa_response", "strict": True, "schema": schema},
@@ -135,7 +145,11 @@ class QwenVLMAdapter:
             "chat_template_kwargs": {"enable_thinking": False},
         }
         try:
-            response = self._client.post("/chat/completions", json=payload)
+            response = self._client.post(
+                "/chat/completions",
+                json=payload,
+                headers=self._request_headers,
+            )
             response.raise_for_status()
             raw = response.json()["choices"][0]["message"]["content"]
             parsed = json.loads(raw)

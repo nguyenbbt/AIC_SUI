@@ -15,9 +15,14 @@ def test_build_request_is_evidence_only_and_deterministic() -> None:
     request = build_vlm_request(QUESTION, (IMAGE,))
     assert request.request_id == "vlm-q1"
     assert request.evidence == (IMAGE,)
+    assert request.max_output_tokens == 512
     lowered = EVIDENCE_ONLY_INSTRUCTION.lower()
     assert "external/world knowledge" in lowered
     assert "local path" in lowered
+    assert "answer must be null" in lowered
+    assert "evidence_ids must be []" in lowered
+    assert "answer_type must exactly match" in lowered
+    assert "compact json" in lowered
     assert "có ai không" not in lowered
 
 

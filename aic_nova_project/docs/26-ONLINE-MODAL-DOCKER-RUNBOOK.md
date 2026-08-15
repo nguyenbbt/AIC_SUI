@@ -20,11 +20,12 @@ Trạng thái được kiểm chứng ngày 2026-08-13:
 | KIS_TEXT | `CONFIRMED_CODE`; runtime gate đã pass trên dataset hiện tại | Full contract `PASS`, API ready, đủ 7 branch success, UI proxy trả keyframe thật |
 | KIS_VIDEO | `CONFIRMED_CODE` | Dùng cùng text pipeline với KIS_TEXT; chưa chạy một truy vấn riêng trong lượt kiểm chứng này |
 | TRAKE | `CONFIRMED_CODE`, `NEED_RUNTIME_VERIFICATION` | Dùng cùng Modal OpenCLIP encoder; cần bật flag và chạy real query trước khi tuyên bố ready |
-| VQA | `CONFIRMED_CODE`, `NEED_RUNTIME_VERIFICATION` | Cần thêm Qwen/Qwen3.5-4B vLLM service; không được bật VQA khi service chưa sẵn sàng |
+| VQA | `CONFIRMED_CODE`, `NEED_RUNTIME_VERIFICATION` | Runner tự deploy Qwen/Qwen3.5-4B qua M-GPUX/Modal và fail-closed nếu service chưa sẵn sàng |
 
-Modal app là private Function, không tạo public web endpoint. Client local xác thực
-bằng Modal profile hiện hành. App giới hạn một container L4, scale về 0 sau 300
-giây idle và cache model trong Modal Volume `aic-nova-online-model-cache`.
+Modal encoder app là private Function và client local xác thực bằng Modal profile
+hiện hành. Qwen dùng web endpoint có Bearer authentication qua proxy riêng, giới
+hạn một container L4, scale về 0 sau 300 giây idle và giữ cache trong hai Volume
+`m-gpux-hf-cache` và `m-gpux-vllm-cache`.
 
 ## 2. Quy tắc an toàn dữ liệu và chi phí
 
@@ -252,52 +253,44 @@ transition nằm trong cùng `video_id`, và các `frame_id` mở được bằn
 ### 9.1 Runtime bắt buộc
 
 VQA hiện dùng `Qwen/Qwen3.5-4B`, revision
-`851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a`, qua OpenAI-compatible vLLM tại
-`http://localhost:8001/v1`. Adapter chỉ gửi evidence đã retrieve, tối đa 12 ảnh;
-không gửi toàn bộ dataset.
+`851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a`, qua service
+`scripts/mgpux_qwen_vlm.py`. Service giữ identity `m-gpux-llm-api` và hai cache
+Volume chuẩn của M-GPUX, dùng L4, `vLLM==0.25.1`, tối đa 12 ảnh mỗi request và
+Volume chuẩn của M-GPUX, dùng L4, `vLLM==0.25.1`, context 16.384 tokens, tối đa
+12 ảnh mỗi request và scale về 0 sau 5 phút idle. Adapter chỉ gửi evidence đã
+retrieve; không gửi toàn bộ dataset. DD-031 dùng tối đa 512 output tokens.
 
-`OPEN_QUESTION`: repository chưa phê duyệt một vLLM Docker image tag/digest cụ
-thể. Không dùng `latest` trong competition. Chọn và ghi lại một tag/digest đã
-được đội benchmark, thay `<PINNED_VLLM_TAG_OR_DIGEST>` bên dưới.
+Runner tạo hoặc tái sử dụng API key tên `aic-nova-vqa` trong key store của M-GPUX.
+Key được truyền vào Modal bằng secret của deployment, proxy đọc từ environment và
+FastAPI nhận qua process environment. Key không đi qua command line vLLM, runner
+không in key ra terminal và không ghi key vào repository.
 
-Máy Docker cần NVIDIA GPU runtime. Ví dụ cấu hình local:
-
-```powershell
-docker run --rm --gpus all `
-  --name aic-nova-qwen-vlm `
-  --ipc=host `
-  -p 127.0.0.1:8001:8000 `
-  -v aic_nova_qwen_hf_cache:/root/.cache/huggingface `
-  -v aic_nova_qwen_vllm_cache:/root/.cache/vllm `
-  vllm/vllm-openai:<PINNED_VLLM_TAG_OR_DIGEST> `
-  Qwen/Qwen3.5-4B `
-  --revision 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a `
-  --served-model-name Qwen/Qwen3.5-4B `
-  --limit-mm-per-prompt '{"image":12}'
-```
-
-Nếu máy local không có NVIDIA GPU, cần triển khai một private Modal vLLM service
-và một kết nối authenticated/restricted tương ứng trước; runner Modal encoder
-trong mục 4 không phải VLM và không thể trả lời VQA.
-
-Kiểm tra vLLM:
+Không cần NVIDIA runtime trên máy local. Kiểm tra deployment và key ở dạng mask:
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:8001/v1/models
+modal app list
+m-gpux serve keys list
 ```
+
+Endpoint OpenAI-compatible được lấy từ `modal.Function.get_web_url()` sau deploy,
+không hardcode workspace URL. `Start` chỉ tiếp tục khi request có Bearer token tới
+`/v1/models` trả đúng `Qwen/Qwen3.5-4B`.
 
 ### 9.2 Bật VQA trong FastAPI
 
-Dừng FastAPI, sau đó đặt:
+Dùng runner một-lệnh ở mục 13. Runner tự đặt các biến sau trong process FastAPI:
 
 ```powershell
 $env:AIC_ONLINE_ENCODER_BACKEND = "modal"
 $env:AIC_ONLINE_VQA_ENABLED = "true"
+$env:AIC_ONLINE_VQA_TOTAL_TIMEOUT_SEC = "180"
+$env:AIC_ONLINE_VQA_VLM_TIMEOUT_SEC = "120"
 $env:AIC_ONLINE_QWEN_VLM_AUTO_CONFIGURE = "true"
-$env:AIC_ONLINE_QWEN_VLM_BASE_URL = "http://127.0.0.1:8001/v1"
+$env:AIC_ONLINE_QWEN_VLM_BASE_URL = "<resolved Modal web URL>/v1"
+$env:AIC_ONLINE_QWEN_VLM_API_KEY = "<M-GPUX key; không in ra log>"
 $env:AIC_ONLINE_QWEN_VLM_MODEL = "Qwen/Qwen3.5-4B"
 $env:AIC_ONLINE_QWEN_VLM_REVISION = "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a"
-$env:AIC_ONLINE_QWEN_VLM_TIMEOUT_SEC = "15"
+$env:AIC_ONLINE_QWEN_VLM_TIMEOUT_SEC = "120"
 $env:AIC_ONLINE_QWEN_VLM_MAX_IMAGE_LONG_EDGE = "768"
 
 .\venv\Scripts\python.exe -m uvicorn retrieval_api.main:app `
@@ -305,7 +298,9 @@ $env:AIC_ONLINE_QWEN_VLM_MAX_IMAGE_LONG_EDGE = "768"
   --port 8000
 ```
 
-Readiness phải có `vqa.enabled=true` và `vqa.readiness=ready`.
+Readiness phải có `vqa.enabled=true` và `vqa.readiness=ready`. Hai timeout
+`180/120` là override dành cho M-GPUX qua mạng; default local DD-031 vẫn là
+`30/15` ở composition khi không đặt environment variables.
 
 ```powershell
 $body = @{
@@ -334,7 +329,10 @@ Trong terminal API và UI, dùng `Ctrl+C`. Sau đó có thể dừng container:
 docker compose stop elasticsearch milvus-standalone minio etcd
 ```
 
-Named volumes vẫn còn. Modal GPU tự scale về 0 sau 300 giây không có request.
+Named volumes vẫn còn. `run_online_stack.ps1 -Action Stop` gọi
+`modal app stop m-gpux-llm-api --yes` nếu runner là bên đã deploy Qwen; hai model
+cache Volume vẫn được giữ cho lần chạy sau. Modal encoder deployment cũng được
+giữ và scale về 0.
 
 ## 11. Xử lý lỗi thường gặp
 
@@ -382,8 +380,6 @@ reset index và không xóa Docker volume.
 
 ### 13.1 Chạy đủ KIS, TRAKE và VQA
 
-Nếu Qwen vLLM đã chạy tại `http://127.0.0.1:8001/v1`:
-
 ```powershell
 .\scripts\run_online_stack.ps1
 ```
@@ -393,22 +389,22 @@ Lệnh mặc định thực hiện tuần tự:
 1. Kiểm tra Python, Modal, Docker, Node/UI và READY manifest.
 2. Khởi động Docker Desktop nếu cần, rồi bật etcd, MinIO, Milvus và Elasticsearch.
 3. Xác nhận Modal profile `nguyenkhoanguyen2006` và deploy query encoders.
-4. Kiểm tra Qwen qua `/v1/models`.
-5. Tạo Modal smoke vectors và chạy full read-only contract validator.
-6. Bật FastAPI với KIS, TRAKE, VQA; bật Vite UI; chờ cả API và UI proxy `ready`.
+4. Tạo/tái sử dụng private M-GPUX key, deploy Qwen đã pin và lấy Modal web URL.
+5. Gọi authenticated `/v1/models`; fail-closed nếu model chưa sẵn sàng.
+6. Tạo Modal smoke vectors và chạy full read-only contract validator.
+7. Bật FastAPI với KIS, TRAKE, VQA; bật Vite UI; chờ cả API và UI proxy `ready`.
 
-Nếu Qwen chưa chạy, truyền một vLLM image đã pin tag hoặc digest để runner tự tạo
-container GPU:
+Lần đầu có thể mất 5–20 phút để build image và tải model khoảng 9,34 GB. Các lần
+sau tái sử dụng `m-gpux-hf-cache` và `m-gpux-vllm-cache`. Nếu deploy hoặc health
+check lỗi, runner tự dừng Qwen GPU app và không bật API/UI với trạng thái VQA giả.
+
+Để dùng một endpoint Qwen bên ngoài thay vì deployment do runner quản lý, đặt
+`AIC_ONLINE_QWEN_VLM_API_KEY` trong terminal và truyền URL rõ ràng:
 
 ```powershell
-.\scripts\run_online_stack.ps1 `
-  -QwenVllmImage "vllm/vllm-openai:<PINNED_TAG_OR_DIGEST>"
+$env:AIC_ONLINE_QWEN_VLM_API_KEY = "<private-key>"
+.\scripts\run_online_stack.ps1 -VqaBaseUrl "https://example.invalid/v1"
 ```
-
-Runner từ chối tag `latest`. Repository chưa phê duyệt một vLLM tag/digest mặc định,
-vì vậy không được thay placeholder bằng một phiên bản chưa benchmark. Nếu endpoint
-không sẵn sàng và không có `-QwenVllmImage`, runner dừng trước khi bật API thay vì báo
-sai rằng VQA đã hoạt động.
 
 ### 13.2 Chạy ngay KIS và TRAKE, tạm không bật VQA
 
@@ -427,8 +423,8 @@ VQA vì VQA cần Qwen VLM riêng.
 ```
 
 `Stop` chỉ dừng tiến trình FastAPI/Vite có command line thuộc đúng project, Qwen
-container nếu chính runner đã bật nó, và bốn container hạ tầng. Named volumes cùng
-Modal deployment được giữ nguyên; Modal GPU tự scale về 0 khi idle.
+M-GPUX nếu chính runner đã deploy nó, và bốn container hạ tầng. Docker named
+volumes, M-GPUX model cache và Modal encoder deployment được giữ nguyên.
 
 Log và state tạm nằm tại:
 

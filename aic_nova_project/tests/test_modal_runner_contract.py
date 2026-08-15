@@ -143,3 +143,23 @@ def test_indexing_image_contains_online_contract_validator() -> None:
     )
 
     assert "COPY online/ /app/online/" in dockerfile
+
+
+def test_modal_runner_has_cpu_only_remote_inventory_gate() -> None:
+    source = MODAL_RUNNER.read_text(encoding="utf-8")
+
+    assert "def build_volume_inventory" in source
+    assert "def verify_volume_inventory" in source
+    assert "expected_digest" in source
+    verifier_prefix = source.split("def verify_volume_inventory", 1)[0]
+    verifier_decorator = verifier_prefix.rsplit("@app.function", 1)[1]
+    assert "volumes={REMOTE_DATA_ROOT: data_volume}" in verifier_decorator
+    assert "gpu=" not in verifier_decorator
+
+
+def test_modal_runner_volume_name_is_selected_by_process_environment() -> None:
+    source = MODAL_RUNNER.read_text(encoding="utf-8")
+    compact = " ".join(source.split())
+
+    assert 'os.environ.get( "AIC_MODAL_DATA_VOLUME"' in compact
+    assert "modal.Volume.from_name( DATA_VOLUME_NAME" in compact

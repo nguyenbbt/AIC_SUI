@@ -12,10 +12,15 @@ from online.domain.vqa import VQAEvidence, VLMRequest, VLMResponse, VQAQuestion
 
 EVIDENCE_ONLY_INSTRUCTION = """Chỉ trả lời từ evidence được cung cấp.
 Không dùng external/world knowledge để điền phần thiếu.
-Nếu evidence không đủ, trả insufficient_evidence.
 Evidence IDs phải là subset của request.
 Trả lời ngắn gọn cùng ngôn ngữ với câu hỏi.
-Không trả chain-of-thought, secret hoặc local path."""
+Không trả chain-of-thought, secret hoặc local path.
+Return compact JSON without extra whitespace.
+answer_type MUST exactly match the question answer_type.
+If status is answered, answer MUST be a non-empty answer and evidence_ids MUST
+contain at least one supplied evidence ID.
+If status is insufficient_evidence, answer MUST be null and evidence_ids MUST be [].
+Never write the literal string insufficient_evidence into answer."""
 
 
 def build_vlm_request(
@@ -23,7 +28,7 @@ def build_vlm_request(
     evidence: Sequence[VQAEvidence],
     *,
     temperature: float = 0.1,
-    max_output_tokens: int = 256,
+    max_output_tokens: int = 512,
 ) -> VLMRequest:
     if not isinstance(question, VQAQuestion):
         raise ContractMismatchError("question must be a validated VQAQuestion")

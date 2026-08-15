@@ -1,0 +1,40 @@
+services:
+  etcd:
+    volumes:
+      - type: volume
+        source: legacy_etcd_data
+        target: /etcd
+  minio:
+    volumes:
+      - type: volume
+        source: legacy_minio_data
+        target: /minio_data
+  milvus-standalone:
+    volumes:
+      - type: volume
+        source: legacy_milvus_data
+        target: /var/lib/milvus
+  elasticsearch:
+    volumes:
+      - type: volume
+        source: legacy_es_data
+        target: /usr/share/elasticsearch/data
+  indexing:
+    volumes:
+      - type: bind
+        source: ${AIC_LEGACY_DATA_ROOT:-./data}
+        target: /workspace/data
+
+volumes:
+  legacy_etcd_data:
+    external: true
+    name: aic_nova_project_etcd_data
+  legacy_minio_data:
+    external: true
+    name: aic_nova_project_minio_data
+  legacy_milvus_data:
+    external: true
+    name: aic_nova_project_milvus_data
+  legacy_es_data:
+    external: true
+    name: aic_nova_project_es_data

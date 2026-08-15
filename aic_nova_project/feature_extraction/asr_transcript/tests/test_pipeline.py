@@ -213,3 +213,48 @@ def test_pipeline_regenerates_invalid_cleaned_cache(mock_llm_class, mock_dirs):
     with open(cleaned_path, "r", encoding="utf-8") as input_file:
         regenerated = json.load(input_file)
     assert regenerated["intervals"][0]["cleaned_text"] == "Nội dung đã làm sạch."
+
+
+@patch("feature_extraction.asr_transcript.llm.gemini_llm.GeminiTranscriptLLM")
+def test_video_discovery_supports_nested_btc_directories(mock_llm_class, tmp_path):
+    raw_root = tmp_path / "raw_videos"
+    nested = raw_root / "Videos_L21_a"
+    nested.mkdir(parents=True)
+    video = nested / "L21_V001.mp4"
+    video.write_bytes(b"video")
+    metadata = tmp_path / "metadata"
+    captions = tmp_path / "captions"
+    metadata.mkdir()
+    captions.mkdir()
+
+    pipeline = ASRTranscriptPipeline(
+        video_dir=str(raw_root),
+        metadata_dir=str(metadata),
+        caption_dir=str(captions),
+        output_dir=str(tmp_path / "output"),
+        llm_provider="gemini",
+    )
+
+    assert pipeline._find_video_file("L21_V001") == str(video)
+
+
+@patch("feature_extraction.asr_transcript.llm.gemini_llm.GeminiTranscriptLLM")
+def test_video_discovery_rejects_duplicate_basenames(mock_llm_class, tmp_path):
+    raw_root = tmp_path / "raw_videos"
+    for batch in ("Videos_L21_a", "duplicate"):
+        directory = raw_root / batch
+        directory.mkdir(parents=True)
+        (directory / "L21_V001.mp4").write_bytes(b"video")
+    metadata = tmp_path / "metadata"
+    captions = tmp_path / "captions"
+    metadata.mkdir()
+    captions.mkdir()
+
+    with pytest.raises(ValueError, match="Duplicate video_id"):
+        ASRTranscriptPipeline(
+            video_dir=str(raw_root),
+            metadata_dir=str(metadata),
+            caption_dir=str(captions),
+            output_dir=str(tmp_path / "output"),
+            llm_provider="gemini",
+        )

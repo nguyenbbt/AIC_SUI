@@ -10,11 +10,13 @@ Examples::
         --ocr-dir /data/processed/ocr \
         --output-dir /data/processed/embeddings"
 
-Upload input files to the ``aic-nova-offline-data`` Modal Volume before a run.
+Select the Modal Volume with ``AIC_MODAL_DATA_VOLUME`` before a run.
 All module arguments are forwarded without invoking a shell.
 """
 
 from pathlib import Path
+import hashlib
+import json
 import os
 import shlex
 import subprocess
@@ -30,6 +32,10 @@ REMOTE_DATA_ROOT = "/data"
 NUMPY_BINARY_REQUIREMENT = "numpy==1.26.4"
 OPENCV_BINARY_REQUIREMENT = "opencv-python-headless==4.9.0.80"
 SETUPTOOLS_RUNTIME_REQUIREMENT = "setuptools==81.0.0"
+DATA_VOLUME_NAME = os.environ.get(
+    "AIC_MODAL_DATA_VOLUME",
+    "aic-nova-offline-data",
+)
 
 OFFLINE_MODULES = {
     "module1": {
@@ -130,9 +136,52 @@ def _build_image() -> modal.Image:
 app = modal.App("aic-nova-offline")
 offline_image = _build_image()
 data_volume = modal.Volume.from_name(
-    "aic-nova-offline-data",
+    DATA_VOLUME_NAME,
     create_if_missing=True,
 )
+
+
+def build_volume_inventory(root: Path) -> dict[str, int | str]:
+    """Hash a remote video tree using the local inventory contract."""
+    extensions = {".mp4", ".mkv", ".avi", ".webm"}
+    entries: list[tuple[str, int, str]] = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in extensions:
+            continue
+        digest = hashlib.sha256()
+        with path.open("rb") as input_file:
+            for chunk in iter(lambda: input_file.read(1024 * 1024), b""):
+                digest.update(chunk)
+        entries.append(
+            (path.relative_to(root).as_posix(), path.stat().st_size, digest.hexdigest())
+        )
+    aggregate = hashlib.sha256()
+    for relative_path, size_bytes, digest in entries:
+        aggregate.update(
+            f"{relative_path}\0{size_bytes}\0{digest}\n".encode("utf-8")
+        )
+    return {
+        "video_count": len(entries),
+        "total_bytes": sum(entry[1] for entry in entries),
+        "aggregate_sha256": aggregate.hexdigest(),
+    }
+
+
+@app.function(
+    image=offline_image,
+    timeout=86_400,
+    volumes={REMOTE_DATA_ROOT: data_volume},
+)
+def verify_volume_inventory(root: str) -> dict[str, int | str]:
+    """Compute a CPU-only integrity summary before any paid GPU module."""
+    data_volume.reload()
+    path = Path(root).resolve()
+    data_root = Path(REMOTE_DATA_ROOT).resolve()
+    if path != data_root and data_root not in path.parents:
+        raise ValueError(f"Inventory root must stay under {REMOTE_DATA_ROOT}")
+    if not path.is_dir():
+        raise FileNotFoundError(f"Inventory root not found: {path}")
+    return build_volume_inventory(path)
 
 
 def build_module_command(
@@ -182,8 +231,30 @@ def run_offline_module(module_name: str, arguments: list[str]) -> None:
 
 
 @app.local_entrypoint()
-def main(module: str, arguments: str = "") -> None:
+def main(
+    module: str = "",
+    arguments: str = "",
+    verify_root: str = "",
+    expected_count: int = -1,
+    expected_bytes: int = -1,
+    expected_digest: str = "",
+) -> None:
     """Parse a quoted module argument string and launch it remotely."""
+    if verify_root:
+        actual = verify_volume_inventory.remote(verify_root)
+        expected = {
+            "video_count": expected_count,
+            "total_bytes": expected_bytes,
+            "aggregate_sha256": expected_digest,
+        }
+        if actual != expected:
+            raise RuntimeError(
+                "Remote inventory mismatch: "
+                f"expected={json.dumps(expected, sort_keys=True)} "
+                f"actual={json.dumps(actual, sort_keys=True)}"
+            )
+        print(json.dumps(actual, sort_keys=True))
+        return
     if module not in OFFLINE_MODULES:
         choices = ", ".join(sorted(OFFLINE_MODULES))
         raise ValueError(

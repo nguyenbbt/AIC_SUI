@@ -160,6 +160,7 @@ class ASRTranscriptPipeline:
         self.max_interval_sec = max_interval_sec
         self.force = force
         self.concurrency = concurrency
+        self._video_paths = self._build_video_index(Path(video_dir))
 
         self.audio_dir = os.path.join(output_dir, "audio")
         self.transcripts_dir = os.path.join(output_dir, "transcripts")
@@ -201,12 +202,27 @@ class ASRTranscriptPipeline:
         return sorted(video_ids)
 
     def _find_video_file(self, video_id: str) -> Optional[str]:
-        # Tries to find the video file with any common extension
-        for ext in ['.mp4', '.mkv', '.avi', '.webm']:
-            path = os.path.join(self.video_dir, f"{video_id}{ext}")
-            if os.path.exists(path):
-                return path
-        return None
+        return self._video_paths.get(video_id)
+
+    @staticmethod
+    def _build_video_index(video_dir: Path) -> Dict[str, str]:
+        """Index nested source videos once and reject ambiguous IDs."""
+        if not video_dir.is_dir():
+            raise FileNotFoundError(f"Video directory not found: {video_dir}")
+        supported_extensions = {".mp4", ".mkv", ".avi", ".webm"}
+        paths: Dict[str, str] = {}
+        for path in sorted(video_dir.rglob("*")):
+            if not path.is_file() or path.suffix.lower() not in supported_extensions:
+                continue
+            video_id = path.stem
+            previous = paths.get(video_id)
+            if previous is not None:
+                raise ValueError(
+                    f"Duplicate video_id {video_id!r}: {previous!r} and "
+                    f"{str(path)!r}"
+                )
+            paths[video_id] = str(path)
+        return paths
 
     async def _clean_interval_async(self, interval: Dict[str, Any], context: str, sem: asyncio.Semaphore) -> Dict[str, Any]:
         """Async wrapper for the LLM clean function to allow parallel processing."""

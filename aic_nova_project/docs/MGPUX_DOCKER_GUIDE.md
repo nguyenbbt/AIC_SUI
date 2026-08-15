@@ -9,7 +9,7 @@ Tài liệu này áp dụng cho cấu hình đã kiểm tra ngày 2026-08-04:
 - VS Code extension `puxpux.m-gpux@2.10.0`.
 - Modal SDK `1.5.2`.
 - Docker client `29.6.1`.
-- Modal profile đang hoạt động: `dinhphucnguyenkhac`.
+- Modal profile đang hoạt động: `nguyenkhoanguyen2006`.
 
 Không lưu Modal token hoặc mật khẩu thật vào repository. Extension và CLI dùng
 chung profile trong `~/.modal.toml`.

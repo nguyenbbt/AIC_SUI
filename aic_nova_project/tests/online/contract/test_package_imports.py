@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import importlib
+import subprocess
+import sys
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -21,3 +24,28 @@ class PackageImportTests(unittest.TestCase):
             Path(retrieval.__file__).parts[-3:],
             ("online", "retrieval", "__init__.py"),
         )
+
+    def test_contract_validator_does_not_require_optional_qwen_http_client(self) -> None:
+        script = textwrap.dedent(
+            """
+            import sys
+
+            class BlockHttpx:
+                def find_spec(self, fullname, path=None, target=None):
+                    if fullname == "httpx":
+                        raise ModuleNotFoundError("blocked optional httpx dependency")
+                    return None
+
+            sys.meta_path.insert(0, BlockHttpx())
+            from online.adapters.contract_validator import OfflineContractValidator
+            assert OfflineContractValidator is not None
+            """
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=Path(__file__).resolve().parents[3],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
