@@ -104,12 +104,92 @@ def test_modal_volume_json_array_is_flattened_before_name_lookup():
     assert "$VolumeName -notin $volumeNames" in script
 
 
-def test_modal_pull_targets_data_parent_to_avoid_nested_processed_dir():
+def test_modal_pull_targets_ssd_staging_to_avoid_serving_partial_data():
     script = SCRIPT_PATH.read_text(encoding="utf-8")
 
-    assert '$localData = Join-Path $projectRoot "data"' in script
-    assert '"/processed", $localData' in script
+    assert '[string]$StorageRoot = ""' in script
+    assert '. "$(Join-Path $PSScriptRoot \'storage_paths.ps1\')"' in script
+    assert 'Join-Path $localData ".staging"' in script
+    assert '"/processed", $stagingParent' in script
+    assert '"/processed", $localData' not in script
     assert '"/processed", $localProcessed' not in script
+
+
+def test_offline_runner_has_paid_upload_and_resume_gates():
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
+    compact = " ".join(script.split())
+
+    assert "[switch]$SkipUpload" in script
+    assert "[switch]$ForceUpload" in script
+    assert "[switch]$ApprovePaidUpload" in script
+    assert '"aic-nova-btc-data"' in script
+    assert "Assert-ModalUploadApproved" in script
+    assert "Assert-RemoteInventory" in script
+    assert (
+        'SetEnvironmentVariable( "AIC_MODAL_DATA_VOLUME", $VolumeName, "Process" )'
+        in compact
+    )
+    assert (
+        'SetEnvironmentVariable( "AIC_MODAL_DATA_VOLUME", '
+        '$previousModalDataVolume, "Process" )'
+        in compact
+    )
+
+
+def test_vertical_slice_uses_ssd_hardlink_input_and_exact_video_id():
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert '[string]$SliceVideoId = ""' in script
+    assert "Initialize-SliceInput" in script
+    assert "-ItemType HardLink" in script
+    assert 'Join-Path $localData ".staging\\inputs"' in script
+    assert "$activeRawVideos" in script
+
+
+def test_full_run_enforces_free_space_and_modal_context_gates():
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
+    compact = " ".join(script.split())
+
+    assert '[string]$ModalEnvironment = ""' in script
+    assert "251.85" in script
+    assert "System.IO.DriveInfo" in script
+    assert 'Invoke-CheckedCommand "modal" @("profile", "current")' in script
+    assert 'SetEnvironmentVariable( "MODAL_ENVIRONMENT"' in compact
+
+
+def test_missing_remote_inventory_is_treated_as_first_upload_state():
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
+    function_body = script.split("function Get-RemoteInventory", 1)[1].split(
+        "function New-UploadPlan", 1
+    )[0]
+
+    assert '$ErrorActionPreference = "Continue"' in function_body
+    assert "$remoteGetExitCode = $LASTEXITCODE" in function_body
+    assert "$ErrorActionPreference = $previousErrorActionPreference" in function_body
+    assert "$remoteGetExitCode -ne 0" in function_body
+
+
+def test_checked_command_does_not_leak_stdout_into_function_return_values():
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
+    function_body = script.split("function Invoke-CheckedCommand", 1)[1].split(
+        "function Assert-Prerequisites", 1
+    )[0]
+
+    assert "& $FilePath @Arguments | Out-Host" in function_body
+
+
+def test_index_staged_only_skips_all_modal_work_and_resumes_docker():
+    result = _run_dry_run(
+        "-IndexStagedOnly",
+        "-DatasetId",
+        "btc-slice-L21-V001",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "STAGE: reuse-staged-artifacts" in result.stdout
+    assert "STAGE: module1" not in result.stdout
+    assert "modal run" not in result.stdout
+    assert "STAGE: docker-indexing" in result.stdout
 
 
 def test_indexing_worker_is_rebuilt_before_it_runs():

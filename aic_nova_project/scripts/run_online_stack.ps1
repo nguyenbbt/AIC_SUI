@@ -2,14 +2,14 @@
 param(
     [ValidateSet("Start", "Stop", "Status")]
     [string]$Action = "Start",
+    [string]$StorageRoot = "",
     [switch]$WithoutVQA,
-    [string]$QwenVllmImage = "",
-    [string]$VqaBaseUrl = "http://127.0.0.1:8001/v1",
+    [string]$VqaBaseUrl = "",
     [string]$ModalProfile = "nguyenkhoanguyen2006",
     [switch]$SkipModalDeploy,
     [switch]$SkipContractValidation,
     [ValidateRange(30, 1800)]
-    [int]$StartupTimeoutSec = 300,
+    [int]$StartupTimeoutSec = 1200,
     [switch]$DryRun
 )
 
@@ -17,13 +17,25 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+. "$(Join-Path $PSScriptRoot 'storage_paths.ps1')"
+$envFile = Join-Path $projectRoot ".env"
+$previousLocalDataRoot = [Environment]::GetEnvironmentVariable(
+    "AIC_LOCAL_DATA_ROOT", "Process"
+)
+$localDataRoot = Resolve-AicLocalDataRoot `
+    -ExplicitStorageRoot $StorageRoot `
+    -ProjectRoot $projectRoot `
+    -EnvFile $envFile
+Set-AicComposeDataRoot -Path $localDataRoot
 $pythonExe = Join-Path $projectRoot "venv\Scripts\python.exe"
 $modalExe = Join-Path $projectRoot "venv\Scripts\modal.exe"
+$mgpuxExe = Join-Path $projectRoot "venv\Scripts\m-gpux.exe"
 $uiRoot = Join-Path $projectRoot "ui"
 $modalApp = Join-Path $projectRoot "scripts\online_modal_encoders.py"
-$dataRoot = Join-Path $projectRoot "data\processed"
+$mgpuxQwenApp = Join-Path $projectRoot "scripts\mgpux_qwen_vlm.py"
+$dataRoot = Join-Path $localDataRoot "processed"
 $manifestPath = Join-Path $dataRoot "dataset-manifest.json"
-$sqlitePath = Join-Path $projectRoot "data\metadata.db"
+$sqlitePath = Join-Path $localDataRoot "metadata.db"
 $runtimeRoot = Join-Path ([System.IO.Path]::GetTempPath()) "aic-nova-online-runtime"
 $statePath = Join-Path $runtimeRoot "processes.json"
 $apiStdout = Join-Path $runtimeRoot "api.stdout.log"
@@ -31,10 +43,13 @@ $apiStderr = Join-Path $runtimeRoot "api.stderr.log"
 $uiStdout = Join-Path $runtimeRoot "ui.stdout.log"
 $uiStderr = Join-Path $runtimeRoot "ui.stderr.log"
 $smokePath = Join-Path $runtimeRoot "modal-smoke-vectors.json"
-$qwenContainerName = "aic-nova-qwen-vlm"
 $qwenModel = "Qwen/Qwen3.5-4B"
 $qwenRevision = "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a"
+$mgpuxKeyName = "aic-nova-vqa"
+$mgpuxAppName = "m-gpux-llm-api"
 $dockerServices = @("etcd", "minio", "milvus-standalone", "elasticsearch")
+$script:ResolvedVqaBaseUrl = $VqaBaseUrl.TrimEnd("/")
+$script:QwenApiKey = ""
 
 function Write-Stage {
     param([Parameter(Mandatory)][string]$Name)
@@ -59,7 +74,7 @@ function Invoke-CheckedCommand {
     if ($DryRun) {
         return
     }
-    & $FilePath @Arguments
+    & $FilePath @Arguments | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "Command failed with exit code ${LASTEXITCODE}: $display"
     }
@@ -70,7 +85,8 @@ function Set-OnlineEnvironment {
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][AllowEmptyString()][string]$Value
     )
-    Write-Host "ENV: ${Name}=${Value}"
+    $displayValue = if ($Name -like "*_API_KEY") { "<redacted>" } else { $Value }
+    Write-Host "ENV: ${Name}=${displayValue}"
     if (-not $DryRun) {
         [Environment]::SetEnvironmentVariable($Name, $Value, "Process")
     }
@@ -130,8 +146,12 @@ function Test-DockerReady {
     if (-not (Get-Command "docker" -ErrorAction SilentlyContinue)) {
         return $false
     }
-    & docker info *> $null
-    return $LASTEXITCODE -eq 0
+    try {
+        & docker info *> $null
+        return $LASTEXITCODE -eq 0
+    } catch {
+        return $false
+    }
 }
 
 function Wait-Until {
@@ -167,7 +187,15 @@ function Start-DockerInfrastructure {
 }
 
 function Assert-Prerequisites {
-    foreach ($path in @($pythonExe, $modalExe, $modalApp, $manifestPath, $sqlitePath)) {
+    foreach ($path in @(
+        $pythonExe,
+        $modalExe,
+        $mgpuxExe,
+        $modalApp,
+        $mgpuxQwenApp,
+        $manifestPath,
+        $sqlitePath
+    )) {
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
             throw "Required file is missing: $path"
         }
@@ -186,7 +214,7 @@ function Assert-Prerequisites {
     )
 }
 
-function Deploy-ModalEncoders {
+function Assert-ModalProfile {
     [Environment]::SetEnvironmentVariable("PYTHONUTF8", "1", "Process")
     [Environment]::SetEnvironmentVariable("PYTHONIOENCODING", "utf-8", "Process")
     if (-not $DryRun) {
@@ -200,6 +228,10 @@ function Deploy-ModalEncoders {
     } else {
         Write-Host "CHECK: Modal profile must be $ModalProfile"
     }
+}
+
+function Deploy-ModalEncoders {
+    Assert-ModalProfile
     if ($SkipModalDeploy) {
         Write-Host "SKIPPED: Modal deployment"
         return
@@ -208,76 +240,134 @@ function Deploy-ModalEncoders {
 }
 
 function Test-QwenReady {
+    param(
+        [string]$BaseUrl = $script:ResolvedVqaBaseUrl,
+        [string]$ApiKey = $script:QwenApiKey
+    )
+    if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
+        return $false
+    }
     try {
-        $modelsUrl = "$($VqaBaseUrl.TrimEnd('/'))/models"
-        $response = Invoke-RestMethod -Uri $modelsUrl -TimeoutSec 5
+        $modelsUrl = "$($BaseUrl.TrimEnd('/'))/models"
+        $headers = @{}
+        if (-not [string]::IsNullOrWhiteSpace($ApiKey)) {
+            $headers["Authorization"] = "Bearer $ApiKey"
+        }
+        $response = Invoke-RestMethod `
+            -Uri $modelsUrl `
+            -Headers $headers `
+            -TimeoutSec 30
         return @($response.data | ForEach-Object { $_.id }) -contains $qwenModel
     } catch {
         return $false
     }
 }
 
-function Assert-PinnedVllmImage {
-    if (
-        [string]::IsNullOrWhiteSpace($QwenVllmImage) -or
-        $QwenVllmImage -match ':latest$' -or
-        $QwenVllmImage -notmatch '(@sha256:[0-9a-f]{64}$|:[^/:]+$)'
-    ) {
-        throw (
-            "VQA needs a running Qwen endpoint or an explicit PINNED vLLM image " +
-            "via -QwenVllmImage. The latest tag is rejected."
-        )
+function Get-MgpuxApiKey {
+    param([switch]$CreateIfMissing)
+
+    $userProfile = [Environment]::GetFolderPath("UserProfile")
+    $keysPath = Join-Path $userProfile ".m-gpux\api_keys.json"
+    $keys = @()
+    if (Test-Path -LiteralPath $keysPath -PathType Leaf) {
+        $keys = @(Get-Content -LiteralPath $keysPath -Raw | ConvertFrom-Json)
     }
+    $record = $keys | Where-Object {
+        $_.name -eq $mgpuxKeyName -and $_.active -ne $false
+    } | Select-Object -First 1
+    if ($null -eq $record -and $CreateIfMissing) {
+        Write-Host "Creating private M-GPUX API key '$mgpuxKeyName'..."
+        & $mgpuxExe serve keys create --name $mgpuxKeyName *> $null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to create the M-GPUX API key '$mgpuxKeyName'."
+        }
+        $keys = @(Get-Content -LiteralPath $keysPath -Raw | ConvertFrom-Json)
+        $record = $keys | Where-Object {
+            $_.name -eq $mgpuxKeyName -and $_.active -ne $false
+        } | Select-Object -First 1
+    }
+    if ($null -eq $record) {
+        return ""
+    }
+    $key = [string]$record.key
+    if ([string]::IsNullOrWhiteSpace($key)) {
+        throw "M-GPUX API key '$mgpuxKeyName' has an empty value."
+    }
+    return $key
 }
 
-function Start-QwenIfNeeded {
-    $modelsUrl = "$($VqaBaseUrl.TrimEnd('/'))/models"
-    Write-Host "CHECK: $modelsUrl must serve $qwenModel"
-    if ($DryRun) {
-        if (-not [string]::IsNullOrWhiteSpace($QwenVllmImage)) {
-            Assert-PinnedVllmImage
-            Write-Host "COMMAND: docker run <pinned Qwen vLLM container> $QwenVllmImage"
-        }
-        return $false
+function Resolve-MgpuxQwenBaseUrl {
+    $output = (& $pythonExe $mgpuxQwenApp --get-url | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($output)) {
+        throw "Unable to resolve the deployed M-GPUX Qwen endpoint."
     }
-    if (Test-QwenReady) {
-        Write-Host "Qwen VLM endpoint is ready: $VqaBaseUrl"
-        return $false
+    $lines = @($output -split "`r?`n" | Where-Object { $_.Trim() })
+    $baseUrl = $lines[-1].Trim().TrimEnd("/")
+    if ($baseUrl -notmatch '^https://.+/v1$') {
+        throw "Resolved M-GPUX Qwen endpoint is invalid: $baseUrl"
     }
-    Assert-PinnedVllmImage
+    return $baseUrl
+}
 
-    $existingImage = (& docker container inspect `
-        --format "{{.Config.Image}}" $qwenContainerName 2>$null | Out-String).Trim()
-    if ($LASTEXITCODE -eq 0) {
-        if ($existingImage -ne $QwenVllmImage) {
-            throw (
-                "Container $qwenContainerName already exists with image " +
-                "'$existingImage', expected '$QwenVllmImage'."
-            )
-        }
-        Invoke-CheckedCommand "docker" @("start", $qwenContainerName) | Out-Host
-    } else {
-        Invoke-CheckedCommand "docker" @(
-            "run", "-d", "--gpus", "all",
-            "--name", $qwenContainerName,
-            "--ipc=host",
-            "-p", "127.0.0.1:8001:8000",
-            "-v", "aic_nova_qwen_hf_cache:/root/.cache/huggingface",
-            "-v", "aic_nova_qwen_vllm_cache:/root/.cache/vllm",
-            $QwenVllmImage,
-            $qwenModel,
-            "--revision", $qwenRevision,
-            "--served-model-name", $qwenModel,
-            "--limit-mm-per-prompt", '{"image":12}'
-        ) | Out-Host
+function Stop-MgpuxQwenDeployment {
+    Invoke-CheckedCommand $modalExe @(
+        "app", "stop", $mgpuxAppName, "--yes"
+    )
+}
+
+function Start-MgpuxQwen {
+    Assert-ModalProfile
+    if ($DryRun) {
+        Write-Host "KEY: ensure private M-GPUX key '$mgpuxKeyName'"
+        Invoke-CheckedCommand $modalExe @("deploy", $mgpuxQwenApp)
+        Write-Host "COMMAND: $pythonExe $mgpuxQwenApp --get-url"
+        $script:ResolvedVqaBaseUrl = "https://<modal-workspace>--m-gpux-llm-api-serve.modal.run/v1"
+        $script:QwenApiKey = "<redacted>"
+        return $true
     }
-    Wait-Until -Description "Qwen VLM at $modelsUrl" -Condition { Test-QwenReady }
-    return $true
+
+    if (-not [string]::IsNullOrWhiteSpace($VqaBaseUrl)) {
+        $script:ResolvedVqaBaseUrl = $VqaBaseUrl.TrimEnd("/")
+        $script:QwenApiKey = (
+            [Environment]::GetEnvironmentVariable(
+                "AIC_ONLINE_QWEN_VLM_API_KEY",
+                "Process"
+            )
+        )
+        if (-not (Test-QwenReady)) {
+            throw "The explicitly configured Qwen endpoint is not ready."
+        }
+        Write-Host "External Qwen VLM endpoint is ready: $script:ResolvedVqaBaseUrl"
+        return $false
+    }
+
+    $script:QwenApiKey = Get-MgpuxApiKey -CreateIfMissing
+    [Environment]::SetEnvironmentVariable(
+        "AIC_MGPUX_QWEN_API_KEY",
+        $script:QwenApiKey,
+        "Process"
+    )
+    try {
+        Invoke-CheckedCommand $modalExe @("deploy", $mgpuxQwenApp)
+        $script:ResolvedVqaBaseUrl = Resolve-MgpuxQwenBaseUrl
+        $modelsUrl = "$script:ResolvedVqaBaseUrl/models"
+        Write-Host "CHECK: $modelsUrl must serve $qwenModel"
+        Wait-Until -Description "M-GPUX Qwen VLM at $modelsUrl" -Condition {
+            Test-QwenReady
+        }
+        Write-Host "M-GPUX Qwen VLM is ready: $script:ResolvedVqaBaseUrl"
+        return $true
+    } catch {
+        Write-Warning "Qwen startup failed; stopping the runner-owned Modal app."
+        Stop-MgpuxQwenDeployment
+        throw
+    }
 }
 
 function Set-RuntimeEnvironment {
     $vqaEnabled = if ($WithoutVQA) { "false" } else { "true" }
     $settings = [ordered]@{
+        AIC_LOCAL_DATA_ROOT = $localDataRoot
         AIC_ONLINE_MILVUS_URI = "http://localhost:19530"
         AIC_ONLINE_ES_URI = "http://localhost:9200"
         AIC_ONLINE_SQLITE_PATH = $sqlitePath
@@ -292,11 +382,14 @@ function Set-RuntimeEnvironment {
         AIC_ONLINE_RETRIEVAL_TIMEOUT_SEC = "180"
         AIC_ONLINE_TRAKE_ENABLED = "true"
         AIC_ONLINE_VQA_ENABLED = $vqaEnabled
+        AIC_ONLINE_VQA_TOTAL_TIMEOUT_SEC = "180"
+        AIC_ONLINE_VQA_VLM_TIMEOUT_SEC = "120"
         AIC_ONLINE_QWEN_VLM_AUTO_CONFIGURE = $vqaEnabled
-        AIC_ONLINE_QWEN_VLM_BASE_URL = $VqaBaseUrl
+        AIC_ONLINE_QWEN_VLM_BASE_URL = $script:ResolvedVqaBaseUrl
+        AIC_ONLINE_QWEN_VLM_API_KEY = $script:QwenApiKey
         AIC_ONLINE_QWEN_VLM_MODEL = $qwenModel
         AIC_ONLINE_QWEN_VLM_REVISION = $qwenRevision
-        AIC_ONLINE_QWEN_VLM_TIMEOUT_SEC = "15"
+        AIC_ONLINE_QWEN_VLM_TIMEOUT_SEC = "120"
         AIC_ONLINE_QWEN_VLM_MAX_IMAGE_LONG_EDGE = "768"
     }
     foreach ($entry in $settings.GetEnumerator()) {
@@ -403,6 +496,24 @@ function Show-RecentLogs {
     }
 }
 
+function Stop-OwnedApiAndUi {
+    Stop-OwnedListener -Port 8000 -ExpectedCommand "retrieval_api.main:app"
+    Stop-OwnedListener -Port 5173 -ExpectedCommand "vite"
+}
+
+function Stop-PartialApiAndUi {
+    param([Parameter(Mandatory)]$Processes)
+
+    foreach ($property in @("api_launcher_pid", "ui_launcher_pid")) {
+        $processId = [int]$Processes.$property
+        if ($null -ne (Get-Process -Id $processId -ErrorAction SilentlyContinue)) {
+            & taskkill.exe /PID $processId /T /F | Out-Host
+        }
+    }
+    Start-Sleep -Seconds 2
+    Stop-OwnedApiAndUi
+}
+
 function Wait-OnlineReadiness {
     $apiUrl = "http://127.0.0.1:8000/health/ready"
     Wait-Until -Description "FastAPI readiness" -Condition {
@@ -434,8 +545,7 @@ function Stop-OnlineStack {
         Write-Host "CHECK/STOP: retrieval_api.main:app on port 8000"
         Write-Host "CHECK/STOP: vite on port 5173"
     } else {
-        Stop-OwnedListener -Port 8000 -ExpectedCommand "retrieval_api.main:app"
-        Stop-OwnedListener -Port 5173 -ExpectedCommand "vite"
+        Stop-OwnedApiAndUi
     }
 
     Write-Stage "stop-qwen"
@@ -445,9 +555,9 @@ function Stop-OnlineStack {
         $qwenStarted = [bool]$state.qwen_started_by_runner
     }
     if ($qwenStarted) {
-        Invoke-CheckedCommand "docker" @("stop", $qwenContainerName)
+        Stop-MgpuxQwenDeployment
     } else {
-        Write-Host "Qwen container was not recorded as runner-owned; leaving it unchanged."
+        Write-Host "M-GPUX Qwen was not recorded as runner-owned; leaving it unchanged."
     }
 
     Write-Stage "stop-docker-infrastructure"
@@ -461,13 +571,16 @@ function Stop-OnlineStack {
     if (-not $DryRun -and (Test-Path -LiteralPath $statePath -PathType Leaf)) {
         Remove-Item -LiteralPath $statePath -Force
     }
-    Write-Host "Stopped Online services. Docker volumes and Modal deployment were preserved." -ForegroundColor Green
+    Write-Host (
+        "Stopped Online services. Docker volumes, M-GPUX model cache and " +
+        "Modal encoder deployment were preserved."
+    ) -ForegroundColor Green
 }
 
 function Show-OnlineStatus {
     Write-Stage "status"
     if ($DryRun) {
-        Write-Host "CHECK: ports 8000, 5173; Docker services; Qwen endpoint"
+        Write-Host "CHECK: ports 8000, 5173; Docker services; M-GPUX Qwen endpoint"
         return
     }
     foreach ($port in @(8000, 5173)) {
@@ -483,10 +596,20 @@ function Show-OnlineStatus {
     } else {
         Write-Host "Docker daemon: unavailable"
     }
-    Write-Host "Qwen VLM: $(if (Test-QwenReady) { 'READY' } else { 'NOT READY' })"
+    if ([string]::IsNullOrWhiteSpace($script:ResolvedVqaBaseUrl)) {
+        try {
+            $script:ResolvedVqaBaseUrl = Resolve-MgpuxQwenBaseUrl
+            $script:QwenApiKey = Get-MgpuxApiKey
+        } catch {
+            $script:ResolvedVqaBaseUrl = ""
+        }
+    }
+    Write-Host "M-GPUX Qwen VLM: $(if (Test-QwenReady) { 'READY' } else { 'NOT READY' })"
     Write-Host "Modal deployment is intentionally retained and scales to zero when idle."
 }
 
+$qwenStarted = $false
+$processes = $null
 Push-Location $projectRoot
 try {
     if ($Action -eq "Stop") {
@@ -500,7 +623,7 @@ try {
 
     Write-Stage "prerequisites"
     if ($DryRun) {
-        Write-Host "CHECK: Python, Modal, Docker, npm, READY manifest and UI dependencies"
+        Write-Host "CHECK: Python, Modal, M-GPUX, Docker, npm, READY manifest and UI dependencies"
     } else {
         Assert-Prerequisites
         New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
@@ -519,10 +642,9 @@ try {
     Write-Stage "modal-encoder-deploy"
     Deploy-ModalEncoders
 
-    $qwenStarted = $false
     if (-not $WithoutVQA) {
-        Write-Stage "qwen-vlm"
-        $qwenStarted = Start-QwenIfNeeded
+        Write-Stage "mgpux-qwen-deploy"
+        $qwenStarted = Start-MgpuxQwen
     }
 
     Set-RuntimeEnvironment
@@ -550,9 +672,20 @@ try {
     }
 } catch {
     if ($Action -eq "Start" -and -not $DryRun) {
+        if ($null -ne $processes) {
+            Write-Warning "Startup failed; stopping partial API/UI processes."
+            Stop-PartialApiAndUi -Processes $processes
+        }
+        if ($qwenStarted) {
+            Write-Warning "Startup failed after Qwen deployment; stopping its GPU app."
+            Stop-MgpuxQwenDeployment
+        }
         Write-Warning "Startup failed. Run '.\scripts\run_online_stack.ps1 -Action Stop' to clean up safely."
     }
     throw
 } finally {
+    [Environment]::SetEnvironmentVariable(
+        "AIC_LOCAL_DATA_ROOT", $previousLocalDataRoot, "Process"
+    )
     Pop-Location
 }

@@ -137,6 +137,8 @@ class RuntimeCompositionTests(unittest.TestCase):
                 "AIC_ONLINE_MODAL_ENCODER_FUNCTION": "custom_encode",
                 "AIC_ONLINE_MODAL_ENVIRONMENT": "main",
                 "AIC_ONLINE_MODAL_ENCODER_CACHE_SIZE": "32",
+                "AIC_ONLINE_VQA_TOTAL_TIMEOUT_SEC": "180",
+                "AIC_ONLINE_VQA_VLM_TIMEOUT_SEC": "120",
             },
             clear=True,
         ):
@@ -154,6 +156,8 @@ class RuntimeCompositionTests(unittest.TestCase):
         self.assertEqual(config.modal_encoder_function, "custom_encode")
         self.assertEqual(config.modal_environment, "main")
         self.assertEqual(config.modal_encoder_cache_size, 32)
+        self.assertEqual(config.vqa_total_timeout_sec, 180.0)
+        self.assertEqual(config.vqa_vlm_timeout_sec, 120.0)
         invocation_configs = build_invocation_configs(config)
         self.assertEqual(invocation_configs[(RetrievalBranch.VISUAL_DENSE, "q0")].top_k, 7)
         self.assertEqual(invocation_configs[(RetrievalBranch.OCR_DENSE, "q1")].top_k, 11)
@@ -335,6 +339,9 @@ class RuntimeCompositionTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             RuntimeCompositionConfig(encoder_backend="modal", modal_encoder_cache_size=0)
+
+        with self.assertRaises(ValueError):
+            RuntimeCompositionConfig(vqa_total_timeout_sec=10, vqa_vlm_timeout_sec=20)
 
     def test_vqa_runtime_flag_requires_explicit_vlm(self) -> None:
         with self.assertRaisesRegex(ValueError, "VLMPort"):

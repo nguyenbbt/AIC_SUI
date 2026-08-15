@@ -1,0 +1,15 @@
+ aic_nova_project/.env.example                      |  12 [32m+[m
+ .../docs/26-ONLINE-MODAL-DOCKER-RUNBOOK.md         | 441 [32m++++++++++++++++[m
+ aic_nova_project/online/requirements-modal.txt     |   1 [32m+[m
+ aic_nova_project/online/retrieval/__init__.py      |   2 [32m+[m
+ .../online/retrieval/modal_encoders.py             | 235 [32m+++++++++[m
+ aic_nova_project/retrieval_api/composition.py      |  88 [32m+++[m[31m-[m
+ .../scripts/generate_online_modal_smoke_vectors.py | 108 [32m++++[m
+ aic_nova_project/scripts/online_modal_encoders.py  | 173 [32m+++++++[m
+ aic_nova_project/scripts/run_online_stack.ps1      | 558 [32m+++++++++++++++++++++[m
+ .../tests/online/api/test_composition.py           |  87 [32m++++[m
+ .../tests/online/retrieval/test_modal_encoders.py  | 109 [32m++++[m
+ .../tests/test_online_modal_encoder_contract.py    |  39 [32m++[m
+ .../tests/test_online_modal_smoke_vectors.py       |  43 [32m++[m
+ .../tests/test_online_one_click_script.py          | 117 [32m+++++[m
+ 14 files changed, 2005 insertions(+), 8 deletions(-)

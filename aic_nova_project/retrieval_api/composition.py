@@ -100,6 +100,8 @@ class RuntimeCompositionConfig:
     modal_encoder_function: str = DEFAULT_MODAL_ENCODER_FUNCTION
     modal_environment: str | None = None
     modal_encoder_cache_size: int = 256
+    vqa_total_timeout_sec: float = 30.0
+    vqa_vlm_timeout_sec: float = 15.0
 
     def __post_init__(self) -> None:
         if not isinstance(self.deployment_mode, str):
@@ -132,6 +134,12 @@ class RuntimeCompositionConfig:
             object.__setattr__(self, "modal_environment", self.modal_environment.strip())
         if _invalid_positive_int(self.modal_encoder_cache_size):
             raise ValueError("modal_encoder_cache_size must be a positive integer")
+        if _invalid_positive_float(self.vqa_total_timeout_sec):
+            raise ValueError("vqa_total_timeout_sec must be > 0")
+        if _invalid_positive_float(self.vqa_vlm_timeout_sec):
+            raise ValueError("vqa_vlm_timeout_sec must be > 0")
+        if self.vqa_total_timeout_sec < self.vqa_vlm_timeout_sec:
+            raise ValueError("vqa_total_timeout_sec must be >= vqa_vlm_timeout_sec")
         if _invalid_positive_int(self.max_workers):
             raise ValueError("max_workers must be a positive integer")
         if _invalid_positive_int(self.ranking_max_workers):
@@ -206,6 +214,8 @@ class RuntimeCompositionConfig:
                 os.getenv(f"{prefix}MODAL_ENVIRONMENT", "").strip() or None
             ),
             modal_encoder_cache_size=_env_int(prefix, "MODAL_ENCODER_CACHE_SIZE", 256),
+            vqa_total_timeout_sec=_env_float(prefix, "VQA_TOTAL_TIMEOUT_SEC", 30.0),
+            vqa_vlm_timeout_sec=_env_float(prefix, "VQA_VLM_TIMEOUT_SEC", 15.0),
         )
 
     def top_k_for(self, branch: RetrievalBranch) -> int:
@@ -353,6 +363,7 @@ def build_online_runtime(
             base_url=os.getenv("AIC_ONLINE_QWEN_VLM_BASE_URL", "http://localhost:8001/v1"),
             model=os.getenv("AIC_ONLINE_QWEN_VLM_MODEL", DEFAULT_QWEN_MODEL),
             revision=os.getenv("AIC_ONLINE_QWEN_VLM_REVISION", DEFAULT_QWEN_REVISION),
+            api_key=os.getenv("AIC_ONLINE_QWEN_VLM_API_KEY", "").strip() or None,
             timeout_sec=_env_float("AIC_ONLINE_", "QWEN_VLM_TIMEOUT_SEC", 15.0),
             max_image_long_edge=_env_int("AIC_ONLINE_", "QWEN_VLM_MAX_IMAGE_LONG_EDGE", 768),
         )
@@ -553,6 +564,8 @@ def build_online_runtime(
             vlm=advanced_vlm,
             rewriter=advanced_rewriter,
             readiness=_vqa_data_readiness(image_resolver, advanced_vlm),
+            total_timeout_sec=runtime_config.vqa_total_timeout_sec,
+            vlm_timeout_sec=runtime_config.vqa_vlm_timeout_sec,
         )
         if isinstance(advanced_vlm, QwenVLMAdapter):
             runtime.advanced_resources = (*runtime.advanced_resources, advanced_vlm)
@@ -595,6 +608,8 @@ def attach_vqa_mode(
     vlm: VLMPort,
     rewriter: QueryRewriteService | None = None,
     readiness: Callable[[], None] | None = None,
+    total_timeout_sec: float = 30.0,
+    vlm_timeout_sec: float = 15.0,
 ) -> OnlineRuntime:
     if runtime.vqa_mode is not None:
         raise ValueError("VQA mode is already configured")
@@ -623,6 +638,8 @@ def attach_vqa_mode(
             candidate_retriever=candidate_retriever,
             evidence_selector=selector,
             vlm=vlm,
+            total_timeout_sec=total_timeout_sec,
+            vlm_timeout_sec=vlm_timeout_sec,
         )
     )
     runtime.readiness_probes = (

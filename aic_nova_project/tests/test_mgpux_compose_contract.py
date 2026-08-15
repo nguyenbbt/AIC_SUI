@@ -23,7 +23,11 @@ def test_compose_is_compatible_with_mgpux_sandbox_networking() -> None:
     assert elasticsearch_dockerfile.is_file()
 
     indexing = services["indexing"]
-    assert "./data:/workspace/data" in indexing["volumes"]
+    assert {
+        "type": "bind",
+        "source": "${AIC_LOCAL_DATA_ROOT:-./data}",
+        "target": "/workspace/data",
+    } in indexing["volumes"]
     assert indexing["environment"]["MILVUS_URI"].endswith(
         "milvus-standalone:19530"
     )
