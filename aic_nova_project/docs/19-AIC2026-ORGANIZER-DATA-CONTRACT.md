@@ -14,7 +14,7 @@ Tài liệu này là nguồn tham chiếu tập trung cho dữ liệu hỗ trợ
 - Hướng xử lý được đề xuất cho ingestion, retrieval, TRAKE, Q&A và output nộp
   bài.
 
-Phạm vi kiểm chứng ngày 2026-08-04:
+
 
 - Đọc trực tiếp các file mẫu của `L21_V001`.
 - Đối chiếu trực tiếp video và 307 keyframe của `L21_V001`.

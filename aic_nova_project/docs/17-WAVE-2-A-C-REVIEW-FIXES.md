@@ -17,7 +17,6 @@ Shared Wave 2 base: c1ef183
 Người B Wave 2: 6b0948a
 ```
 
-Review đã xác nhận:
 
 - Hai nhánh đều bắt đầu từ đúng shared base `c1ef183`.
 - Phạm vi file của A và C không lấn ownership của B.

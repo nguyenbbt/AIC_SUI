@@ -21,7 +21,7 @@ production, benchmark ranking/latency và chạy một vertical slice thật.
 
 ## 2. Định dạng câu trả lời BTC đã công bố
 
-Tài liệu vòng sơ tuyển đã chốt các tuple logic sau:
+
 
 | Loại truy vấn | Định dạng câu trả lời |
 |---|---|

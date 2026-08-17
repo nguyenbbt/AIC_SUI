@@ -337,7 +337,7 @@ Mọi vector:
 
 - Một chiều, finite.
 - L2-normalized.
-- HNSW index.
+
 - Inner Product metric.
 
 Thông số baseline:
