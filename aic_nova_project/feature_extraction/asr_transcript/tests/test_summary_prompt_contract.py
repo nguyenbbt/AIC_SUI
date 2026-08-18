@@ -289,8 +289,8 @@ def test_local_summary_logs_bounded_preview_when_rewrite_fails(caplog):
         for record in caplog.records
         if "summary_contract_validation_failed" in record.message
     ]
-    assert len(failure_logs) == 2
-    assert failure_logs[-1].attempt == 2
+    assert len(failure_logs) == 3
+    assert failure_logs[-1].attempt == 3
     assert len(failure_logs[-1].summary_preview) <= 240
     assert failure_logs[-1].summary_chars == len(english_summary.strip())
 
@@ -335,3 +335,105 @@ def test_local_summary_repairs_too_short_output_from_substantial_source():
     assert LONG_TRANSCRIPT in repair_prompt
     assert short_summary in repair_prompt
     assert "100-180 từ" in repair_prompt
+
+
+def test_local_summary_allows_three_contract_attempts():
+    first_short_summary = _vietnamese_words(61)
+    second_short_summary = _vietnamese_words(75)
+    valid_summary = _vietnamese_words(110)
+    llm = LocalTranscriptLLM.__new__(LocalTranscriptLLM)
+    llm.generator = MagicMock(
+        side_effect=[
+            [
+                {
+                    "generated_text": [
+                        {
+                            "content": (
+                                '{"summary":"'
+                                + first_short_summary
+                                + '"}'
+                            )
+                        }
+                    ]
+                }
+            ],
+            [
+                {
+                    "generated_text": [
+                        {
+                            "content": (
+                                '{"summary":"'
+                                + second_short_summary
+                                + '"}'
+                            )
+                        }
+                    ]
+                }
+            ],
+            [
+                {
+                    "generated_text": [
+                        {
+                            "content": (
+                                '{"summary":"' + valid_summary + '"}'
+                            )
+                        }
+                    ]
+                }
+            ],
+        ]
+    )
+
+    assert llm.summarize(LONG_TRANSCRIPT) == valid_summary
+    assert llm.generator.call_count == 3
+
+
+def test_local_summary_recovers_when_contract_rewrite_is_not_json():
+    short_summary = _vietnamese_words(61)
+    valid_summary = _vietnamese_words(110)
+    malformed_rewrite = "Đây là bản viết lại nhưng không được bọc trong JSON."
+    llm = LocalTranscriptLLM.__new__(LocalTranscriptLLM)
+    llm.generator = MagicMock(
+        side_effect=[
+            [
+                {
+                    "generated_text": [
+                        {
+                            "content": (
+                                '{"summary":"' + short_summary + '"}'
+                            )
+                        }
+                    ]
+                }
+            ],
+            [
+                {
+                    "generated_text": [
+                        {"content": malformed_rewrite}
+                    ]
+                }
+            ],
+            [
+                {
+                    "generated_text": [
+                        {
+                            "content": (
+                                '{"summary":"' + valid_summary + '"}'
+                            )
+                        }
+                    ]
+                }
+            ],
+        ]
+    )
+
+    assert llm.summarize(LONG_TRANSCRIPT) == valid_summary
+    assert llm.generator.call_count == 3
+
+    format_repair_prompt = "\n".join(
+        message["content"]
+        for message in llm.generator.call_args_list[2].args[0]
+    )
+    assert malformed_rewrite in format_repair_prompt
+    assert LONG_TRANSCRIPT in format_repair_prompt
+    assert "JSON" in format_repair_prompt

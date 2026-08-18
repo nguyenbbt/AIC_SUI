@@ -15,6 +15,10 @@ from .summary_prompt import (
 
 logger = logging.getLogger(__name__)
 
+_MAX_SUMMARY_CONTRACT_ATTEMPTS = 3
+_MAX_SUMMARY_FORMAT_REPAIRS = 1
+
+
 class LocalTranscriptLLM(TranscriptLLM):
     """
     Implementation using a local open-source model (e.g. Qwen2.5-7B-Instruct).
@@ -127,7 +131,9 @@ class LocalTranscriptLLM(TranscriptLLM):
         ]
         
         try:
-            for attempt in range(2):
+            contract_attempt = 0
+            format_repairs = 0
+            while contract_attempt < _MAX_SUMMARY_CONTRACT_ATTEMPTS:
                 outputs = self.generator(
                     messages,
                     max_new_tokens=512,
@@ -137,10 +143,52 @@ class LocalTranscriptLLM(TranscriptLLM):
                 generated_text = outputs[0]["generated_text"][-1][
                     "content"
                 ]
-                summary = self._extract_json_field(
-                    generated_text,
-                    "summary",
-                )
+                try:
+                    summary = self._extract_json_field(
+                        generated_text,
+                        "summary",
+                    )
+                except ValueError as error:
+                    output_preview = " ".join(
+                        generated_text.split()
+                    )[:240]
+                    logger.warning(
+                        "summary_json_parse_failed "
+                        "format_repair=%d output_chars=%d "
+                        "output_preview=%r",
+                        format_repairs + 1,
+                        len(generated_text),
+                        output_preview,
+                        extra={
+                            "format_repair": format_repairs + 1,
+                            "output_chars": len(generated_text),
+                            "output_preview": output_preview,
+                        },
+                    )
+                    if format_repairs == _MAX_SUMMARY_FORMAT_REPAIRS:
+                        raise
+                    format_repairs += 1
+                    logger.warning(
+                        "Local LLM returned malformed summary JSON; "
+                        "requesting one targeted format repair."
+                    )
+                    messages = [
+                        {
+                            "role": "system",
+                            "content": SUMMARY_SYSTEM_PROMPT,
+                        },
+                        {
+                            "role": "user",
+                            "content": build_summary_contract_repair_prompt(
+                                generated_text,
+                                full_cleaned_text,
+                                str(error),
+                            ),
+                        },
+                    ]
+                    continue
+
+                contract_attempt += 1
                 try:
                     return validate_summary_contract(
                         summary,
@@ -155,18 +203,21 @@ class LocalTranscriptLLM(TranscriptLLM):
                         "summary_contract_validation_failed "
                         "attempt=%d violation=%s summary_chars=%d "
                         "summary_preview=%r",
-                        attempt + 1,
+                        contract_attempt,
                         error.code,
                         len(normalized_summary),
                         summary_preview,
                         extra={
-                            "attempt": attempt + 1,
+                            "attempt": contract_attempt,
                             "violation": error.code,
                             "summary_chars": len(normalized_summary),
                             "summary_preview": summary_preview,
                         },
                     )
-                    if attempt == 1:
+                    if (
+                        contract_attempt
+                        == _MAX_SUMMARY_CONTRACT_ATTEMPTS
+                    ):
                         raise
                     logger.warning(
                         "Local LLM returned an invalid summary; "
