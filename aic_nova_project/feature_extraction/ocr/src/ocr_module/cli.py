@@ -32,6 +32,10 @@ def parse_args():
                         help="VietOCR recognition crops per inference batch")
     parser.add_argument("--workers", type=int, default=1,
                         help="Number of parallel workers to process videos")
+    parser.add_argument("--shard-index", type=int, default=0,
+                        help="Zero-based shard index for distributed execution")
+    parser.add_argument("--shard-count", type=int, default=1,
+                        help="Total number of distributed execution shards")
     parser.add_argument("--force", action="store_true",
                         help="Overwrite existing output files")
                         
@@ -54,6 +58,8 @@ def main():
         force=args.force,
         workers=args.workers,
         batch_size=args.batch_size,
+        shard_index=args.shard_index,
+        shard_count=args.shard_count,
     )
 
 if __name__ == "__main__":

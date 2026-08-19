@@ -49,6 +49,18 @@ def main() -> int:
     )
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"], help="Device for local models.")
     parser.add_argument("--force", action="store_true", help="Force overwrite existing outputs.")
+    parser.add_argument(
+        "--shard-index",
+        type=int,
+        default=0,
+        help="Zero-based shard assigned to this worker.",
+    )
+    parser.add_argument(
+        "--shard-count",
+        type=int,
+        default=1,
+        help="Total number of disjoint video shards.",
+    )
     
     args = parser.parse_args()
     
@@ -67,7 +79,9 @@ def main() -> int:
         device=args.device,
         concurrency=args.concurrency,
         summary_chunk_chars=args.summary_chunk_chars,
-        force=args.force
+        force=args.force,
+        shard_index=args.shard_index,
+        shard_count=args.shard_count,
     )
     
     try:

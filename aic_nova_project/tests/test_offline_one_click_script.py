@@ -96,6 +96,18 @@ def test_force_and_reset_flags_are_explicitly_forwarded():
     assert indexing_command.endswith("--force --reset-all")
 
 
+def test_module4_uses_five_modal_gpu_shards_by_default():
+    result = _run_dry_run()
+
+    assert result.returncode == 0, result.stderr
+    module4_command = next(
+        line
+        for line in result.stdout.splitlines()
+        if "--module module4" in line
+    )
+    assert "--module4-shards 5" in module4_command
+
+
 def test_modal_volume_json_array_is_flattened_before_name_lookup():
     script = SCRIPT_PATH.read_text(encoding="utf-8")
 

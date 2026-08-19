@@ -258,3 +258,70 @@ def test_video_discovery_rejects_duplicate_basenames(mock_llm_class, tmp_path):
             output_dir=str(tmp_path / "output"),
             llm_provider="gemini",
         )
+
+
+@patch("feature_extraction.asr_transcript.llm.gemini_llm.GeminiTranscriptLLM")
+def test_video_shards_are_disjoint_and_cover_all_metadata(
+    mock_llm_class,
+    tmp_path,
+):
+    raw_root = tmp_path / "raw_videos"
+    metadata = tmp_path / "metadata"
+    captions = tmp_path / "captions"
+    raw_root.mkdir()
+    metadata.mkdir()
+    captions.mkdir()
+    expected_ids = [f"L21_V{index:03d}" for index in range(10)]
+    for video_id in expected_ids:
+        (metadata / f"{video_id}.json").write_text(
+            "{}",
+            encoding="utf-8",
+        )
+
+    shard_ids = []
+    for shard_index in range(3):
+        pipeline = ASRTranscriptPipeline(
+            video_dir=str(raw_root),
+            metadata_dir=str(metadata),
+            caption_dir=str(captions),
+            output_dir=str(tmp_path / f"output-{shard_index}"),
+            llm_provider="gemini",
+            shard_index=shard_index,
+            shard_count=3,
+        )
+        shard_ids.append(pipeline._get_video_ids())
+
+    assert set().union(*map(set, shard_ids)) == set(expected_ids)
+    for left_index, left_ids in enumerate(shard_ids):
+        for right_ids in shard_ids[left_index + 1 :]:
+            assert set(left_ids).isdisjoint(right_ids)
+
+
+@pytest.mark.parametrize(
+    ("shard_index", "shard_count"),
+    [(-1, 2), (2, 2), (0, 0)],
+)
+@patch("feature_extraction.asr_transcript.llm.gemini_llm.GeminiTranscriptLLM")
+def test_video_shards_reject_invalid_bounds(
+    mock_llm_class,
+    tmp_path,
+    shard_index,
+    shard_count,
+):
+    raw_root = tmp_path / "raw_videos"
+    metadata = tmp_path / "metadata"
+    captions = tmp_path / "captions"
+    raw_root.mkdir()
+    metadata.mkdir()
+    captions.mkdir()
+
+    with pytest.raises(ValueError, match="shard"):
+        ASRTranscriptPipeline(
+            video_dir=str(raw_root),
+            metadata_dir=str(metadata),
+            caption_dir=str(captions),
+            output_dir=str(tmp_path / "output"),
+            llm_provider="gemini",
+            shard_index=shard_index,
+            shard_count=shard_count,
+        )

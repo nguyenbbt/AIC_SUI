@@ -1,6 +1,7 @@
 """Shared prompt contract for provider-independent video summaries."""
 
 import re
+import unicodedata
 
 
 _MIN_SUMMARY_WORDS = 100
@@ -76,12 +77,29 @@ def validate_vietnamese_summary(summary: str) -> str:
     non_ascii_count = sum(
         ord(character) > 127 for character in normalized_summary
     )
+    decomposed_summary = unicodedata.normalize(
+        "NFD",
+        normalized_summary.casefold(),
+    )
+    vietnamese_orthography_count = sum(
+        character == "đ" or character in {"\u0306", "\u031b"}
+        for character in decomposed_summary
+    )
     minimum_word_count = 1 if len(tokens) < 10 else 2
+    minimum_orthography_count = (
+        2 if len(tokens) < 10 else max(3, len(tokens) // 20)
+    )
+    has_vietnamese_orthography = (
+        vietnamese_orthography_count >= minimum_orthography_count
+    )
 
     if (
         not normalized_summary
         or non_ascii_count < 2
-        or vietnamese_word_count < minimum_word_count
+        or (
+            vietnamese_word_count < minimum_word_count
+            and not has_vietnamese_orthography
+        )
     ):
         raise ValueError("Summary must be written in Vietnamese.")
     return normalized_summary
@@ -115,12 +133,20 @@ def _truncate_summary_at_sentence_boundary(summary: str) -> str:
     words = summary.split()
     for index in range(
         _MAX_SUMMARY_WORDS - 1,
-        _MIN_SUMMARY_WORDS - 2,
+        _MIN_SUMMARY_WORDS - 1,
         -1,
     ):
         if _SENTENCE_END_PATTERN.search(words[index]):
             return " ".join(words[: index + 1])
     return " ".join(words[:_MAX_SUMMARY_WORDS])
+
+
+def build_extractive_summary(source_text: str) -> str:
+    """Build a bounded, fact-preserving fallback from the source text."""
+    normalized_source = " ".join(source_text.split())
+    if len(normalized_source.split()) <= _MAX_SUMMARY_WORDS:
+        return normalized_source
+    return _truncate_summary_at_sentence_boundary(normalized_source)
 
 
 def validate_summary_contract(summary: str, source_text: str) -> str:
@@ -178,6 +204,7 @@ def build_summary_contract_repair_prompt(
     violation: str,
 ) -> str:
     """Build a focused regeneration prompt for a non-language violation."""
+    summary_word_count = len(summary.split())
     if source_has_sufficient_information(transcript):
         length_requirement = (
             "Viết đúng một đoạn văn 100-180 từ, không dùng "
@@ -190,6 +217,7 @@ def build_summary_contract_repair_prompt(
             "dữ liệu nghiêm trọng."
         )
     return f"""Bản summary trước không hợp lệ: {violation}
+[word_count={summary_word_count}]
 
 Hãy tạo lại summary theo đúng các yêu cầu sau:
 - BẮT BUỘC viết bằng tiếng Việt.

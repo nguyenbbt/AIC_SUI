@@ -163,3 +163,33 @@ def test_modal_runner_volume_name_is_selected_by_process_environment() -> None:
 
     assert 'os.environ.get( "AIC_MODAL_DATA_VOLUME"' in compact
     assert "modal.Volume.from_name( DATA_VOLUME_NAME" in compact
+
+
+def test_modal_runner_parallelizes_module3_across_gpu_containers() -> None:
+    source = MODAL_RUNNER.read_text(encoding="utf-8")
+
+    assert "module3_shards" in source
+    assert "run_offline_module.starmap" in source
+    assert '"--shard-count"' in source
+    assert '"--shard-index"' in source
+    assert "@modal.concurrent" not in source
+    assert "max_containers=5" in source
+
+
+def test_modal_runner_parallelizes_module4_across_gpu_containers() -> None:
+    source = MODAL_RUNNER.read_text(encoding="utf-8")
+
+    assert "module4_shards" in source
+    assert "run_offline_module.starmap" in source
+    assert '"--shard-count"' in source
+    assert '"--shard-index"' in source
+    assert "max_containers=5" in source
+
+
+def test_modal_runner_has_opt_in_gpu_concurrency_probe() -> None:
+    source = MODAL_RUNNER.read_text(encoding="utf-8")
+
+    assert "def probe_gpu_slot" in source
+    assert "probe_gpu_slot.starmap" in source
+    assert "probe_gpus" in source
+    assert "observed_peak_gpu_concurrency" in source

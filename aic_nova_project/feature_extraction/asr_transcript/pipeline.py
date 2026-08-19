@@ -149,7 +149,9 @@ class ASRTranscriptPipeline:
                  device: str = "auto",
                  concurrency: int = 10,
                  summary_chunk_chars: int = 12_000,
-                 force: bool = False):
+                 force: bool = False,
+                 shard_index: int = 0,
+                 shard_count: int = 1):
         self.video_dir = video_dir
         self.metadata_dir = metadata_dir
         self.caption_dir = caption_dir
@@ -160,6 +162,14 @@ class ASRTranscriptPipeline:
         self.max_interval_sec = max_interval_sec
         self.force = force
         self.concurrency = concurrency
+        if shard_count < 1:
+            raise ValueError("shard_count must be at least 1")
+        if shard_index < 0 or shard_index >= shard_count:
+            raise ValueError(
+                "shard_index must be between 0 and shard_count - 1"
+            )
+        self.shard_index = shard_index
+        self.shard_count = shard_count
         self._video_paths = self._build_video_index(Path(video_dir))
 
         self.audio_dir = os.path.join(output_dir, "audio")
@@ -199,7 +209,18 @@ class ASRTranscriptPipeline:
         for metadata_file in glob.glob(os.path.join(self.metadata_dir, "*.json")):
             video_id = os.path.basename(metadata_file).replace(".json", "")
             video_ids.append(video_id)
-        return sorted(video_ids)
+        sorted_video_ids = sorted(video_ids)
+        selected_video_ids = sorted_video_ids[
+            self.shard_index :: self.shard_count
+        ]
+        logger.info(
+            "Selected %d/%d videos for shard %d/%d.",
+            len(selected_video_ids),
+            len(sorted_video_ids),
+            self.shard_index,
+            self.shard_count,
+        )
+        return selected_video_ids
 
     def _find_video_file(self, video_id: str) -> Optional[str]:
         return self._video_paths.get(video_id)

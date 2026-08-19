@@ -201,7 +201,8 @@ def run_pipeline(keyframe_dir: str, metadata_dir: str, output_dir: str,
                  width_ths: float = 0.7, mag_ratio: float = 1.5,
                  confidence_threshold: float = 0.4, backbone: str = 'vgg_transformer',
                  use_gpu: bool = True, force: bool = False, workers: int = 1,
-                 batch_size: int = 1):
+                 batch_size: int = 1, shard_index: int = 0,
+                 shard_count: int = 1):
     """Entry point for CLI or multiprocessing wrapper."""
     if workers <= 0:
         raise ValueError("workers must be greater than zero.")
@@ -212,13 +213,27 @@ def run_pipeline(keyframe_dir: str, metadata_dir: str, output_dir: str,
             "GPU OCR supports only one video worker; use --workers 1 "
             "and increase --batch-size instead."
         )
+    if shard_count < 1:
+        raise ValueError("shard_count must be at least 1.")
+    if shard_index < 0 or shard_index >= shard_count:
+        raise ValueError(
+            "shard_index must be between 0 and shard_count - 1."
+        )
 
     k_dir = Path(keyframe_dir)
     m_dir = Path(metadata_dir)
     o_dir = Path(output_dir)
 
     # Identify videos to process based on metadata files
-    video_ids = sorted(p.stem for p in m_dir.glob("*.json"))
+    all_video_ids = sorted(p.stem for p in m_dir.glob("*.json"))
+    video_ids = all_video_ids[shard_index::shard_count]
+    logger.info(
+        "Selected %d/%d videos for OCR shard %d/%d.",
+        len(video_ids),
+        len(all_video_ids),
+        shard_index,
+        shard_count,
+    )
 
     def process_with(pipeline: OCRPipeline, video_id: str) -> None:
         pipeline.process_video(

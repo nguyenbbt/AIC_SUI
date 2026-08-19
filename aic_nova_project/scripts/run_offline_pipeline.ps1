@@ -12,6 +12,7 @@ param(
     [string]$DatasetId = "",
     [string]$SliceVideoId = "",
     [string]$ModalEnvironment = "",
+    [ValidateRange(1, 5)][int]$Module4Shards = 5,
     [switch]$IndexStagedOnly
 )
 
@@ -329,17 +330,25 @@ function Assert-RemoteInventory {
 function Invoke-ModalModule {
     param(
         [Parameter(Mandatory)][string]$ModuleName,
-        [Parameter(Mandatory)][string]$ModuleArguments
+        [Parameter(Mandatory)][string]$ModuleArguments,
+        [ValidateRange(1, 5)][int]$ShardCount = 1
     )
 
     Write-Stage $ModuleName
-    Invoke-CheckedCommand "modal" @(
+    $modalArguments = @(
         "run",
         $modalRunner,
         "--module",
-        $ModuleName,
-        "--arguments=$ModuleArguments"
+        $ModuleName
     )
+    if ($ShardCount -gt 1) {
+        $modalArguments += @(
+            "--${ModuleName}-shards",
+            [string]$ShardCount
+        )
+    }
+    $modalArguments += "--arguments=$ModuleArguments"
+    Invoke-CheckedCommand "modal" $modalArguments
 }
 
 Push-Location $projectRoot
@@ -395,7 +404,7 @@ try {
         "--metadata-dir /data/processed/metadata " +
         "--output-dir /data/processed/ocr --device cuda:0 " +
         "--batch-size 16 --workers 1$forceArgument"
-    )
+    ) $Module4Shards
         Invoke-ModalModule "module5" (
         "--keyframe-dir /data/processed/keyframes " +
         "--metadata-dir /data/processed/metadata " +

@@ -19,8 +19,10 @@ import hashlib
 import json
 import os
 import shlex
+import socket
 import subprocess
 import sys
+import time
 from typing import Sequence
 
 import modal
@@ -32,6 +34,8 @@ REMOTE_DATA_ROOT = "/data"
 NUMPY_BINARY_REQUIREMENT = "numpy==1.26.4"
 OPENCV_BINARY_REQUIREMENT = "opencv-python-headless==4.9.0.80"
 SETUPTOOLS_RUNTIME_REQUIREMENT = "setuptools==81.0.0"
+MAX_MODULE_SHARDS = 5
+MAX_GPU_PROBE_TASKS = 16
 DATA_VOLUME_NAME = os.environ.get(
     "AIC_MODAL_DATA_VOLUME",
     "aic-nova-offline-data",
@@ -135,6 +139,7 @@ def _build_image() -> modal.Image:
 
 app = modal.App("aic-nova-offline")
 offline_image = _build_image()
+probe_image = modal.Image.debian_slim(python_version="3.11")
 data_volume = modal.Volume.from_name(
     DATA_VOLUME_NAME,
     create_if_missing=True,
@@ -211,6 +216,7 @@ def build_module_command(
 @app.function(
     image=offline_image,
     gpu="A10G",
+    max_containers=5,
     timeout=86_400,
     volumes={REMOTE_DATA_ROOT: data_volume},
 )
@@ -230,16 +236,120 @@ def run_offline_module(module_name: str, arguments: list[str]) -> None:
     data_volume.commit()
 
 
+@app.function(
+    image=probe_image,
+    gpu="A10G",
+    max_containers=16,
+    timeout=300,
+)
+def probe_gpu_slot(slot: int, hold_seconds: float) -> dict[str, int | float | str]:
+    """Hold one A10G briefly so the caller can observe workspace scale-out."""
+    started_at = time.time()
+    gpu_description = subprocess.run(
+        [
+            "nvidia-smi",
+            "--query-gpu=name,uuid",
+            "--format=csv,noheader",
+        ],
+        capture_output=True,
+        check=True,
+        text=True,
+    ).stdout.strip()
+    time.sleep(hold_seconds)
+    return {
+        "slot": slot,
+        "hostname": socket.gethostname(),
+        "gpu": gpu_description,
+        "started_at": started_at,
+        "finished_at": time.time(),
+    }
+
+
+def observed_peak_concurrency(results: Sequence[dict[str, object]]) -> int:
+    """Calculate the maximum overlap among remote probe intervals."""
+    events: list[tuple[float, int]] = []
+    for result in results:
+        events.append((float(result["started_at"]), 1))
+        events.append((float(result["finished_at"]), -1))
+    active = 0
+    peak = 0
+    for _, delta in sorted(events, key=lambda event: (event[0], event[1])):
+        active += delta
+        peak = max(peak, active)
+    return peak
+
+
+def build_module_shard_jobs(
+    module: str,
+    arguments: Sequence[str],
+    shard_count: int,
+) -> list[tuple[str, list[str]]]:
+    """Build non-overlapping Module 3 or 4 commands for Modal starmap."""
+    if module not in {"module3", "module4"}:
+        raise ValueError("Only module3 and module4 support GPU sharding")
+    option_name = f"{module}_shards"
+    if shard_count < 1 or shard_count > MAX_MODULE_SHARDS:
+        raise ValueError(
+            f"{option_name} must be between 1 and {MAX_MODULE_SHARDS}"
+        )
+    if "--shard-index" in arguments or "--shard-count" in arguments:
+        raise ValueError(
+            "Do not pass shard flags inside --arguments when using "
+            f"--{module}-shards."
+        )
+    return [
+        (
+            module,
+            [
+                *arguments,
+                "--shard-count",
+                str(shard_count),
+                "--shard-index",
+                str(shard_index),
+            ],
+        )
+        for shard_index in range(shard_count)
+    ]
+
+
 @app.local_entrypoint()
 def main(
     module: str = "",
     arguments: str = "",
+    module3_shards: int = 1,
+    module4_shards: int = 1,
+    probe_gpus: int = 0,
+    probe_seconds: float = 20.0,
     verify_root: str = "",
     expected_count: int = -1,
     expected_bytes: int = -1,
     expected_digest: str = "",
 ) -> None:
     """Parse a quoted module argument string and launch it remotely."""
+    if probe_gpus:
+        if probe_gpus < 1 or probe_gpus > MAX_GPU_PROBE_TASKS:
+            raise ValueError(
+                f"probe_gpus must be between 1 and {MAX_GPU_PROBE_TASKS}"
+            )
+        if probe_seconds < 5 or probe_seconds > 60:
+            raise ValueError("probe_seconds must be between 5 and 60")
+        probe_jobs = [
+            (slot, probe_seconds)
+            for slot in range(probe_gpus)
+        ]
+        probe_results = list(probe_gpu_slot.starmap(probe_jobs))
+        report = {
+            "requested_gpu_tasks": probe_gpus,
+            "observed_peak_gpu_concurrency": observed_peak_concurrency(
+                probe_results
+            ),
+            "tasks": sorted(
+                probe_results,
+                key=lambda result: int(result["slot"]),
+            ),
+        }
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return
     if verify_root:
         actual = verify_volume_inventory.remote(verify_root)
         expected = {
@@ -260,4 +370,23 @@ def main(
         raise ValueError(
             f"Unknown Offline module '{module}'. Choose one of: {choices}."
         )
-    run_offline_module.remote(module, shlex.split(arguments))
+    parsed_arguments = shlex.split(arguments)
+    shard_options = {
+        "module3": module3_shards,
+        "module4": module4_shards,
+    }
+    for shard_module, shard_count in shard_options.items():
+        if shard_count != 1 and module != shard_module:
+            raise ValueError(
+                f"{shard_module}_shards can only be used with {shard_module}"
+            )
+    selected_shard_count = shard_options.get(module, 1)
+    if selected_shard_count != 1:
+        shard_jobs = build_module_shard_jobs(
+            module,
+            parsed_arguments,
+            selected_shard_count,
+        )
+        list(run_offline_module.starmap(shard_jobs))
+        return
+    run_offline_module.remote(module, parsed_arguments)

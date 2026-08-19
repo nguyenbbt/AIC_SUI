@@ -1,4 +1,5 @@
 import logging
+import json
 import torch
 import re
 from transformers import pipeline
@@ -7,6 +8,7 @@ from .cleaning_prompt import build_cleaning_prompt
 from .summary_prompt import (
     SummaryContractError,
     SUMMARY_SYSTEM_PROMPT,
+    build_extractive_summary,
     build_summary_contract_repair_prompt,
     build_summary_language_repair_prompt,
     build_summary_prompt,
@@ -17,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 _MAX_SUMMARY_CONTRACT_ATTEMPTS = 3
 _MAX_SUMMARY_FORMAT_REPAIRS = 1
+_MIN_DEGRADED_SUMMARY_WORDS = 60
+_SUMMARY_FIELD_ALIASES = ("text", "result", "response")
 
 
 class LocalTranscriptLLM(TranscriptLLM):
@@ -54,8 +58,6 @@ class LocalTranscriptLLM(TranscriptLLM):
         Attempts to extract a JSON field value from the raw model output text.
         Small models might not format JSON perfectly, so we use regex as a fallback.
         """
-        import json
-        
         # Try finding a JSON block
         json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
         if json_match:
@@ -83,6 +85,84 @@ class LocalTranscriptLLM(TranscriptLLM):
             return val
             
         raise ValueError(f"Model output does not contain JSON field {field_name!r}")
+
+    def _extract_summary_candidate(self, text: str) -> str:
+        """Extract summary prose from valid JSON or a safe model fallback."""
+        try:
+            return self._extract_json_field(text, "summary")
+        except ValueError as json_error:
+            candidate = text.strip()
+            fenced_match = re.fullmatch(
+                r"```(?:json)?\s*(.*?)\s*```",
+                candidate,
+                flags=re.DOTALL | re.IGNORECASE,
+            )
+            if fenced_match:
+                candidate = fenced_match.group(1).strip()
+
+            try:
+                payload = json.loads(candidate)
+            except (json.JSONDecodeError, TypeError):
+                if candidate.startswith(("{", "[")):
+                    raise json_error
+            else:
+                if isinstance(payload, dict):
+                    for alias in _SUMMARY_FIELD_ALIASES:
+                        value = payload.get(alias)
+                        if isinstance(value, str) and value.strip():
+                            return value.strip()
+                raise json_error
+
+            candidate = re.sub(
+                r"^(?:summary|tóm tắt)\s*:\s*",
+                "",
+                candidate,
+                count=1,
+                flags=re.IGNORECASE,
+            ).strip()
+            if not candidate:
+                raise json_error
+            return candidate
+
+    @staticmethod
+    def _select_summary_fallback(
+        best_short_summary: str,
+        source_text: str,
+        reason: str,
+    ) -> str | None:
+        """Return the safest available summary without inventing facts."""
+        best_short_word_count = len(best_short_summary.split())
+        if best_short_word_count >= _MIN_DEGRADED_SUMMARY_WORDS:
+            logger.warning(
+                "summary_contract_degraded selected_words=%d reason=%s",
+                best_short_word_count,
+                reason,
+                extra={
+                    "selected_words": best_short_word_count,
+                    "reason": reason,
+                },
+            )
+            return best_short_summary
+
+        extractive_summary = build_extractive_summary(source_text)
+        try:
+            validated_summary = validate_summary_contract(
+                extractive_summary,
+                source_text,
+            )
+        except SummaryContractError:
+            return None
+
+        logger.warning(
+            "summary_extractive_fallback selected_words=%d reason=%s",
+            len(validated_summary.split()),
+            reason,
+            extra={
+                "selected_words": len(validated_summary.split()),
+                "reason": reason,
+            },
+        )
+        return validated_summary
 
     def clean(self, raw_text: str, context: str = "") -> str:
         if not raw_text.strip():
@@ -133,6 +213,7 @@ class LocalTranscriptLLM(TranscriptLLM):
         try:
             contract_attempt = 0
             format_repairs = 0
+            best_short_summary = ""
             while contract_attempt < _MAX_SUMMARY_CONTRACT_ATTEMPTS:
                 outputs = self.generator(
                     messages,
@@ -144,10 +225,7 @@ class LocalTranscriptLLM(TranscriptLLM):
                     "content"
                 ]
                 try:
-                    summary = self._extract_json_field(
-                        generated_text,
-                        "summary",
-                    )
+                    summary = self._extract_summary_candidate(generated_text)
                 except ValueError as error:
                     output_preview = " ".join(
                         generated_text.split()
@@ -166,6 +244,13 @@ class LocalTranscriptLLM(TranscriptLLM):
                         },
                     )
                     if format_repairs == _MAX_SUMMARY_FORMAT_REPAIRS:
+                        fallback_summary = self._select_summary_fallback(
+                            best_short_summary,
+                            full_cleaned_text,
+                            "invalid_json",
+                        )
+                        if fallback_summary is not None:
+                            return fallback_summary
                         raise
                     format_repairs += 1
                     logger.warning(
@@ -195,7 +280,13 @@ class LocalTranscriptLLM(TranscriptLLM):
                         full_cleaned_text,
                     )
                 except SummaryContractError as error:
-                    normalized_summary = summary.strip()
+                    normalized_summary = " ".join(summary.split())
+                    if (
+                        error.code == "too_short"
+                        and len(normalized_summary.split())
+                        > len(best_short_summary.split())
+                    ):
+                        best_short_summary = normalized_summary
                     summary_preview = " ".join(
                         normalized_summary.split()
                     )[:240]
@@ -218,6 +309,13 @@ class LocalTranscriptLLM(TranscriptLLM):
                         contract_attempt
                         == _MAX_SUMMARY_CONTRACT_ATTEMPTS
                     ):
+                        fallback_summary = self._select_summary_fallback(
+                            best_short_summary,
+                            full_cleaned_text,
+                            error.code,
+                        )
+                        if fallback_summary is not None:
+                            return fallback_summary
                         raise
                     logger.warning(
                         "Local LLM returned an invalid summary; "

@@ -20,6 +20,8 @@ from feature_extraction.asr_transcript.llm.local_llm import (
     LocalTranscriptLLM,
 )
 from feature_extraction.asr_transcript.llm.summary_prompt import (
+    SummaryContractError,
+    build_extractive_summary,
     validate_summary_contract,
     validate_vietnamese_summary,
 )
@@ -45,6 +47,13 @@ def test_summary_language_guard_rejects_english_output():
     with pytest.raises(ValueError, match="written in Vietnamese"):
         validate_vietnamese_summary(
             "Prime Minister issues a directive after the boat accident."
+        )
+
+
+def test_summary_language_guard_rejects_english_with_vietnamese_place_name():
+    with pytest.raises(ValueError, match="written in Vietnamese"):
+        validate_vietnamese_summary(
+            "The report describes a public event held in Đà Nẵng yesterday."
         )
 
 
@@ -88,6 +97,14 @@ def test_summary_contract_trims_more_than_180_words_without_adding_facts():
 
     assert summary == first_sentence
     assert len(summary.split()) == 120
+
+
+def test_extractive_fallback_never_returns_99_words_for_substantial_source():
+    source = f"{_vietnamese_words(99)}. {_vietnamese_words(100)}."
+
+    summary = build_extractive_summary(source)
+
+    assert 100 <= len(summary.split()) <= 180
 
 
 def test_summary_contract_rejects_list_output():
@@ -261,7 +278,7 @@ def test_local_summary_rewrites_an_english_response_in_vietnamese():
     assert llm.generator.call_args_list[1].kwargs["do_sample"] is False
 
 
-def test_local_summary_logs_bounded_preview_when_rewrite_fails(caplog):
+def test_local_summary_logs_bounded_preview_before_extractive_fallback(caplog):
     english_summary = (
         "Prime Minister issues a directive after the boat accident. "
         * 10
@@ -281,8 +298,9 @@ def test_local_summary_logs_bounded_preview_when_rewrite_fails(caplog):
         ]
     )
 
-    with pytest.raises(ValueError, match="written in Vietnamese"):
-        llm.summarize(TRANSCRIPT)
+    summary = llm.summarize(TRANSCRIPT)
+
+    assert validate_summary_contract(summary, TRANSCRIPT) == summary
 
     failure_logs = [
         record
@@ -334,6 +352,7 @@ def test_local_summary_repairs_too_short_output_from_substantial_source():
     )
     assert LONG_TRANSCRIPT in repair_prompt
     assert short_summary in repair_prompt
+    assert "[word_count=61]" in repair_prompt
     assert "100-180 từ" in repair_prompt
 
 
@@ -386,6 +405,144 @@ def test_local_summary_allows_three_contract_attempts():
 
     assert llm.summarize(LONG_TRANSCRIPT) == valid_summary
     assert llm.generator.call_count == 3
+
+
+def test_local_summary_uses_best_short_fallback_after_retries(caplog):
+    best_short_summary = _vietnamese_words(92)
+    shorter_summary = _vietnamese_words(75)
+    shortest_summary = _vietnamese_words(61)
+    llm = LocalTranscriptLLM.__new__(LocalTranscriptLLM)
+    llm.generator = MagicMock(
+        side_effect=[
+            [
+                {
+                    "generated_text": [
+                        {"content": '{"summary":"' + best_short_summary + '"}'}
+                    ]
+                }
+            ],
+            [
+                {
+                    "generated_text": [
+                        {"content": '{"summary":"' + shorter_summary + '"}'}
+                    ]
+                }
+            ],
+            [
+                {
+                    "generated_text": [
+                        {"content": '{"summary":"' + shortest_summary + '"}'}
+                    ]
+                }
+            ],
+        ]
+    )
+
+    assert llm.summarize(LONG_TRANSCRIPT) == best_short_summary
+    assert llm.generator.call_count == 3
+    assert any(
+        "summary_contract_degraded" in record.message
+        for record in caplog.records
+    )
+
+
+def test_local_summary_uses_extractive_fallback_below_model_floor():
+    summaries = [
+        _vietnamese_words(30),
+        _vietnamese_words(45),
+        _vietnamese_words(59),
+    ]
+    llm = LocalTranscriptLLM.__new__(LocalTranscriptLLM)
+    llm.generator = MagicMock(
+        side_effect=[
+            [
+                {
+                    "generated_text": [
+                        {"content": '{"summary":"' + summary + '"}'}
+                    ]
+                }
+            ]
+            for summary in summaries
+        ]
+    )
+
+    summary = llm.summarize(LONG_TRANSCRIPT)
+
+    assert 100 <= len(summary.split()) <= 180
+    assert validate_summary_contract(summary, LONG_TRANSCRIPT) == summary
+
+
+def test_local_summary_accepts_valid_vietnamese_plain_text_output():
+    valid_summary = _vietnamese_words(110)
+    llm = LocalTranscriptLLM.__new__(LocalTranscriptLLM)
+    llm.generator = MagicMock(
+        return_value=[
+            {"generated_text": [{"content": valid_summary}]}
+        ]
+    )
+
+    assert llm.summarize(LONG_TRANSCRIPT) == valid_summary
+    assert llm.generator.call_count == 1
+
+
+def test_local_summary_accepts_supported_json_alias():
+    valid_summary = _vietnamese_words(110)
+    llm = LocalTranscriptLLM.__new__(LocalTranscriptLLM)
+    llm.generator = MagicMock(
+        return_value=[
+            {
+                "generated_text": [
+                    {"content": '{"text":"' + valid_summary + '"}'}
+                ]
+            }
+        ]
+    )
+
+    assert llm.summarize(LONG_TRANSCRIPT) == valid_summary
+    assert llm.generator.call_count == 1
+
+
+def test_local_summary_uses_extractive_fallback_after_language_retries(caplog):
+    english_summary = (
+        "The model keeps returning an English summary without translation. "
+        * 12
+    )
+    llm = LocalTranscriptLLM.__new__(LocalTranscriptLLM)
+    llm.generator = MagicMock(
+        return_value=[
+            {
+                "generated_text": [
+                    {"content": '{"summary":"' + english_summary + '"}'}
+                ]
+            }
+        ]
+    )
+
+    summary = llm.summarize(LONG_TRANSCRIPT)
+
+    assert 100 <= len(summary.split()) <= 180
+    assert validate_summary_contract(summary, LONG_TRANSCRIPT) == summary
+    assert llm.generator.call_count == 3
+    assert any(
+        "summary_extractive_fallback" in record.message
+        for record in caplog.records
+    )
+
+
+def test_local_summary_uses_extractive_fallback_after_malformed_json():
+    malformed_output = '{"summry": "missing closing brace"'
+    llm = LocalTranscriptLLM.__new__(LocalTranscriptLLM)
+    llm.generator = MagicMock(
+        return_value=[
+            {"generated_text": [{"content": malformed_output}]}
+        ]
+    )
+
+    summary = llm.summarize(LONG_TRANSCRIPT)
+
+    assert 100 <= len(summary.split()) <= 180
+    assert validate_summary_contract(summary, LONG_TRANSCRIPT) == summary
+    assert llm.generator.call_count == 2
 
 
 def test_local_summary_recovers_when_contract_rewrite_is_not_json():
