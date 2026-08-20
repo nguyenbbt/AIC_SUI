@@ -38,10 +38,11 @@ Quy tắc bắt buộc:
 - Mỗi truy vấn được gửi tối đa 100 câu trả lời.
 - Thứ tự xếp hạng ảnh hưởng các mốc `R@1`, `R@5`, `R@20`, `R@50`, `R@100`.
 
-`OPEN_QUESTION`: PDF chưa quy định transport cụ thể như endpoint, HTTP body,
-JSON wrapper, CSV header/delimiter, authentication hoặc quy trình upload. Vì
-vậy code hiện cung cấp các logical submission rows; transport adapter cuối sẽ
-được bổ sung khi BTC công bố giao thức gửi bài.
+`CONFIRMED_DESIGN`: hướng dẫn nộp bài vòng sơ tuyển đã chốt transport. Mỗi query
+có một CSV UTF-8, comma-delimited, không header, tối đa 100 dòng; tất cả CSV nằm
+trong thư mục `submission/` bên trong file ZIP. Code hiện có serializer,
+validator và `/submission/package` để tạo đúng cấu trúc này. Upload ZIP vẫn do
+operator thực hiện thủ công trên hệ thống BTC bằng tài khoản đội.
 
 ## 3. Những phần đã hoàn thành
 

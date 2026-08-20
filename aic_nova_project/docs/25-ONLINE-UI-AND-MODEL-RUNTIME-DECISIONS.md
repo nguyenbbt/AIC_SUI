@@ -135,6 +135,6 @@ versions, and evidence-ID/image ordering for Qwen requests.
 
 The system owner who runs Docker must still configure and verify the actual
 OpenAI key, Qwen/vLLM container and pinned revision, network routing, GPU memory,
-real Offline indexes/data, production health checks, and the organizer's final
-submission transport. These runtime checks cannot be completed from the UI-only
-development machine.
+real Offline indexes/data and production health checks. The preliminary CSV/ZIP
+transport is implemented, but one real browser download must still be opened
+and inspected before the first scored upload.

@@ -14,9 +14,22 @@ from typing import Any
 from fastapi import FastAPI, Query, Response
 from retrieval_api.advanced_models import InternalTRAKERequest, InternalVQARequest
 from retrieval_api.search_engine import RewriteRequest, SearchRequest
+from retrieval_api.submission import SubmissionPackageRequest, build_submission_zip
 
 
 app = FastAPI(title="AIC Nova UI Demo", version="demo-v1")
+
+
+@app.post("/submission/package", response_class=Response)
+def submission_package(request: SubmissionPackageRequest) -> Response:
+    return Response(
+        content=build_submission_zip(request),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{request.download_filename}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @app.get("/health/live")

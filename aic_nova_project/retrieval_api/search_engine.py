@@ -41,7 +41,11 @@ from retrieval_api.advanced_models import (
     TRAKEResponse,
     VQAResponse,
 )
-from retrieval_api.submission import serialize_kis_submissions
+from retrieval_api.submission import (
+    SubmissionPackageRequest,
+    build_submission_zip,
+    serialize_kis_submissions,
+)
 from retrieval_api.ui_resources import (
     DatasetUIResources,
     NeighborFramesResponse,
@@ -261,6 +265,24 @@ def create_app(
             warnings=result.warnings,
             latency_ms=result.latency_ms,
             model_id=result.model_id,
+        )
+
+    @app.post(
+        "/submission/package",
+        response_class=Response,
+        summary="Build a BTC-compliant preliminary submission ZIP",
+    )
+    async def submission_package(request: SubmissionPackageRequest) -> Response:
+        payload = build_submission_zip(request)
+        return Response(
+            content=payload,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="{request.download_filename}"'
+                ),
+                "X-Content-Type-Options": "nosniff",
+            },
         )
 
     @app.get("/catalog/object-labels", response_model=ObjectCatalogResponse)

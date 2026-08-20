@@ -597,11 +597,15 @@ Quy tắc:
 - `frame_id` chỉ là internal JOIN key.
 - `shot_id`, `position_code`, filename và timestamp không thay thế
   `source_frame_idx`.
-- Các tuple logic đã được BTC chốt: KIS là `<video_id>, <frame_id>`, Q&A là
-  `<video_id>, <frame_id>, <answer>`, TRAKE là
-  `<video_id>, <frame_id_1>, ..., <frame_id_n>` và tối đa 100 câu trả lời cho
-  mỗi truy vấn. Exact JSON/CSV wrapper, delimiter và endpoint truyền tải vẫn
-  chưa được tài liệu này quy định.
+- BTC đã chốt transport vòng sơ tuyển: mỗi query có một file CSV UTF-8,
+  comma-delimited, không header và tối đa 100 dòng. KIS là
+  `<video_id>,<frame_id>`, Q&A là `<video_id>,<frame_id>,<answer>`, TRAKE là
+  `<video_id>,<frame_id_1>,...,<frame_id_n>`. Tên CSV phải trùng tên file query
+  sau khi đổi `.txt` thành `.csv`.
+- Tất cả CSV phải nằm trong thư mục `submission/`; nén cả thư mục thành một file
+  ZIP rồi upload thủ công lên hệ thống BTC bằng tài khoản duy nhất của đội.
+- Q&A answer tối đa 100 ký tự và phải dùng CSV quoting/escaping chuẩn khi chứa
+  dấu phẩy, dấu ngoặc kép hoặc xuống dòng.
 - Việc wrapper bên ngoài chưa chốt không cho phép bỏ `source_frame_idx` khỏi
   Offline contract.
 

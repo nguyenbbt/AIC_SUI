@@ -40,16 +40,21 @@ npm run build
   labels are rejected and hard filtering is disabled unless the SQLite catalog
   (or the isolated demo fixture) is active.
 - Ranked keyframe grid, diagnostics, adjacent keyframes, video seek preview.
-- Selection tray capped at 100 and logical KIS export using BTC
+- Selection tray capped at 100 and BTC KIS CSV export using
   `frame_id = source_frame_idx`.
-- Ordered-event TRAKE editor, DANTE timeline and logical TRAKE export.
-- VQA answer type, grounded evidence display, explicit cited-frame selection,
-  and logical VQA export.
+- Ordered-event TRAKE editor, DANTE timeline and exact event-count validation.
+- Q&A answer type, 100-character limit, grounded evidence display and explicit
+  cited-frame selection.
+- Per-query filename validation for `*-kis.txt`, `*-qa.txt` and `*-trake.txt`.
+- UTF-8, headerless comma-delimited CSV serialization and a final ZIP containing
+  the mandatory `submission/` directory.
 
 Production must serve the UI and `/api` through the same gateway origin, or set
 `VITE_API_BASE_URL` and configure an explicit trusted-origin policy at that
 gateway. The API intentionally does not enable permissive CORS.
 
-The organizer PDF does not freeze the upload transport or file delimiter. The
-downloads are therefore deliberately named `logical-submission.json`; adapt
-them only after the organizer publishes the final submission transport.
+The preliminary organizer instructions now freeze the file transport: one CSV
+per query, at most 100 rows per CSV, and one ZIP containing the `submission/`
+directory. The UI calls `/submission/package`; the backend validates and builds
+that exact hierarchy. Uploading the ZIP remains a manual operator action on the
+organizer website using the single team account.
