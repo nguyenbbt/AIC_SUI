@@ -10,6 +10,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def select_metadata_files(
+    metadata_dir: Path,
+    shard_index: int,
+    shard_count: int,
+) -> list[Path]:
+    """Select one deterministic, non-overlapping metadata shard."""
+    if shard_count < 1:
+        raise ValueError("shard_count must be at least 1.")
+    if shard_index < 0 or shard_index >= shard_count:
+        raise ValueError(
+            "shard_index must be between 0 and shard_count - 1."
+        )
+    metadata_files = sorted(metadata_dir.glob("*.json"))
+    return metadata_files[shard_index::shard_count]
+
+
 def main():
     parser = argparse.ArgumentParser(description="AI Challenge 2026 - Object Detection")
     parser.add_argument("--keyframe-dir", type=Path, required=True, help="Directory containing input keyframes (.webp)")
@@ -31,6 +48,18 @@ def main():
     # Hardware & Batch
     parser.add_argument("--device", type=str, default="cuda", help="Device (cuda/cpu)")
     parser.add_argument("--batch-size", type=int, default=16, help="Batch size for inference")
+    parser.add_argument(
+        "--shard-index",
+        type=int,
+        default=0,
+        help="Zero-based shard index for distributed execution",
+    )
+    parser.add_argument(
+        "--shard-count",
+        type=int,
+        default=1,
+        help="Total number of distributed execution shards",
+    )
     parser.add_argument("--force", action="store_true", help="Force re-processing if output exists")
     
     args = parser.parse_args()
@@ -56,8 +85,20 @@ def main():
     
     args.output_dir.mkdir(parents=True, exist_ok=True)
     
+    metadata_files = select_metadata_files(
+        args.metadata_dir,
+        shard_index=args.shard_index,
+        shard_count=args.shard_count,
+    )
+    logger.info(
+        "Selected %d video(s) for Object Detection shard %d/%d.",
+        len(metadata_files),
+        args.shard_index,
+        args.shard_count,
+    )
+
     # Process videos
-    for metadata_file in args.metadata_dir.glob("*.json"):
+    for metadata_file in metadata_files:
         video_id = metadata_file.stem
         output_file = args.output_dir / f"{video_id}.json"
         

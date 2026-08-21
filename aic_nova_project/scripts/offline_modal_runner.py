@@ -36,6 +36,27 @@ OPENCV_BINARY_REQUIREMENT = "opencv-python-headless==4.9.0.80"
 SETUPTOOLS_RUNTIME_REQUIREMENT = "setuptools==81.0.0"
 MAX_MODULE_SHARDS = 5
 MAX_GPU_PROBE_TASKS = 16
+DEFAULT_GPU_TYPE = "A10"
+DEFAULT_GPU_TIMEOUT_SECONDS = 86_400
+SUPPORTED_GPU_TYPES = frozenset(
+    {
+        "T4",
+        "L4",
+        "A10",
+        "L40S",
+        "A100",
+        "A100-40GB",
+        "A100-80GB",
+        "RTX-PRO-6000",
+        "H100",
+        "H100!",
+        "H200",
+        "B200",
+        "B200+",
+        "B300",
+    }
+)
+GPU_TYPE_ALIASES = {"A10G": "A10"}
 DATA_VOLUME_NAME = os.environ.get(
     "AIC_MODAL_DATA_VOLUME",
     "aic-nova-offline-data",
@@ -215,7 +236,7 @@ def build_module_command(
 
 @app.function(
     image=offline_image,
-    gpu="A10G",
+    gpu=DEFAULT_GPU_TYPE,
     max_containers=5,
     timeout=86_400,
     volumes={REMOTE_DATA_ROOT: data_volume},
@@ -238,7 +259,7 @@ def run_offline_module(module_name: str, arguments: list[str]) -> None:
 
 @app.function(
     image=probe_image,
-    gpu="A10G",
+    gpu=DEFAULT_GPU_TYPE,
     max_containers=16,
     timeout=300,
 )
@@ -284,9 +305,9 @@ def build_module_shard_jobs(
     arguments: Sequence[str],
     shard_count: int,
 ) -> list[tuple[str, list[str]]]:
-    """Build non-overlapping Module 3 or 4 commands for Modal starmap."""
-    if module not in {"module3", "module4"}:
-        raise ValueError("Only module3 and module4 support GPU sharding")
+    """Build non-overlapping Module 3, 4 or 5 commands for Modal starmap."""
+    if module not in {"module3", "module4", "module5"}:
+        raise ValueError("Only module3, module4 and module5 support GPU sharding")
     option_name = f"{module}_shards"
     if shard_count < 1 or shard_count > MAX_MODULE_SHARDS:
         raise ValueError(
@@ -318,6 +339,9 @@ def main(
     arguments: str = "",
     module3_shards: int = 1,
     module4_shards: int = 1,
+    module5_shards: int = 1,
+    gpu_type: str = DEFAULT_GPU_TYPE,
+    gpu_timeout_seconds: int = DEFAULT_GPU_TIMEOUT_SECONDS,
     probe_gpus: int = 0,
     probe_seconds: float = 20.0,
     verify_root: str = "",
@@ -326,6 +350,16 @@ def main(
     expected_digest: str = "",
 ) -> None:
     """Parse a quoted module argument string and launch it remotely."""
+    requested_gpu = gpu_type.strip().upper()
+    selected_gpu = GPU_TYPE_ALIASES.get(requested_gpu, requested_gpu)
+    if selected_gpu not in SUPPORTED_GPU_TYPES:
+        choices = ", ".join(sorted(SUPPORTED_GPU_TYPES))
+        raise ValueError(
+            f"Unsupported GPU type '{gpu_type}'. Choose one of: {choices}."
+        )
+    if gpu_timeout_seconds < 1 or gpu_timeout_seconds > 86_400:
+        raise ValueError("gpu_timeout_seconds must be between 1 and 86400")
+
     if probe_gpus:
         if probe_gpus < 1 or probe_gpus > MAX_GPU_PROBE_TASKS:
             raise ValueError(
@@ -337,7 +371,12 @@ def main(
             (slot, probe_seconds)
             for slot in range(probe_gpus)
         ]
-        probe_results = list(probe_gpu_slot.starmap(probe_jobs))
+        configured_probe = probe_gpu_slot.with_options(
+            gpu=selected_gpu,
+            max_containers=probe_gpus,
+            timeout=max(300, int(probe_seconds) + 120),
+        )
+        probe_results = list(configured_probe.starmap(probe_jobs))
         report = {
             "requested_gpu_tasks": probe_gpus,
             "observed_peak_gpu_concurrency": observed_peak_concurrency(
@@ -374,6 +413,7 @@ def main(
     shard_options = {
         "module3": module3_shards,
         "module4": module4_shards,
+        "module5": module5_shards,
     }
     for shard_module, shard_count in shard_options.items():
         if shard_count != 1 and module != shard_module:
@@ -381,12 +421,17 @@ def main(
                 f"{shard_module}_shards can only be used with {shard_module}"
             )
     selected_shard_count = shard_options.get(module, 1)
+    configured_runner = run_offline_module.with_options(
+        gpu=selected_gpu,
+        max_containers=selected_shard_count,
+        timeout=gpu_timeout_seconds,
+    )
     if selected_shard_count != 1:
         shard_jobs = build_module_shard_jobs(
             module,
             parsed_arguments,
             selected_shard_count,
         )
-        list(run_offline_module.starmap(shard_jobs))
+        list(configured_runner.starmap(shard_jobs))
         return
-    run_offline_module.remote(module, parsed_arguments)
+    configured_runner.remote(module, parsed_arguments)

@@ -169,7 +169,7 @@ def test_modal_runner_parallelizes_module3_across_gpu_containers() -> None:
     source = MODAL_RUNNER.read_text(encoding="utf-8")
 
     assert "module3_shards" in source
-    assert "run_offline_module.starmap" in source
+    assert "configured_runner.starmap" in source
     assert '"--shard-count"' in source
     assert '"--shard-index"' in source
     assert "@modal.concurrent" not in source
@@ -180,16 +180,39 @@ def test_modal_runner_parallelizes_module4_across_gpu_containers() -> None:
     source = MODAL_RUNNER.read_text(encoding="utf-8")
 
     assert "module4_shards" in source
-    assert "run_offline_module.starmap" in source
+    assert "configured_runner.starmap" in source
     assert '"--shard-count"' in source
     assert '"--shard-index"' in source
     assert "max_containers=5" in source
+
+
+def test_modal_runner_parallelizes_module5_across_gpu_containers() -> None:
+    source = MODAL_RUNNER.read_text(encoding="utf-8")
+
+    assert "module5_shards" in source
+    assert 'module not in {"module3", "module4", "module5"}' in source
+    assert '"module5": module5_shards' in source
+    assert "configured_runner.starmap" in source
+    assert '"--shard-count"' in source
+    assert '"--shard-index"' in source
+    assert "max_containers=5" in source
+
+
+def test_modal_runner_supports_dynamic_gpu_and_timeout_cost_cap() -> None:
+    source = MODAL_RUNNER.read_text(encoding="utf-8")
+
+    assert "SUPPORTED_GPU_TYPES" in source
+    assert "gpu_type" in source
+    assert "gpu_timeout_seconds" in source
+    assert "run_offline_module.with_options" in source
+    assert "gpu=selected_gpu" in source
+    assert "timeout=gpu_timeout_seconds" in source
 
 
 def test_modal_runner_has_opt_in_gpu_concurrency_probe() -> None:
     source = MODAL_RUNNER.read_text(encoding="utf-8")
 
     assert "def probe_gpu_slot" in source
-    assert "probe_gpu_slot.starmap" in source
+    assert "configured_probe.starmap" in source
     assert "probe_gpus" in source
     assert "observed_peak_gpu_concurrency" in source
