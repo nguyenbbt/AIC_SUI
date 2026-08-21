@@ -1,6 +1,6 @@
 import os
 import argparse
-from sentence_transformers import SentenceTransformer
+from huggingface_hub import snapshot_download
 
 def download_model(
     model_name: str,
@@ -14,11 +14,10 @@ def download_model(
     os.makedirs(cache_dir, exist_ok=True)
     os.environ['HF_HOME'] = cache_dir
     print(f"Downloading model '{model_name}' to '{cache_dir}'...")
-    # This will download and cache the model
-    SentenceTransformer(
-        model_name,
-        cache_folder=cache_dir,
+    snapshot_download(
+        repo_id=model_name,
         revision=model_revision,
+        cache_dir=cache_dir,
     )
     print("Download complete.")
 
