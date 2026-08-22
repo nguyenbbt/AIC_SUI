@@ -139,6 +139,8 @@ def _validate_vectors(
                 f"{duplicates[:10]}"
             )
         for index, record in enumerate(records):
+            if record.get("_embedding_validated") is True:
+                continue
             try:
                 vector = np.asarray(record["embedding"], dtype=np.float32)
             except (KeyError, TypeError, ValueError):
@@ -162,6 +164,44 @@ def _validate_vectors(
                     f"{stream_name}[{index}] is not L2-normalized"
                 )
     return errors
+
+
+def _validate_and_compact_milvus_record(
+    record: Mapping[str, Any],
+    *,
+    stream_name: str,
+    expected_dimension: int,
+    index: int,
+) -> Dict[str, Any]:
+    """Validate one vector and retain only compact domain fields.
+
+    Full-corpus verification must not retain Python float lists for every
+    vector. The payload is checked while its query batch is live, then removed
+    before the record enters the cross-database snapshot.
+    """
+    try:
+        vector = np.asarray(record["embedding"], dtype=np.float32)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{stream_name}[{index}] has an invalid embedding"
+        ) from exc
+    if vector.shape != (expected_dimension,):
+        raise ValueError(
+            f"{stream_name}[{index}] dimension={vector.size}; "
+            f"expected={expected_dimension}"
+        )
+    if not np.isfinite(vector).all():
+        raise ValueError(
+            f"{stream_name}[{index}] contains non-finite values"
+        )
+    if not np.isclose(np.linalg.norm(vector), 1.0, atol=1e-3):
+        raise ValueError(
+            f"{stream_name}[{index}] is not L2-normalized"
+        )
+    compact = dict(record)
+    compact.pop("embedding", None)
+    compact["_embedding_validated"] = True
+    return compact
 
 
 def _validate_manifest(
@@ -627,6 +667,8 @@ def build_consistency_report(
 def _query_milvus(
     collection_name: str,
     output_fields: List[str],
+    *,
+    expected_dimension: int | None = None,
 ) -> List[Dict]:
     if not utility.has_collection(collection_name, using="verify"):
         return []
@@ -644,7 +686,19 @@ def _query_milvus(
             batch = iterator.next()
             if not batch:
                 break
-            records.extend(batch)
+            if expected_dimension is None:
+                records.extend(batch)
+                continue
+            start_index = len(records)
+            records.extend(
+                _validate_and_compact_milvus_record(
+                    record,
+                    stream_name=collection_name,
+                    expected_dimension=expected_dimension,
+                    index=start_index + offset,
+                )
+                for offset, record in enumerate(batch)
+            )
     finally:
         iterator.close()
     return records
@@ -693,27 +747,34 @@ def collect_milvus_records(
     connections.connect(alias="verify", uri=uri)
     try:
         specifications = {
-            "visual_features": [
+            "visual_features": ([
                 "frame_id",
                 "video_id",
                 "shot_id",
                 "embedding",
-            ],
-            "ocr_features": ["frame_id", "video_id", "embedding"],
-            "asr_features": [
+            ], 512),
+            "ocr_features": (["frame_id", "video_id", "embedding"], 768),
+            "asr_features": ([
                 "video_id",
                 "interval_id",
                 "start_time_sec",
                 "end_time_sec",
                 "embedding",
-            ],
-            "summary_features": ["video_id", "embedding"],
+            ], 768),
+            "summary_features": (["video_id", "embedding"], 768),
         }
         return {
             collection_name: tuple(
-                _query_milvus(collection_name, output_fields)
+                _query_milvus(
+                    collection_name,
+                    output_fields,
+                    expected_dimension=expected_dimension,
+                )
             )
-            for collection_name, output_fields in specifications.items()
+            for collection_name, (
+                output_fields,
+                expected_dimension,
+            ) in specifications.items()
         }
     finally:
         connections.disconnect("verify")

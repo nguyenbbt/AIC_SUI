@@ -20,6 +20,7 @@ from online.testing import (
     build_advanced_runtime_bundle,
 )
 from online.testing.advanced_composition import attach_advanced_fake_modes
+from query_understanding.rewrite import MappingQueryRewriter
 from retrieval_api.composition import (
     RuntimeCompositionConfig,
     build_invocation_configs,
@@ -162,6 +163,47 @@ class RuntimeCompositionTests(unittest.TestCase):
         self.assertEqual(invocation_configs[(RetrievalBranch.VISUAL_DENSE, "q0")].top_k, 7)
         self.assertEqual(invocation_configs[(RetrievalBranch.OCR_DENSE, "q1")].top_k, 11)
         self.assertEqual(invocation_configs[(RetrievalBranch.OCR_BM25, "q0")].timeout_sec, 1.25)
+
+    def test_query_rewriter_reads_explicit_chat_completions_transport(self) -> None:
+        captured: dict[str, object] = {}
+
+        def build_rewriter(**kwargs):
+            captured.update(kwargs)
+            return MappingQueryRewriter({})
+
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "AIC_ONLINE_OPENAI_API_KEY": "test-key",
+                    "AIC_ONLINE_OPENAI_BASE_URL": "https://proxy.test/v1",
+                    "AIC_ONLINE_OPENAI_REWRITE_MODEL": "gpt-5.4-mini",
+                    "AIC_ONLINE_OPENAI_REWRITE_API_MODE": "chat_completions",
+                },
+                clear=True,
+            ),
+            patch(
+                "retrieval_api.composition.OpenAIQueryRewriter",
+                side_effect=build_rewriter,
+            ),
+        ):
+            runtime = build_online_runtime(
+                data_config=OnlineDataConfig(
+                    dataset=DatasetResourceConfig(manifest_required=False)
+                ),
+                runtime_config=RuntimeCompositionConfig(query_rewrite_enabled=True),
+                milvus=ManagedMilvus(),
+                elasticsearch=ManagedElasticsearch(),
+                metadata=FakeMetadataReaderPort(()),
+                object_reader=FakeObjectReaderPort({}),
+                visual_encoder=FakeTextEncoder(dimension=4),
+                vietnamese_encoder=FakeTextEncoder(dimension=4),
+            )
+            runtime.close()
+
+        self.assertEqual(captured["base_url"], "https://proxy.test/v1")
+        self.assertEqual(captured["model"], "gpt-5.4-mini")
+        self.assertEqual(captured["api_mode"], "chat_completions")
 
     def test_runtime_build_does_not_connect_until_lifespan_start(self) -> None:
         runtime, milvus, elasticsearch = runtime_with_fakes()

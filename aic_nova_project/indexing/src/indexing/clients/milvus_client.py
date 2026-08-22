@@ -211,7 +211,12 @@ class MilvusVectorClient:
             )
 
     def insert_batch(
-        self, collection_name: str, records: List[Dict[str, Any]], dim: int
+        self,
+        collection_name: str,
+        records: List[Dict[str, Any]],
+        dim: int,
+        *,
+        flush: bool = True,
     ) -> int:
         """
         Inserts a batch of records into the specified collection.
@@ -230,8 +235,18 @@ class MilvusVectorClient:
             columns[key] = [r[key] for r in records]
 
         result = collection.insert(list(columns.values()), fields=list(columns.keys()))
-        collection.flush()
+        if flush:
+            collection.flush()
         return result.insert_count
+
+    def flush_collections(self, collection_names: List[str]) -> None:
+        """Make deferred fresh-rebuild inserts durable and searchable."""
+        for name in collection_names:
+            if not utility.has_collection(name, using=self.alias):
+                raise ValueError(
+                    f"Cannot flush missing Milvus collection '{name}'."
+                )
+            Collection(name, using=self.alias).flush()
 
     def delete_by_video_id(self, collection_name: str, video_id: str):
         """Delete all entities for a given video_id from a collection."""

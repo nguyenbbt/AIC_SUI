@@ -18,6 +18,7 @@ from query_understanding.rewrite import QueryRewriteRequest, RewritePurpose
 
 def test_openai_rewriter_uses_structured_responses_output() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/responses"
         payload = json.loads(request.content)
         assert payload["model"] == DEFAULT_REWRITE_MODEL
         assert payload["reasoning"] == {"effort": "none"}
@@ -35,6 +36,57 @@ def test_openai_rewriter_uses_structured_responses_output() -> None:
     assert result.primary_text == "một người đứng cạnh ô tô"
     assert result.paraphrases == ()
     assert result.model_id == DEFAULT_REWRITE_MODEL
+
+
+def test_openai_rewriter_supports_structured_chat_completions_output() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/chat/completions"
+        payload = json.loads(request.content)
+        assert payload["model"] == "gpt-5.4-mini"
+        assert payload["messages"][0]["role"] == "system"
+        assert payload["messages"][1] == {
+            "role": "user",
+            "content": "người cạnh ô tô",
+        }
+        assert payload["response_format"]["json_schema"]["schema"]["required"] == [
+            "primary_text"
+        ]
+        assert payload["max_completion_tokens"] == 256
+        content = json.dumps({"primary_text": "một người đứng cạnh ô tô"})
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": content}}]},
+        )
+
+    async def run():
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            base_url="https://example.test",
+        )
+        adapter = OpenAIQueryRewriter(
+            api_key="test-key",
+            model="gpt-5.4-mini",
+            api_mode="chat_completions",
+            client=client,
+        )
+        result = await adapter.rewrite(
+            QueryRewriteRequest(
+                request_id="r-chat",
+                purpose=RewritePurpose.KIS,
+                text="người cạnh ô tô",
+            )
+        )
+        await client.aclose()
+        return result
+
+    result = asyncio.run(run())
+    assert result.primary_text == "một người đứng cạnh ô tô"
+    assert result.model_id == "gpt-5.4-mini"
+
+
+def test_openai_rewriter_rejects_unknown_api_mode() -> None:
+    with pytest.raises(ValueError, match="api_mode"):
+        OpenAIQueryRewriter(api_key="test-key", api_mode="automatic")
 
 
 def test_qwen_vlm_sends_resized_local_evidence_and_validates_grounding(tmp_path: Path) -> None:

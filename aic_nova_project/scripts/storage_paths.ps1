@@ -19,6 +19,47 @@ function Get-AicDotEnvValue {
     return (($matches[0] -split "=", 2)[1]).Trim().Trim('"').Trim("'")
 }
 
+function Set-AicDotEnvValue {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][ValidatePattern("^[A-Z][A-Z0-9_]*$")]
+        [string]$Name,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Value
+    )
+    $lines = if (Test-Path -LiteralPath $Path -PathType Leaf) {
+        @(Get-Content -LiteralPath $Path)
+    } else {
+        @()
+    }
+    $pattern = "^\s*$([regex]::Escape($Name))\s*="
+    $indexes = @(
+        for ($index = 0; $index -lt $lines.Count; $index++) {
+            if ($lines[$index] -match $pattern) {
+                $index
+            }
+        }
+    )
+    if ($indexes.Count -gt 1) {
+        throw "Duplicate $Name entries in $Path"
+    }
+
+    $entry = "${Name}=${Value}"
+    if ($indexes.Count -eq 1) {
+        $lines[$indexes[0]] = $entry
+    } else {
+        $lines += $entry
+    }
+
+    $parent = Split-Path -Parent $Path
+    if (-not [string]::IsNullOrWhiteSpace($parent)) {
+        [System.IO.Directory]::CreateDirectory($parent) | Out-Null
+    }
+    $temporary = "${Path}.tmp-$PID-$([guid]::NewGuid().ToString('N'))"
+    $encoding = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllLines($temporary, $lines, $encoding)
+    Move-Item -LiteralPath $temporary -Destination $Path -Force
+}
+
 function Resolve-AicLocalDataRoot {
     param(
         [string]$ExplicitStorageRoot = "",

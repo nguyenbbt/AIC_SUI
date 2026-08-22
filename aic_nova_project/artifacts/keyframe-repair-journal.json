@@ -1,0 +1,753 @@
+{
+  "status": "PASS",
+  "backup_root": "E:\\DATA AIC\\modal_backup_safe",
+  "raw_root": "E:\\DATA AIC\\raw_videos",
+  "report": "D:\\Project\\AI Challenge 2026\\aic_nova_project\\artifacts\\keyframe-backup-verification.json",
+  "video_count": 106,
+  "target_count": 28893,
+  "videos": {
+    "L22_V016": {
+      "status": "PASS",
+      "video_id": "L22_V016",
+      "repaired": 1,
+      "skipped": 0,
+      "duration_sec": 0.1538564000002225
+    },
+    "L21_V001": {
+      "status": "PASS",
+      "video_id": "L21_V001",
+      "repaired": 2,
+      "skipped": 0,
+      "duration_sec": 0.2747063999995589
+    },
+    "L24_V043": {
+      "status": "PASS",
+      "video_id": "L24_V043",
+      "repaired": 1,
+      "skipped": 0,
+      "duration_sec": 0.17750650000016321
+    },
+    "L26_V262": {
+      "status": "PASS",
+      "video_id": "L26_V262",
+      "repaired": 168,
+      "skipped": 0,
+      "duration_sec": 14.595215099998313
+    },
+    "L26_V261": {
+      "status": "PASS",
+      "video_id": "L26_V261",
+      "repaired": 308,
+      "skipped": 0,
+      "duration_sec": 27.791370499999175
+    },
+    "L26_V263": {
+      "status": "PASS",
+      "video_id": "L26_V263",
+      "repaired": 278,
+      "skipped": 0,
+      "duration_sec": 23.93346340000062
+    },
+    "L26_V264": {
+      "status": "PASS",
+      "video_id": "L26_V264",
+      "repaired": 274,
+      "skipped": 0,
+      "duration_sec": 24.388143600001058
+    },
+    "L26_V265": {
+      "status": "PASS",
+      "video_id": "L26_V265",
+      "repaired": 283,
+      "skipped": 0,
+      "duration_sec": 24.630548299999646
+    },
+    "L26_V267": {
+      "status": "PASS",
+      "video_id": "L26_V267",
+      "repaired": 333,
+      "skipped": 0,
+      "duration_sec": 28.83717390000311
+    },
+    "L26_V268": {
+      "status": "PASS",
+      "video_id": "L26_V268",
+      "repaired": 348,
+      "skipped": 0,
+      "duration_sec": 29.824655000000348
+    },
+    "L26_V269": {
+      "status": "PASS",
+      "video_id": "L26_V269",
+      "repaired": 311,
+      "skipped": 0,
+      "duration_sec": 25.997938200001954
+    },
+    "L26_V271": {
+      "status": "PASS",
+      "video_id": "L26_V271",
+      "repaired": 278,
+      "skipped": 0,
+      "duration_sec": 23.689488100000744
+    },
+    "L26_V272": {
+      "status": "PASS",
+      "video_id": "L26_V272",
+      "repaired": 334,
+      "skipped": 0,
+      "duration_sec": 27.84030679999705
+    },
+    "L26_V274": {
+      "status": "PASS",
+      "video_id": "L26_V274",
+      "repaired": 303,
+      "skipped": 0,
+      "duration_sec": 25.564771499997732
+    },
+    "L26_V277": {
+      "status": "PASS",
+      "video_id": "L26_V277",
+      "repaired": 189,
+      "skipped": 0,
+      "duration_sec": 16.509143300001597
+    },
+    "L26_V276": {
+      "status": "PASS",
+      "video_id": "L26_V276",
+      "repaired": 323,
+      "skipped": 0,
+      "duration_sec": 27.33826870000121
+    },
+    "L26_V278": {
+      "status": "PASS",
+      "video_id": "L26_V278",
+      "repaired": 297,
+      "skipped": 0,
+      "duration_sec": 25.31404779999866
+    },
+    "L26_V280": {
+      "status": "PASS",
+      "video_id": "L26_V280",
+      "repaired": 280,
+      "skipped": 0,
+      "duration_sec": 24.220745499998884
+    },
+    "L26_V282": {
+      "status": "PASS",
+      "video_id": "L26_V282",
+      "repaired": 238,
+      "skipped": 0,
+      "duration_sec": 21.252620899998874
+    },
+    "L26_V283": {
+      "status": "PASS",
+      "video_id": "L26_V283",
+      "repaired": 285,
+      "skipped": 0,
+      "duration_sec": 24.462401100001443
+    },
+    "L26_V284": {
+      "status": "PASS",
+      "video_id": "L26_V284",
+      "repaired": 287,
+      "skipped": 0,
+      "duration_sec": 25.58325429999968
+    },
+    "L26_V286": {
+      "status": "PASS",
+      "video_id": "L26_V286",
+      "repaired": 250,
+      "skipped": 0,
+      "duration_sec": 21.25574410000263
+    },
+    "L26_V287": {
+      "status": "PASS",
+      "video_id": "L26_V287",
+      "repaired": 229,
+      "skipped": 0,
+      "duration_sec": 20.507290499997907
+    },
+    "L26_V288": {
+      "status": "PASS",
+      "video_id": "L26_V288",
+      "repaired": 247,
+      "skipped": 0,
+      "duration_sec": 21.841834599999856
+    },
+    "L26_V289": {
+      "status": "PASS",
+      "video_id": "L26_V289",
+      "repaired": 241,
+      "skipped": 0,
+      "duration_sec": 20.751991699999053
+    },
+    "L26_V290": {
+      "status": "PASS",
+      "video_id": "L26_V290",
+      "repaired": 291,
+      "skipped": 0,
+      "duration_sec": 25.419262399998843
+    },
+    "L26_V291": {
+      "status": "PASS",
+      "video_id": "L26_V291",
+      "repaired": 165,
+      "skipped": 0,
+      "duration_sec": 13.940637799998512
+    },
+    "L26_V292": {
+      "status": "PASS",
+      "video_id": "L26_V292",
+      "repaired": 308,
+      "skipped": 0,
+      "duration_sec": 26.490961600000446
+    },
+    "L26_V293": {
+      "status": "PASS",
+      "video_id": "L26_V293",
+      "repaired": 271,
+      "skipped": 0,
+      "duration_sec": 23.228189200002817
+    },
+    "L26_V294": {
+      "status": "PASS",
+      "video_id": "L26_V294",
+      "repaired": 259,
+      "skipped": 0,
+      "duration_sec": 22.589137899998605
+    },
+    "L26_V295": {
+      "status": "PASS",
+      "video_id": "L26_V295",
+      "repaired": 286,
+      "skipped": 0,
+      "duration_sec": 25.146364399999584
+    },
+    "L26_V296": {
+      "status": "PASS",
+      "video_id": "L26_V296",
+      "repaired": 331,
+      "skipped": 0,
+      "duration_sec": 26.9732769000002
+    },
+    "L26_V297": {
+      "status": "PASS",
+      "video_id": "L26_V297",
+      "repaired": 257,
+      "skipped": 0,
+      "duration_sec": 21.850171000001865
+    },
+    "L26_V299": {
+      "status": "PASS",
+      "video_id": "L26_V299",
+      "repaired": 269,
+      "skipped": 0,
+      "duration_sec": 22.933637400001317
+    },
+    "L26_V298": {
+      "status": "PASS",
+      "video_id": "L26_V298",
+      "repaired": 311,
+      "skipped": 0,
+      "duration_sec": 26.5158128999974
+    },
+    "L26_V300": {
+      "status": "PASS",
+      "video_id": "L26_V300",
+      "repaired": 277,
+      "skipped": 0,
+      "duration_sec": 23.73543289999725
+    },
+    "L26_V301": {
+      "status": "PASS",
+      "video_id": "L26_V301",
+      "repaired": 265,
+      "skipped": 0,
+      "duration_sec": 22.985312999997404
+    },
+    "L26_V302": {
+      "status": "PASS",
+      "video_id": "L26_V302",
+      "repaired": 310,
+      "skipped": 0,
+      "duration_sec": 25.627261899997393
+    },
+    "L26_V303": {
+      "status": "PASS",
+      "video_id": "L26_V303",
+      "repaired": 330,
+      "skipped": 0,
+      "duration_sec": 27.910781000002316
+    },
+    "L26_V304": {
+      "status": "PASS",
+      "video_id": "L26_V304",
+      "repaired": 229,
+      "skipped": 0,
+      "duration_sec": 19.40105389999735
+    },
+    "L26_V305": {
+      "status": "PASS",
+      "video_id": "L26_V305",
+      "repaired": 276,
+      "skipped": 0,
+      "duration_sec": 23.397901500000444
+    },
+    "L26_V306": {
+      "status": "PASS",
+      "video_id": "L26_V306",
+      "repaired": 252,
+      "skipped": 0,
+      "duration_sec": 21.31410120000146
+    },
+    "L26_V307": {
+      "status": "PASS",
+      "video_id": "L26_V307",
+      "repaired": 283,
+      "skipped": 0,
+      "duration_sec": 24.281380299999
+    },
+    "L26_V308": {
+      "status": "PASS",
+      "video_id": "L26_V308",
+      "repaired": 283,
+      "skipped": 0,
+      "duration_sec": 25.322089499997674
+    },
+    "L26_V310": {
+      "status": "PASS",
+      "video_id": "L26_V310",
+      "repaired": 260,
+      "skipped": 0,
+      "duration_sec": 22.29546869999831
+    },
+    "L26_V311": {
+      "status": "PASS",
+      "video_id": "L26_V311",
+      "repaired": 284,
+      "skipped": 0,
+      "duration_sec": 24.419611699999223
+    },
+    "L26_V312": {
+      "status": "PASS",
+      "video_id": "L26_V312",
+      "repaired": 297,
+      "skipped": 0,
+      "duration_sec": 25.012725699998555
+    },
+    "L26_V314": {
+      "status": "PASS",
+      "video_id": "L26_V314",
+      "repaired": 268,
+      "skipped": 0,
+      "duration_sec": 23.319130399999267
+    },
+    "L26_V315": {
+      "status": "PASS",
+      "video_id": "L26_V315",
+      "repaired": 254,
+      "skipped": 0,
+      "duration_sec": 23.177492400001938
+    },
+    "L26_V316": {
+      "status": "PASS",
+      "video_id": "L26_V316",
+      "repaired": 276,
+      "skipped": 0,
+      "duration_sec": 23.84535689999757
+    },
+    "L26_V317": {
+      "status": "PASS",
+      "video_id": "L26_V317",
+      "repaired": 281,
+      "skipped": 0,
+      "duration_sec": 24.214455900000758
+    },
+    "L26_V318": {
+      "status": "PASS",
+      "video_id": "L26_V318",
+      "repaired": 350,
+      "skipped": 0,
+      "duration_sec": 29.27887319999718
+    },
+    "L26_V319": {
+      "status": "PASS",
+      "video_id": "L26_V319",
+      "repaired": 249,
+      "skipped": 0,
+      "duration_sec": 21.910022500000196
+    },
+    "L26_V321": {
+      "status": "PASS",
+      "video_id": "L26_V321",
+      "repaired": 283,
+      "skipped": 0,
+      "duration_sec": 24.141208400000323
+    },
+    "L26_V320": {
+      "status": "PASS",
+      "video_id": "L26_V320",
+      "repaired": 367,
+      "skipped": 0,
+      "duration_sec": 30.60624749999988
+    },
+    "L26_V323": {
+      "status": "PASS",
+      "video_id": "L26_V323",
+      "repaired": 275,
+      "skipped": 0,
+      "duration_sec": 24.074499899998045
+    },
+    "L26_V324": {
+      "status": "PASS",
+      "video_id": "L26_V324",
+      "repaired": 305,
+      "skipped": 0,
+      "duration_sec": 25.768455500001437
+    },
+    "L26_V325": {
+      "status": "PASS",
+      "video_id": "L26_V325",
+      "repaired": 259,
+      "skipped": 0,
+      "duration_sec": 22.153559700000187
+    },
+    "L26_V326": {
+      "status": "PASS",
+      "video_id": "L26_V326",
+      "repaired": 285,
+      "skipped": 0,
+      "duration_sec": 24.896471799998835
+    },
+    "L26_V327": {
+      "status": "PASS",
+      "video_id": "L26_V327",
+      "repaired": 317,
+      "skipped": 0,
+      "duration_sec": 27.62080160000187
+    },
+    "L26_V328": {
+      "status": "PASS",
+      "video_id": "L26_V328",
+      "repaired": 297,
+      "skipped": 0,
+      "duration_sec": 24.67173339999863
+    },
+    "L26_V329": {
+      "status": "PASS",
+      "video_id": "L26_V329",
+      "repaired": 317,
+      "skipped": 0,
+      "duration_sec": 27.517321299998002
+    },
+    "L26_V330": {
+      "status": "PASS",
+      "video_id": "L26_V330",
+      "repaired": 296,
+      "skipped": 0,
+      "duration_sec": 26.1862586999996
+    },
+    "L26_V331": {
+      "status": "PASS",
+      "video_id": "L26_V331",
+      "repaired": 242,
+      "skipped": 0,
+      "duration_sec": 20.91979889999857
+    },
+    "L26_V333": {
+      "status": "PASS",
+      "video_id": "L26_V333",
+      "repaired": 319,
+      "skipped": 0,
+      "duration_sec": 27.406015399999887
+    },
+    "L26_V334": {
+      "status": "PASS",
+      "video_id": "L26_V334",
+      "repaired": 270,
+      "skipped": 0,
+      "duration_sec": 23.78543880000143
+    },
+    "L26_V335": {
+      "status": "PASS",
+      "video_id": "L26_V335",
+      "repaired": 285,
+      "skipped": 0,
+      "duration_sec": 24.292327999999543
+    },
+    "L26_V336": {
+      "status": "PASS",
+      "video_id": "L26_V336",
+      "repaired": 349,
+      "skipped": 0,
+      "duration_sec": 29.242231200001697
+    },
+    "L26_V338": {
+      "status": "PASS",
+      "video_id": "L26_V338",
+      "repaired": 308,
+      "skipped": 0,
+      "duration_sec": 26.09953999999925
+    },
+    "L26_V340": {
+      "status": "PASS",
+      "video_id": "L26_V340",
+      "repaired": 268,
+      "skipped": 0,
+      "duration_sec": 23.073139699998137
+    },
+    "L26_V342": {
+      "status": "PASS",
+      "video_id": "L26_V342",
+      "repaired": 315,
+      "skipped": 0,
+      "duration_sec": 27.35051210000165
+    },
+    "L26_V344": {
+      "status": "PASS",
+      "video_id": "L26_V344",
+      "repaired": 269,
+      "skipped": 0,
+      "duration_sec": 23.308427500000107
+    },
+    "L26_V346": {
+      "status": "PASS",
+      "video_id": "L26_V346",
+      "repaired": 351,
+      "skipped": 0,
+      "duration_sec": 30.18420089999927
+    },
+    "L26_V347": {
+      "status": "PASS",
+      "video_id": "L26_V347",
+      "repaired": 300,
+      "skipped": 0,
+      "duration_sec": 27.612373600000865
+    },
+    "L26_V348": {
+      "status": "PASS",
+      "video_id": "L26_V348",
+      "repaired": 329,
+      "skipped": 0,
+      "duration_sec": 27.159987800001545
+    },
+    "L26_V349": {
+      "status": "PASS",
+      "video_id": "L26_V349",
+      "repaired": 292,
+      "skipped": 0,
+      "duration_sec": 25.265314000000217
+    },
+    "L26_V350": {
+      "status": "PASS",
+      "video_id": "L26_V350",
+      "repaired": 315,
+      "skipped": 0,
+      "duration_sec": 26.800753800001985
+    },
+    "L26_V351": {
+      "status": "PASS",
+      "video_id": "L26_V351",
+      "repaired": 267,
+      "skipped": 0,
+      "duration_sec": 22.81424049999987
+    },
+    "L26_V353": {
+      "status": "PASS",
+      "video_id": "L26_V353",
+      "repaired": 287,
+      "skipped": 0,
+      "duration_sec": 24.57104419999814
+    },
+    "L26_V354": {
+      "status": "PASS",
+      "video_id": "L26_V354",
+      "repaired": 322,
+      "skipped": 0,
+      "duration_sec": 27.452914299999975
+    },
+    "L26_V355": {
+      "status": "PASS",
+      "video_id": "L26_V355",
+      "repaired": 252,
+      "skipped": 0,
+      "duration_sec": 22.163302299999486
+    },
+    "L26_V356": {
+      "status": "PASS",
+      "video_id": "L26_V356",
+      "repaired": 327,
+      "skipped": 0,
+      "duration_sec": 28.41294000000198
+    },
+    "L26_V357": {
+      "status": "PASS",
+      "video_id": "L26_V357",
+      "repaired": 198,
+      "skipped": 0,
+      "duration_sec": 17.549435100001574
+    },
+    "L26_V358": {
+      "status": "PASS",
+      "video_id": "L26_V358",
+      "repaired": 310,
+      "skipped": 0,
+      "duration_sec": 26.844594700000016
+    },
+    "L26_V359": {
+      "status": "PASS",
+      "video_id": "L26_V359",
+      "repaired": 271,
+      "skipped": 0,
+      "duration_sec": 23.27653370000189
+    },
+    "L26_V360": {
+      "status": "PASS",
+      "video_id": "L26_V360",
+      "repaired": 274,
+      "skipped": 0,
+      "duration_sec": 23.613070600000356
+    },
+    "L26_V361": {
+      "status": "PASS",
+      "video_id": "L26_V361",
+      "repaired": 310,
+      "skipped": 0,
+      "duration_sec": 27.800222399997438
+    },
+    "L26_V363": {
+      "status": "PASS",
+      "video_id": "L26_V363",
+      "repaired": 185,
+      "skipped": 0,
+      "duration_sec": 17.189042599999084
+    },
+    "L26_V364": {
+      "status": "PASS",
+      "video_id": "L26_V364",
+      "repaired": 291,
+      "skipped": 0,
+      "duration_sec": 25.61576409999907
+    },
+    "L26_V365": {
+      "status": "PASS",
+      "video_id": "L26_V365",
+      "repaired": 313,
+      "skipped": 0,
+      "duration_sec": 27.13967699999921
+    },
+    "L26_V366": {
+      "status": "PASS",
+      "video_id": "L26_V366",
+      "repaired": 309,
+      "skipped": 0,
+      "duration_sec": 25.570259199997963
+    },
+    "L26_V367": {
+      "status": "PASS",
+      "video_id": "L26_V367",
+      "repaired": 289,
+      "skipped": 0,
+      "duration_sec": 26.349992600000405
+    },
+    "L26_V368": {
+      "status": "PASS",
+      "video_id": "L26_V368",
+      "repaired": 292,
+      "skipped": 0,
+      "duration_sec": 24.76578309999968
+    },
+    "L26_V369": {
+      "status": "PASS",
+      "video_id": "L26_V369",
+      "repaired": 237,
+      "skipped": 0,
+      "duration_sec": 20.520859899999778
+    },
+    "L26_V370": {
+      "status": "PASS",
+      "video_id": "L26_V370",
+      "repaired": 283,
+      "skipped": 0,
+      "duration_sec": 24.470429999997577
+    },
+    "L26_V371": {
+      "status": "PASS",
+      "video_id": "L26_V371",
+      "repaired": 281,
+      "skipped": 0,
+      "duration_sec": 24.09047020000071
+    },
+    "L26_V372": {
+      "status": "PASS",
+      "video_id": "L26_V372",
+      "repaired": 239,
+      "skipped": 0,
+      "duration_sec": 21.671900299999834
+    },
+    "L26_V373": {
+      "status": "PASS",
+      "video_id": "L26_V373",
+      "repaired": 234,
+      "skipped": 0,
+      "duration_sec": 20.198748999999225
+    },
+    "L26_V374": {
+      "status": "PASS",
+      "video_id": "L26_V374",
+      "repaired": 173,
+      "skipped": 0,
+      "duration_sec": 15.86944030000086
+    },
+    "L26_V376": {
+      "status": "PASS",
+      "video_id": "L26_V376",
+      "repaired": 243,
+      "skipped": 0,
+      "duration_sec": 21.38618420000057
+    },
+    "L26_V377": {
+      "status": "PASS",
+      "video_id": "L26_V377",
+      "repaired": 277,
+      "skipped": 0,
+      "duration_sec": 23.80328549999831
+    },
+    "L26_V378": {
+      "status": "PASS",
+      "video_id": "L26_V378",
+      "repaired": 273,
+      "skipped": 0,
+      "duration_sec": 23.44636569999784
+    },
+    "L26_V379": {
+      "status": "PASS",
+      "video_id": "L26_V379",
+      "repaired": 272,
+      "skipped": 0,
+      "duration_sec": 24.076496400000906
+    },
+    "L26_V380": {
+      "status": "PASS",
+      "video_id": "L26_V380",
+      "repaired": 239,
+      "skipped": 0,
+      "duration_sec": 21.15342679999958
+    },
+    "L26_V381": {
+      "status": "PASS",
+      "video_id": "L26_V381",
+      "repaired": 310,
+      "skipped": 0,
+      "duration_sec": 26.378627099998994
+    },
+    "L26_V382": {
+      "status": "PASS",
+      "video_id": "L26_V382",
+      "repaired": 262,
+      "skipped": 0,
+      "duration_sec": 22.608750499999587
+    }
+  },
+  "failure_count": 0
+}

@@ -66,6 +66,40 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Force re-processing of all videos",
     )
+    parser.add_argument(
+        "--bulk-rebuild",
+        action="store_true",
+        help=(
+            "Defer Milvus flush and Elasticsearch refresh during a fresh "
+            "full rebuild; requires --reset-all"
+        ),
+    )
+    parser.add_argument(
+        "--video-id",
+        dest="video_ids",
+        action="append",
+        help=(
+            "Process only this discovered video ID. Repeat the option to "
+            "repair multiple videos without scanning/replacing the corpus."
+        ),
+    )
+    parser.add_argument(
+        "--finalize",
+        action="store_true",
+        help=(
+            "Flush all Milvus collections and refresh all Elasticsearch "
+            "indices after a successful run."
+        ),
+    )
+    parser.add_argument(
+        "--unpublished-repair",
+        action="store_true",
+        help=(
+            "Repair selected video IDs in an unpublished candidate without "
+            "capturing per-video snapshots; requires --video-id and "
+            "--finalize, and must be followed by full contract validation."
+        ),
+    )
 
     return parser
 
@@ -90,6 +124,10 @@ def main():
         data_dir=args.data_dir,
         force=args.force,
         reset_all=args.reset_all,
+        bulk_rebuild=args.bulk_rebuild,
+        video_ids=args.video_ids,
+        finalize=args.finalize,
+        unpublished_repair=args.unpublished_repair,
     )
 
 

@@ -195,7 +195,12 @@ class ESClient:
         self._create_index_if_not_exists(SUMMARY_INDEX, SUMMARY_MAPPING)
 
     def bulk_index(
-        self, index_name: str, documents: List[Dict[str, Any]], id_field: str
+        self,
+        index_name: str,
+        documents: List[Dict[str, Any]],
+        id_field: str,
+        *,
+        refresh: str | bool = "wait_for",
     ) -> int:
         """
         Bulk-indexes documents into the specified index.
@@ -222,7 +227,7 @@ class ESClient:
             self.client,
             actions,
             raise_on_error=False,
-            refresh="wait_for",
+            refresh=refresh,
         )
         if errors:
             raise RuntimeError(
@@ -235,6 +240,15 @@ class ESClient:
                 f"{success_count}/{len(documents)} documents."
             )
         return success_count
+
+    def refresh_indices(self, index_names: List[str]) -> None:
+        """Expose documents written with deferred refresh."""
+        for name in index_names:
+            if not self.client.indices.exists(index=name):
+                raise ValueError(
+                    f"Cannot refresh missing Elasticsearch index '{name}'."
+                )
+            self.client.indices.refresh(index=name)
 
     def delete_by_video_id(self, index_name: str, video_id: str):
         """Delete all documents matching video_id from an index."""

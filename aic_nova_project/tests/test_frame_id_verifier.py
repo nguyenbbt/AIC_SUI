@@ -14,6 +14,7 @@ from verify_frame_id_consistency import (
     collect_sqlite_records,
     main,
     record_counts,
+    _validate_and_compact_milvus_record,
 )
 import verify_frame_id_consistency as verifier_module
 
@@ -51,6 +52,38 @@ def test_verifier_accepts_joinable_records_across_all_backends():
     )
 
     assert build_consistency_report(snapshot) == []
+
+
+def test_streaming_milvus_validation_discards_vector_payload() -> None:
+    compact = _validate_and_compact_milvus_record(
+        {
+            "frame_id": "V001_00000_015",
+            "video_id": "V001",
+            "embedding": [1.0, 0.0],
+        },
+        stream_name="visual_features",
+        expected_dimension=2,
+        index=0,
+    )
+
+    assert "embedding" not in compact
+    assert compact["_embedding_validated"] is True
+
+
+def test_streaming_milvus_validation_rejects_invalid_vector() -> None:
+    with np.testing.assert_raises_regex(
+        ValueError,
+        "not L2-normalized",
+    ):
+        _validate_and_compact_milvus_record(
+            {
+                "frame_id": "V001_00000_015",
+                "embedding": [2.0, 0.0],
+            },
+            stream_name="visual_features",
+            expected_dimension=2,
+            index=0,
+        )
 
 
 def _full_snapshot(tmp_path) -> FullVerificationSnapshot:

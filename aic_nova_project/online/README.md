@@ -102,8 +102,12 @@ inject another validated `VLMPort`. Startup still fails closed when VQA is
 enabled but neither choice is present.
 
 Optional KIS/VQA rewrite uses OpenAI Responses structured output with
-`gpt-5.4-mini-2026-03-17`. Set `AIC_ONLINE_QUERY_REWRITE_ENABLED=true` and
+`gpt-5.4-mini-2026-03-17` by default. OpenAI-compatible proxies that only
+provide Chat Completions can set
+`AIC_ONLINE_OPENAI_REWRITE_API_MODE=chat_completions` and their advertised
+model alias. Set `AIC_ONLINE_QUERY_REWRITE_ENABLED=true` and
 `AIC_ONLINE_OPENAI_API_KEY`; provider failure safely retains the original q0.
+The transport is explicit and never retries through another paid endpoint.
 The key is read from environment only and is never returned by diagnostics.
 
 Production mode requires the manifest gate and a pinned

@@ -12,7 +12,7 @@ import logging
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 from tqdm import tqdm
@@ -485,18 +485,55 @@ class IndexingOrchestrator:
         index_name: str,
         documents: list,
         id_field: str,
+        *,
+        refresh: str | bool = "wait_for",
     ) -> None:
         """Require Elasticsearch to acknowledge every document in a batch."""
-        inserted_count = self.es.bulk_index(
-            index_name,
-            documents,
-            id_field=id_field,
-        )
+        if refresh == "wait_for":
+            inserted_count = self.es.bulk_index(
+                index_name,
+                documents,
+                id_field=id_field,
+            )
+        else:
+            inserted_count = self.es.bulk_index(
+                index_name,
+                documents,
+                id_field=id_field,
+                refresh=refresh,
+            )
         if inserted_count != len(documents):
             raise RuntimeError(
                 f"Elasticsearch indexed {inserted_count}/"
                 f"{len(documents)} documents into {index_name}."
             )
+
+    def _insert_milvus_exact(
+        self,
+        collection_name: str,
+        records: list,
+        dimension: int,
+        *,
+        defer_flush: bool,
+    ) -> None:
+        if defer_flush:
+            inserted_count = self.milvus.insert_batch(
+                collection_name,
+                records,
+                dimension,
+                flush=False,
+            )
+            if inserted_count != len(records):
+                raise RuntimeError(
+                    f"Milvus inserted {inserted_count}/"
+                    f"{len(records)} records into {collection_name}."
+                )
+            return
+        self.milvus.insert_batch(
+            collection_name,
+            records,
+            dimension,
+        )
 
     def process_video(
         self,
@@ -506,6 +543,8 @@ class IndexingOrchestrator:
         text_dim: Optional[int],
         ocr_dim: Optional[int] = None,
         force: bool = False,
+        bulk_rebuild: bool = False,
+        unpublished_repair: bool = False,
     ) -> bool:
         """
         Process a single video: load data → delete old → insert Milvus →
@@ -552,18 +591,24 @@ class IndexingOrchestrator:
             )
             return False
 
-        try:
-            # A complete snapshot is mandatory before any destructive cleanup.
-            snapshot = self._capture_snapshot(video_id)
-        except Exception:
-            logger.exception(
-                "Could not snapshot existing data for %s; replacement "
-                "was aborted before delete.",
-                video_id,
-            )
-            return False
+        snapshot = None
+        if not bulk_rebuild and not unpublished_repair:
+            try:
+                # A complete snapshot is mandatory before destructive cleanup.
+                snapshot = self._capture_snapshot(video_id)
+            except Exception:
+                logger.exception(
+                    "Could not snapshot existing data for %s; replacement "
+                    "was aborted before delete.",
+                    video_id,
+                )
+                return False
 
-        if not force and self._snapshot_matches_inputs(
+        if (
+            not bulk_rebuild
+            and not unpublished_repair
+            and not force
+            and self._snapshot_matches_inputs(
             snapshot,
             visual_records=visual_records,
             asr_emb_records=asr_emb_records,
@@ -575,6 +620,7 @@ class IndexingOrchestrator:
             metadata_records=metadata_records,
             object_records=object_records,
             video_record=video_record,
+            )
         ):
             logger.info(
                 "Skipping %s because all indexed record identities match. "
@@ -585,27 +631,43 @@ class IndexingOrchestrator:
 
         try:
             # ===== PHASE 1: Delete old records (idempotent cleanup) =====
-            self._delete_video_from_all(video_id)
+            if not bulk_rebuild:
+                self._delete_video_from_all(video_id)
 
             # ===== PHASE 2: Insert into Milvus =====
             if visual_records and visual_dim:
                 self._insert_batched(
                     visual_records,
-                    lambda batch: self.milvus.insert_batch(VISUAL_COLLECTION, batch, visual_dim),
+                    lambda batch: self._insert_milvus_exact(
+                        VISUAL_COLLECTION,
+                        batch,
+                        visual_dim,
+                        defer_flush=bulk_rebuild,
+                    ),
                     self.batch_size,
                 )
 
             if asr_emb_records and text_dim:
                 self._insert_batched(
                     asr_emb_records,
-                    lambda batch: self.milvus.insert_batch(ASR_COLLECTION, batch, text_dim),
+                    lambda batch: self._insert_milvus_exact(
+                        ASR_COLLECTION,
+                        batch,
+                        text_dim,
+                        defer_flush=bulk_rebuild,
+                    ),
                     self.batch_size,
                 )
 
             if summary_emb_records and text_dim:
                 self._insert_batched(
                     summary_emb_records,
-                    lambda batch: self.milvus.insert_batch(SUMMARY_COLLECTION, batch, text_dim),
+                    lambda batch: self._insert_milvus_exact(
+                        SUMMARY_COLLECTION,
+                        batch,
+                        text_dim,
+                        defer_flush=bulk_rebuild,
+                    ),
                     self.batch_size,
                 )
 
@@ -613,7 +675,12 @@ class IndexingOrchestrator:
             if ocr_emb_records and effective_ocr_dim:
                 self._insert_batched(
                     ocr_emb_records,
-                    lambda batch: self.milvus.insert_batch(OCR_COLLECTION, batch, effective_ocr_dim),
+                    lambda batch: self._insert_milvus_exact(
+                        OCR_COLLECTION,
+                        batch,
+                        effective_ocr_dim,
+                        defer_flush=bulk_rebuild,
+                    ),
                     self.batch_size,
                 )
 
@@ -625,6 +692,7 @@ class IndexingOrchestrator:
                         OCR_INDEX,
                         batch,
                         id_field="frame_id",
+                        refresh=(False if bulk_rebuild else "wait_for"),
                     ),
                     self.batch_size,
                 )
@@ -639,6 +707,7 @@ class IndexingOrchestrator:
                         ASR_INDEX,
                         batch,
                         id_field="_doc_id",
+                        refresh=(False if bulk_rebuild else "wait_for"),
                     ),
                     self.batch_size,
                 )
@@ -650,6 +719,7 @@ class IndexingOrchestrator:
                         SUMMARY_INDEX,
                         batch,
                         id_field="video_id",
+                        refresh=(False if bulk_rebuild else "wait_for"),
                     ),
                     self.batch_size,
                 )
@@ -671,32 +741,41 @@ class IndexingOrchestrator:
                     self.batch_size,
                 )
 
-            # ===== PHASE 5: Read-after-write commit gate =====
-            indexed_snapshot = self._capture_snapshot(video_id)
-            self._validate_post_index(
-                indexed_snapshot,
-                visual_records=visual_records,
-                asr_emb_records=asr_emb_records,
-                summary_emb_records=summary_emb_records,
-                ocr_emb_records=ocr_emb_records,
-                ocr_text_records=ocr_text_records,
-                asr_text_records=asr_text_records,
-                summary_text_records=summary_text_records,
-                metadata_records=metadata_records,
-                object_records=object_records,
-                visual_dim=visual_dim,
-                text_dim=text_dim,
-                ocr_dim=effective_ocr_dim,
-                video_record=video_record,
-            )
+            if not bulk_rebuild and not unpublished_repair:
+                # ===== PHASE 5: Read-after-write commit gate =====
+                indexed_snapshot = self._capture_snapshot(video_id)
+                self._validate_post_index(
+                    indexed_snapshot,
+                    visual_records=visual_records,
+                    asr_emb_records=asr_emb_records,
+                    summary_emb_records=summary_emb_records,
+                    ocr_emb_records=ocr_emb_records,
+                    ocr_text_records=ocr_text_records,
+                    asr_text_records=asr_text_records,
+                    summary_text_records=summary_text_records,
+                    metadata_records=metadata_records,
+                    object_records=object_records,
+                    visual_dim=visual_dim,
+                    text_dim=text_dim,
+                    ocr_dim=effective_ocr_dim,
+                    video_record=video_record,
+                )
 
         except Exception:
+            if bulk_rebuild or unpublished_repair:
+                logger.exception(
+                    "Unpublished indexing failed for %s; READY publication "
+                    "remains blocked until a successful repair.",
+                    video_id,
+                )
+                return False
             logger.exception(
                 "Replacement failed for %s; restoring last-known-good "
                 "snapshot.",
                 video_id,
             )
             try:
+                assert snapshot is not None
                 self._restore_snapshot(video_id, snapshot)
             except Exception:
                 logger.critical(
@@ -714,6 +793,10 @@ class IndexingOrchestrator:
         data_dir: Path,
         force: bool = False,
         reset_all: bool = False,
+        bulk_rebuild: bool = False,
+        video_ids: Optional[Sequence[str]] = None,
+        finalize: bool = False,
+        unpublished_repair: bool = False,
     ):
         """Connect all backends, run indexing, and always release clients."""
         attempted_clients = []
@@ -725,6 +808,10 @@ class IndexingOrchestrator:
                 data_dir,
                 force=force,
                 reset_all=reset_all,
+                bulk_rebuild=bulk_rebuild,
+                video_ids=video_ids,
+                finalize=finalize,
+                unpublished_repair=unpublished_repair,
             )
         finally:
             for client in reversed(attempted_clients):
@@ -741,6 +828,10 @@ class IndexingOrchestrator:
         data_dir: Path,
         force: bool = False,
         reset_all: bool = False,
+        bulk_rebuild: bool = False,
+        video_ids: Optional[Sequence[str]] = None,
+        finalize: bool = False,
+        unpublished_repair: bool = False,
     ):
         """
         Run the full indexing pipeline for all discovered videos.
@@ -750,6 +841,23 @@ class IndexingOrchestrator:
             force: If True, re-process all videos (delete + re-insert).
             reset_all: If True, drop all DBs and recreate schemas first.
         """
+        if bulk_rebuild and not reset_all:
+            raise ValueError("bulk_rebuild requires reset_all=True")
+        if bulk_rebuild and video_ids is not None:
+            raise ValueError(
+                "bulk_rebuild cannot be limited to selected video IDs"
+            )
+        if unpublished_repair and video_ids is None:
+            raise ValueError(
+                "unpublished_repair requires selected video IDs"
+            )
+        if unpublished_repair and not finalize:
+            raise ValueError("unpublished_repair requires finalize=True")
+        if unpublished_repair and (bulk_rebuild or reset_all):
+            raise ValueError(
+                "unpublished_repair cannot reset or bulk rebuild databases"
+            )
+
         if reset_all:
             logger.warning("Resetting all databases...")
             self.milvus.reset()
@@ -817,12 +925,28 @@ class IndexingOrchestrator:
             )
 
         # Discover and process videos
-        video_ids = discover_video_ids(data_dir)
+        discovered_video_ids = discover_video_ids(data_dir)
+        if video_ids is None:
+            selected_video_ids = discovered_video_ids
+        else:
+            selected_video_ids = list(video_ids)
+            if not selected_video_ids:
+                raise ValueError("video_ids must not be empty")
+            if len(set(selected_video_ids)) != len(selected_video_ids):
+                raise ValueError("video_ids must not contain duplicates")
+            unknown_video_ids = sorted(
+                set(selected_video_ids) - set(discovered_video_ids)
+            )
+            if unknown_video_ids:
+                raise ValueError(
+                    "Requested video IDs were not discovered: "
+                    + ", ".join(unknown_video_ids)
+                )
 
         succeeded = []
         failed = []
 
-        for video_id in tqdm(video_ids, desc="Indexing videos"):
+        for video_id in tqdm(selected_video_ids, desc="Indexing videos"):
             ok = self.process_video(
                 video_id,
                 data_dir,
@@ -830,6 +954,8 @@ class IndexingOrchestrator:
                 text_dim,
                 ocr_dim,
                 force=force,
+                bulk_rebuild=bulk_rebuild,
+                unpublished_repair=unpublished_repair,
             )
             if ok:
                 succeeded.append(video_id)
@@ -843,4 +969,16 @@ class IndexingOrchestrator:
             raise RuntimeError(
                 "Indexing failed for video IDs: "
                 + ", ".join(failed)
+            )
+        if bulk_rebuild or finalize:
+            self.milvus.flush_collections(
+                [
+                    VISUAL_COLLECTION,
+                    ASR_COLLECTION,
+                    SUMMARY_COLLECTION,
+                    OCR_COLLECTION,
+                ]
+            )
+            self.es.refresh_indices(
+                [OCR_INDEX, ASR_INDEX, SUMMARY_INDEX]
             )

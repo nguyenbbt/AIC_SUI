@@ -132,3 +132,58 @@ def test_rollback_compose_maps_exact_legacy_external_volumes():
         name: config["name"] for name, config in rollback["volumes"].items()
     } == expected
     assert all(config["external"] is True for config in rollback["volumes"].values())
+
+
+def test_green_compose_is_fully_isolated_from_the_blue_runtime():
+    compose = yaml.safe_load(
+        (PROJECT_ROOT / "docker-compose.green.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    services = compose["services"]
+    assert set(services) == {
+        "etcd",
+        "minio",
+        "milvus-standalone",
+        "elasticsearch",
+        "indexing",
+    }
+    blue_container_names = {
+        "aic_nova_etcd",
+        "aic_nova_minio",
+        "aic_nova_milvus",
+        "aic_nova_elasticsearch",
+        "aic_nova_indexing",
+    }
+    green_container_names = {
+        service["container_name"] for service in services.values()
+    }
+    assert green_container_names.isdisjoint(blue_container_names)
+    assert all("_green_" in name for name in green_container_names)
+
+    rendered = (PROJECT_ROOT / "docker-compose.green.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "AIC_GREEN_DATA_ROOT:?" in rendered
+    assert "AIC_GREEN_BACKUP_ROOT:?" in rendered
+    assert "${AIC_LOCAL_DATA_ROOT" not in rendered
+    for blue_port in ('"9001:9001"', '"19530:19530"', '"9091:9091"', '"9200:9200"'):
+        assert blue_port not in rendered
+
+    indexing_mounts = services["indexing"]["volumes"]
+    source_mounts = {
+        mount["target"]: mount for mount in indexing_mounts
+    }
+    assert source_mounts["/workspace/data"]["type"] == "bind"
+    for target in (
+        "/workspace/data/processed/metadata",
+        "/workspace/data/processed/keyframes",
+        "/workspace/data/processed/embeddings/visual",
+        "/workspace/data/processed/object_detection",
+    ):
+        assert source_mounts[target]["read_only"] is True
+
+    for service_name in services:
+        assert "mem_limit" in services[service_name]
+        assert "cpus" in services[service_name]

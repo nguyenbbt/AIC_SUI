@@ -1,0 +1,170 @@
+services:
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.16
+    container_name: aic_nova_green_etcd
+    mem_limit: 256m
+    cpus: 0.50
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    command: >-
+      etcd -advertise-client-urls=http://127.0.0.1:2379
+      -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    expose:
+      - 2379
+    volumes:
+      - type: bind
+        source: ${AIC_GREEN_DATA_ROOT:?Set AIC_GREEN_DATA_ROOT}/databases/etcd
+        target: /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  minio:
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    container_name: aic_nova_green_minio
+    mem_limit: 512m
+    cpus: 0.50
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "127.0.0.1:${AIC_GREEN_MINIO_CONSOLE_PORT:-19001}:9001"
+    expose:
+      - 9000
+    volumes:
+      - type: bind
+        source: ${AIC_GREEN_DATA_ROOT:?Set AIC_GREEN_DATA_ROOT}/databases/minio
+        target: /minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  milvus-standalone:
+    image: milvusdb/milvus:v2.5.0
+    container_name: aic_nova_green_milvus
+    # Full collection load exceeded 3 GiB during READY publication. Green runs
+    # as the only DB stack on this 7.6 GiB Docker VM during publish/preview.
+    mem_limit: 4096m
+    cpus: 1.50
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    ports:
+      - "127.0.0.1:${AIC_GREEN_MILVUS_PORT:-19531}:19530"
+      - "127.0.0.1:${AIC_GREEN_MILVUS_HEALTH_PORT:-19091}:9091"
+    volumes:
+      - type: bind
+        source: ${AIC_GREEN_DATA_ROOT:?Set AIC_GREEN_DATA_ROOT}/databases/milvus
+        target: /var/lib/milvus
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  elasticsearch:
+    build:
+      context: .
+      dockerfile: indexing/elasticsearch.Dockerfile
+    container_name: aic_nova_green_elasticsearch
+    mem_limit: 1536m
+    cpus: 1.00
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "127.0.0.1:${AIC_GREEN_ES_PORT:-19200}:9200"
+    volumes:
+      - type: bind
+        source: ${AIC_GREEN_DATA_ROOT:?Set AIC_GREEN_DATA_ROOT}/databases/elasticsearch
+        target: /usr/share/elasticsearch/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl -s http://localhost:9200/_cluster/health |
+          grep -qE '"status":"(green|yellow)"'
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  indexing:
+    build:
+      context: .
+      dockerfile: indexing/Dockerfile
+    container_name: aic_nova_green_indexing
+    mem_limit: 3072m
+    cpus: 2.00
+    volumes:
+      - type: bind
+        source: ${AIC_GREEN_DATA_ROOT:?Set AIC_GREEN_DATA_ROOT}
+        target: /workspace/data
+      - type: bind
+        source: ${AIC_GREEN_BACKUP_ROOT:?Set AIC_GREEN_BACKUP_ROOT}/metadata
+        target: /workspace/data/processed/metadata
+        read_only: true
+      - type: bind
+        source: ${AIC_GREEN_BACKUP_ROOT:?Set AIC_GREEN_BACKUP_ROOT}/keyframes
+        target: /workspace/data/processed/keyframes
+        read_only: true
+      - type: bind
+        source: ${AIC_GREEN_BACKUP_ROOT:?Set AIC_GREEN_BACKUP_ROOT}/embeddings/visual
+        target: /workspace/data/processed/embeddings/visual
+        read_only: true
+      - type: bind
+        source: ${AIC_GREEN_BACKUP_ROOT:?Set AIC_GREEN_BACKUP_ROOT}/module6-local/text_asr
+        target: /workspace/data/processed/embeddings/text_asr
+        read_only: true
+      - type: bind
+        source: ${AIC_GREEN_BACKUP_ROOT:?Set AIC_GREEN_BACKUP_ROOT}/module6-local/text_ocr
+        target: /workspace/data/processed/embeddings/text_ocr
+        read_only: true
+      - type: bind
+        source: ${AIC_GREEN_BACKUP_ROOT:?Set AIC_GREEN_BACKUP_ROOT}/module6-local/text_summary
+        target: /workspace/data/processed/embeddings/text_summary
+        read_only: true
+      - type: bind
+        source: ${AIC_GREEN_BACKUP_ROOT:?Set AIC_GREEN_BACKUP_ROOT}/asr-final/transcripts/transcripts
+        target: /workspace/data/processed/transcripts
+        read_only: true
+      - type: bind
+        source: ${AIC_GREEN_BACKUP_ROOT:?Set AIC_GREEN_BACKUP_ROOT}/asr-final/summaries/summaries
+        target: /workspace/data/processed/summaries
+        read_only: true
+      - type: bind
+        source: ${AIC_GREEN_BACKUP_ROOT:?Set AIC_GREEN_BACKUP_ROOT}/ocr
+        target: /workspace/data/processed/ocr
+        read_only: true
+      - type: bind
+        source: ${AIC_GREEN_BACKUP_ROOT:?Set AIC_GREEN_BACKUP_ROOT}/object_detection
+        target: /workspace/data/processed/object_detection
+        read_only: true
+    environment:
+      DATA_DIR: /workspace/data/processed
+      MILVUS_URI: http://milvus-standalone:19530
+      ES_URI: http://elasticsearch:9200
+      DB_URI: sqlite:////workspace/data/metadata.db
+    depends_on:
+      milvus-standalone:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    command:
+      - python
+      - -m
+      - src.indexing.cli

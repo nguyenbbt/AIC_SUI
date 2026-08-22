@@ -70,7 +70,11 @@ from online.retrieval.service import RetrievalInvocationConfig, RetrievalService
 from online.retrieval.vqa import VQACandidateRetriever
 from online.trake import TRAKEService
 from online.vqa import EvidenceSelector, VQAOrchestrator
-from query_understanding.openai_rewriter import DEFAULT_REWRITE_MODEL, OpenAIQueryRewriter
+from query_understanding.openai_rewriter import (
+    DEFAULT_REWRITE_API_MODE,
+    DEFAULT_REWRITE_MODEL,
+    OpenAIQueryRewriter,
+)
 from query_understanding.rewrite import NoOpQueryRewriter, QueryRewriteService
 from retrieval_api.search_engine import HealthResponse, create_app
 from retrieval_api.ui_resources import DatasetUIResources
@@ -349,6 +353,10 @@ def build_online_runtime(
                     "AIC_ONLINE_OPENAI_BASE_URL", "https://api.openai.com/v1"
                 ),
                 model=os.getenv("AIC_ONLINE_OPENAI_REWRITE_MODEL", DEFAULT_REWRITE_MODEL),
+                api_mode=os.getenv(
+                    "AIC_ONLINE_OPENAI_REWRITE_API_MODE",
+                    DEFAULT_REWRITE_API_MODE,
+                ),
                 timeout_sec=_env_float("AIC_ONLINE_", "OPENAI_REWRITE_TIMEOUT_SEC", 4.5),
             ),
             timeout_sec=5.0,

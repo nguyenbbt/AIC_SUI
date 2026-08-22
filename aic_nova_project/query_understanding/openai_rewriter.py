@@ -1,4 +1,4 @@
-"""OpenAI Responses API adapter for optional query rewriting."""
+"""OpenAI-compatible structured adapter for optional query rewriting."""
 
 from __future__ import annotations
 
@@ -17,7 +17,15 @@ from query_understanding.rewrite import (
 
 
 DEFAULT_REWRITE_MODEL = "gpt-5.4-mini-2026-03-17"
+DEFAULT_REWRITE_API_MODE = "responses"
 PROMPT_VERSION = "aic-query-rewrite-v3-vi-q1-only"
+_REWRITE_API_MODES = frozenset({"responses", "chat_completions"})
+_REWRITE_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {"primary_text": {"type": "string"}},
+    "required": ["primary_text"],
+    "additionalProperties": False,
+}
 
 
 class OpenAIQueryRewriter:
@@ -27,6 +35,7 @@ class OpenAIQueryRewriter:
         api_key: str,
         model: str = DEFAULT_REWRITE_MODEL,
         base_url: str = "https://api.openai.com/v1",
+        api_mode: str = DEFAULT_REWRITE_API_MODE,
         timeout_sec: float = 4.5,
         client: httpx.AsyncClient | None = None,
     ) -> None:
@@ -37,6 +46,13 @@ class OpenAIQueryRewriter:
         if not isinstance(base_url, str) or not base_url.strip():
             raise ValueError("OpenAI query rewrite requires a non-empty base_url")
         if (
+            not isinstance(api_mode, str)
+            or api_mode.strip().lower() not in _REWRITE_API_MODES
+        ):
+            raise ValueError(
+                "OpenAI query rewrite api_mode must be responses or chat_completions"
+            )
+        if (
             isinstance(timeout_sec, bool)
             or not isinstance(timeout_sec, (int, float))
             or not math.isfinite(timeout_sec)
@@ -46,6 +62,7 @@ class OpenAIQueryRewriter:
         self._model = model.strip()
         self._client = client
         self._base_url = base_url.strip().rstrip("/")
+        self._api_mode = api_mode.strip().lower()
         self._timeout_sec = float(timeout_sec)
         self._headers = {"Authorization": f"Bearer {api_key}"}
 
@@ -67,41 +84,25 @@ class OpenAIQueryRewriter:
                 "Vietnamese evidence query and do not produce a second variant."
             )
         )
-        payload = {
-            "model": self._model,
-            "reasoning": {"effort": "none"},
-            "instructions": instructions,
-            "input": request.text,
-            "text": {
-                "format": {
-                    "type": "json_schema",
-                    "name": "aic_query_rewrite",
-                    "strict": True,
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "primary_text": {"type": "string"},
-                        },
-                        "required": ["primary_text"],
-                        "additionalProperties": False,
-                    },
-                }
-            },
-            "max_output_tokens": 256,
-        }
+        path, payload = self._request_payload(instructions, request.text)
         try:
             if self._client is not None:
-                response = await self._client.post("/responses", json=payload)
+                response = await self._client.post(path, json=payload)
             else:
                 async with httpx.AsyncClient(
                     base_url=self._base_url,
                     timeout=self._timeout_sec,
                     headers=self._headers,
                 ) as client:
-                    response = await client.post("/responses", json=payload)
+                    response = await client.post(path, json=payload)
             response.raise_for_status()
             data = response.json()
-            output = json.loads(_responses_output_text(data))
+            output_text = (
+                _responses_output_text(data)
+                if self._api_mode == "responses"
+                else _chat_completions_output_text(data)
+            )
+            output = json.loads(output_text)
             if (
                 not isinstance(output, dict)
                 or not isinstance(output.get("primary_text"), str)
@@ -120,6 +121,44 @@ class OpenAIQueryRewriter:
                 "OpenAI query rewrite provider failed",
                 details={"resource": "query_rewrite"},
             ) from exc
+
+    def _request_payload(
+        self,
+        instructions: str,
+        text: str,
+    ) -> tuple[str, dict[str, Any]]:
+        if self._api_mode == "responses":
+            return "/responses", {
+                "model": self._model,
+                "reasoning": {"effort": "none"},
+                "instructions": instructions,
+                "input": text,
+                "text": {
+                    "format": {
+                        "type": "json_schema",
+                        "name": "aic_query_rewrite",
+                        "strict": True,
+                        "schema": _REWRITE_JSON_SCHEMA,
+                    }
+                },
+                "max_output_tokens": 256,
+            }
+        return "/chat/completions", {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": instructions},
+                {"role": "user", "content": text},
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "aic_query_rewrite",
+                    "strict": True,
+                    "schema": _REWRITE_JSON_SCHEMA,
+                },
+            },
+            "max_completion_tokens": 256,
+        }
 
     async def aclose(self) -> None:
         """Injected clients are owned and closed by their caller."""
@@ -140,4 +179,23 @@ def _responses_output_text(data: Any) -> str:
     raise ValueError("Responses API output text is missing")
 
 
-__all__ = ["DEFAULT_REWRITE_MODEL", "OpenAIQueryRewriter", "PROMPT_VERSION"]
+def _chat_completions_output_text(data: Any) -> str:
+    if not isinstance(data, dict):
+        raise ValueError("invalid Chat Completions API payload")
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise ValueError("Chat Completions API choices are missing")
+    first = choices[0]
+    message = first.get("message") if isinstance(first, dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("Chat Completions API output text is missing")
+    return content
+
+
+__all__ = [
+    "DEFAULT_REWRITE_API_MODE",
+    "DEFAULT_REWRITE_MODEL",
+    "OpenAIQueryRewriter",
+    "PROMPT_VERSION",
+]

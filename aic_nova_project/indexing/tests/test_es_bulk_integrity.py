@@ -50,6 +50,25 @@ def test_es_bulk_waits_until_documents_are_search_visible():
     assert bulk_mock.call_args.kwargs["refresh"] == "wait_for"
 
 
+def test_es_bulk_can_defer_refresh_for_fresh_rebuild():
+    client = ESClient()
+    client.client = MagicMock()
+    documents = [{"frame_id": "f1", "video_id": "V001"}]
+
+    with patch(
+        "src.indexing.clients.es_client.bulk",
+        return_value=(1, []),
+    ) as bulk_mock:
+        client.bulk_index(
+            OCR_INDEX,
+            documents,
+            id_field="frame_id",
+            refresh=False,
+        )
+
+    assert bulk_mock.call_args.kwargs["refresh"] is False
+
+
 def test_orchestrator_rejects_partial_bulk_count(monkeypatch):
     values = {
         "load_visual_embeddings": [
